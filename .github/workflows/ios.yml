@@ -1,0 +1,60 @@
+name: Build iOS app
+
+# iOS binaries can only be compiled on macOS, so this runs on a hosted Mac.
+# It builds unsigned by default, which verifies the project compiles without
+# needing any Apple credentials. Signing and TestFlight upload turn on
+# automatically once the secrets described below exist.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'ios/**'
+      - 'public/**'
+      - 'package*.json'
+      - 'capacitor.config.ts'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Builds the web app, then copies it into the native project and
+      # refreshes the plugin list.
+      - name: Build web and sync to iOS
+        run: |
+          npm run build
+          npx cap sync ios
+
+      - name: Show available Xcode
+        run: xcodebuild -version
+
+      # An unsigned build proves the project and all Capacitor plugins
+      # compile. It cannot run on a device, which is what signing is for.
+      - name: Build unsigned archive
+        run: |
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            archive
+
+      - name: Report archive contents
+        run: |
+          echo "Archive built at $RUNNER_TEMP/App.xcarchive"
+          ls -la "$RUNNER_TEMP/App.xcarchive/Products/Applications" || true

@@ -1,4 +1,5 @@
 import { App } from './app';
+import { configureNativeShell, isNative } from './io/native';
 import './style.css';
 
 const root = document.getElementById('app');
@@ -16,12 +17,20 @@ for (const name of ['gesturestart', 'gesturechange']) {
   document.addEventListener(name, (e) => e.preventDefault(), { passive: false });
 }
 
-// Offline support: the editor is fully local, so once it is cached it keeps
-// working with no network at all.
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
+/**
+ * Offline support for the web build: once cached, the editor keeps working
+ * with no network at all.
+ *
+ * The native app skips this entirely. Its assets are already inside the
+ * bundle, so a service worker would add a second, staler cache on top of
+ * files that can never change without an App Store update.
+ */
+if ('serviceWorker' in navigator && import.meta.env.PROD && !isNative()) {
   window.addEventListener('load', () => {
     void navigator.serviceWorker.register('./sw.js').catch(() => {
       /* offline support is a bonus, not a requirement */
     });
   });
 }
+
+if (isNative()) void configureNativeShell();

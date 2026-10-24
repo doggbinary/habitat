@@ -6,7 +6,7 @@
  * Run with: npm run icons
  */
 import { deflateSync } from 'node:zlib';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -53,19 +53,31 @@ function chunk(type, data) {
   return Buffer.concat([head, body, crc]);
 }
 
-function encodePng(size, pixels) {
+/**
+ * @param {boolean} opaque Emit RGB with no alpha channel. App Store icons are
+ *   rejected outright if they carry transparency, so the iOS icon uses this.
+ */
+function encodePng(size, pixels, opaque = false) {
+  const channels = opaque ? 3 : 4;
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(size, 0);
   ihdr.writeUInt32BE(size, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // RGBA
+  ihdr[9] = opaque ? 2 : 6; // 2 = RGB, 6 = RGBA
   // Prefix every scanline with filter type 0; the data is blocky enough that
   // deflate handles it well without per-line filtering.
-  const raw = Buffer.alloc(size * (size * 4 + 1));
+  const raw = Buffer.alloc(size * (size * channels + 1));
   for (let y = 0; y < size; y++) {
-    const rowStart = y * (size * 4 + 1);
+    const rowStart = y * (size * channels + 1);
     raw[rowStart] = 0;
-    pixels.copy(raw, rowStart + 1, y * size * 4, (y + 1) * size * 4);
+    for (let x = 0; x < size; x++) {
+      const from = (y * size + x) * 4;
+      const to = rowStart + 1 + x * channels;
+      raw[to] = pixels[from];
+      raw[to + 1] = pixels[from + 1];
+      raw[to + 2] = pixels[from + 2];
+      if (!opaque) raw[to + 3] = pixels[from + 3];
+    }
   }
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -80,7 +92,7 @@ function encodePng(size, pixels) {
  * @param {number} inset fraction of the canvas left as padding, so maskable
  *   icons keep their artwork inside the safe zone iOS and Android crop to.
  */
-function drawIcon(size, inset) {
+function drawIcon(size, inset, opaque = false) {
   const pixels = Buffer.alloc(size * size * 4);
   for (let i = 0; i < size * size; i++) pixels.set(BG, i * 4);
 
@@ -104,7 +116,7 @@ function drawIcon(size, inset) {
       }
     }
   }
-  return encodePng(size, pixels);
+  return encodePng(size, pixels, opaque);
 }
 
 mkdirSync(OUT_DIR, { recursive: true });
@@ -137,3 +149,21 @@ ${MOTIF.flatMap((row, y) =>
 `;
 writeFileSync(resolve(OUT_DIR, 'icon.svg'), svg);
 console.log('wrote icon.svg');
+
+// The iOS app icon, if the native project has been scaffolded. It must be
+// 1024x1024 with no alpha channel, and iOS applies its own rounded mask, so
+// the artwork goes edge to edge with only a small inset.
+const IOS_ICON = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'ios',
+  'App',
+  'App',
+  'Assets.xcassets',
+  'AppIcon.appiconset',
+  'AppIcon-512@2x.png',
+);
+if (existsSync(dirname(IOS_ICON))) {
+  writeFileSync(IOS_ICON, drawIcon(1024, 0.08, true));
+  console.log('wrote ios AppIcon-512@2x.png (1024x1024, no alpha)');
+}

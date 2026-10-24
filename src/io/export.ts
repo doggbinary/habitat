@@ -1,6 +1,7 @@
 import { DIRECTIONS, frameIndex, type Character } from '../character/model';
 import type { Doc } from '../core/doc';
 import { drawTile } from '../render/tile-draw';
+import { isNative, saveFileNative } from './native';
 import { EMPTY, flagsOf, indexOf, tilesetOf } from '../core/tiles';
 
 /**
@@ -9,6 +10,10 @@ import { EMPTY, flagsOf, indexOf, tilesetOf } from '../core/tiles';
  * download is the desktop fallback.
  */
 export async function saveFile(blob: Blob, filename: string): Promise<'shared' | 'downloaded'> {
+  // In the iOS app, write to Documents so the export lands in the Files app
+  // rather than disappearing into a WebView download.
+  if (isNative() && (await saveFileNative(blob, filename))) return 'shared';
+
   const file = new File([blob], filename, { type: blob.type });
   if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
     try {
