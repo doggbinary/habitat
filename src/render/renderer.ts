@@ -1,4 +1,6 @@
-import { isMovableImage, type Doc, type ImageLayer, type TileLayer } from '../core/doc';
+import { isMovableImage, type Doc, type ImageLayer, type MapObject, type TileLayer } from '../core/doc';
+import { HANDLE_RADIUS, objectHandlePoint, objectScreenRect } from '../tools/objects';
+import { drawObject } from './object-draw';
 import { isEmptyStamp, stampTileAt } from '../core/stamp';
 import type { Store } from '../core/store';
 import { EMPTY } from '../core/tiles';
@@ -139,8 +141,8 @@ export class Renderer {
     ctx.strokeRect(originX - 0.5, originY - 0.5, mapW * zoom + 1, mapH * zoom + 1);
 
     this.drawCharacterPreview(doc, originX, originY, zoom);
-    this.drawSelection(doc, originX, originY, zoom);
-    this.drawDropPreview(doc, originX, originY, zoom);
+    this.drawDragPreview(doc, originX, originY, zoom);
+    this.drawObjectSelection();
 
     // A selected reference image takes over the canvas interaction, so show
     // its handles instead of a brush cursor that would not do anything.
@@ -201,6 +203,13 @@ export class Renderer {
       ctx.globalAlpha = alpha;
       if (layer.kind === 'image') {
         this.drawImageLayer(layer, originX, originY, zoom);
+      } else if (layer.kind === 'objects') {
+        // Objects move constantly while being arranged, so they are drawn
+        // fresh each frame rather than baked into a cache that would need
+        // rebuilding on every nudge.
+        ctx.imageSmoothingEnabled = false;
+        for (const obj of layer.objects) drawObject(ctx, doc, obj, originX, originY, zoom);
+        ctx.imageSmoothingEnabled = zoom < 1;
       } else if (cacheable) {
         const cache = this.cacheFor(layer);
         cache.sync(doc, layer);
@@ -236,59 +245,71 @@ export class Renderer {
   }
 
   /**
-   * The floating block of lifted tiles. It is drawn above every layer with a
-   * soft shadow, so it reads as held above the map rather than part of it.
+   * Outline and resize grip for the selected asset. The grip is the one thing
+   * a Pencil can resize with, since a Pencil cannot pinch.
    */
-  private drawSelection(doc: Doc, originX: number, originY: number, zoom: number): void {
-    const selection = this.store.selection;
-    if (!selection) return;
+  private drawObjectSelection(): void {
+    const sel = this.store.selectedObject;
+    if (!sel) return;
+    const layer = this.store.doc.layers.find((l) => l.id === sel.layerId);
+    if (layer?.kind !== 'objects') return;
+    const obj = layer.objects.find((o) => o.id === sel.objectId);
+    if (!obj) return;
+
     const { ctx } = this;
-    const cell = doc.tileSize * zoom;
+    const r = objectScreenRect(this.store.camera, obj);
 
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.45)';
-    ctx.shadowBlur = 10 * Math.min(2, zoom);
-    ctx.shadowOffsetY = 3 * Math.min(2, zoom);
-    for (let y = 0; y < selection.h; y++) {
-      for (let x = 0; x < selection.w; x++) {
-        const tile = selection.tiles[y * selection.w + x];
-        if (tile === EMPTY) continue;
-        drawTile(ctx, doc, tile, originX + (selection.x + x) * cell, originY + (selection.y + y) * cell, cell);
-      }
-    }
-    ctx.restore();
-
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
     ctx.strokeStyle = COLOR_SELECT;
     ctx.lineWidth = 2;
     ctx.setLineDash([7, 5]);
-    ctx.strokeRect(
-      originX + selection.x * cell,
-      originY + selection.y * cell,
-      selection.w * cell,
-      selection.h * cell,
-    );
+    ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
     ctx.setLineDash([]);
+
+    const handle = objectHandlePoint(this.store.camera, obj);
+    ctx.beginPath();
+    ctx.arc(handle.x, handle.y, HANDLE_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = COLOR_SELECT;
+    ctx.fill();
+    ctx.strokeStyle = '#10131c';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // A diagonal arrow on the grip says "resize" without a label.
+    ctx.beginPath();
+    ctx.moveTo(handle.x - 4, handle.y - 4);
+    ctx.lineTo(handle.x + 4, handle.y + 4);
+    ctx.stroke();
+    ctx.restore();
   }
 
-  /** Where a tile dragged out of the palette will land if released now. */
-  private drawDropPreview(doc: Doc, originX: number, originY: number, zoom: number): void {
-    const drop = this.store.dropPreview;
-    const stamp = this.store.stamp;
-    if (!drop || isEmptyStamp(stamp)) return;
+  /** The asset being dragged out of the library, shown where it would land. */
+  private drawDragPreview(doc: Doc, originX: number, originY: number, zoom: number): void {
+    const drag = this.store.drag;
+    if (!drag?.world) return;
+    const sheet = doc.tilesets.find((t) => t.id === drag.tilesetId);
+    const scale = sheet && sheet.tileW > 0 ? doc.tileSize / sheet.tileW : 1;
+    const preview: MapObject = {
+      id: 'drag-preview',
+      tilesetId: drag.tilesetId,
+      rect: drag.rect,
+      x: drag.world.x,
+      y: drag.world.y,
+      scale,
+      rotation: 0,
+      flipX: false,
+      flipY: false,
+      hueShift: 0,
+      saturation: 1,
+      brightness: 1,
+    };
     const { ctx } = this;
-    const cell = doc.tileSize * zoom;
-
-    ctx.globalAlpha = 0.7;
-    for (let y = 0; y < stamp.h; y++) {
-      for (let x = 0; x < stamp.w; x++) {
-        this.drawPreviewTile(doc, stamp.tiles[y * stamp.w + x], drop.x + x, drop.y + y, originX, originY, cell);
-      }
-    }
+    ctx.globalAlpha = 0.72;
+    ctx.imageSmoothingEnabled = false;
+    drawObject(ctx, doc, preview, originX, originY, zoom);
     ctx.globalAlpha = 1;
-
-    ctx.strokeStyle = COLOR_CURSOR;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(originX + drop.x * cell, originY + drop.y * cell, stamp.w * cell, stamp.h * cell);
   }
 
   /** Dashed outline and corner grip for the selected reference image. */

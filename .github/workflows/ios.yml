@@ -10,16 +10,11 @@ name: Build iOS app
 #   APPSTORE_KEY_ID      the ID of that same key
 #   APPSTORE_PRIVATE_KEY the full contents of the downloaded AuthKey_*.p8
 #   APPLE_TEAM_ID        your 10-character Apple Developer team ID
+#
+# Manual-only for now: the browser build is the focus, and a macOS runner on
+# every push spends CI minutes on a binary nobody is installing yet. Run it
+# from the Actions tab, or restore the `push` trigger when shipping to Apple.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/**'
-      - 'ios/**'
-      - 'public/**'
-      - 'package*.json'
-      - 'capacitor.config.ts'
-      - '.github/workflows/ios.yml'
   workflow_dispatch:
 
 jobs:

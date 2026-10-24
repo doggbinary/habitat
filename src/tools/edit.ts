@@ -13,15 +13,7 @@ import {
   type Tileset,
 } from '../core/doc';
 import { snapshot, Stroke, type DocSnapshot } from '../core/history';
-import {
-  flipStampH,
-  flipStampV,
-  isEmptyStamp,
-  randomTile,
-  rotateStampCW,
-  stampTileAt,
-  type Stamp,
-} from '../core/stamp';
+import { isEmptyStamp, randomTile, stampTileAt } from '../core/stamp';
 import type { Store } from '../core/store';
 import { EMPTY, flagsOf, indexOf, pack, tilesetOf, type PackedTile } from '../core/tiles';
 import type { Renderer } from '../render/renderer';
@@ -232,147 +224,6 @@ export class Editor {
     return false;
   }
 
-  // --- Selection ------------------------------------------------------------
-
-  /**
-   * Picks up a rectangle of tiles. The source cells are cleared straight away
-   * so what is drawn floating is exactly what will be written back down.
-   */
-  liftSelection(rect: Rect): boolean {
-    const layer = this.targetLayer();
-    if (!layer) {
-      this.store.toast('Pick a tile layer first');
-      return false;
-    }
-    const doc = this.doc;
-    const r = normalizeRect(rect);
-    const x0 = Math.max(0, r.x0);
-    const y0 = Math.max(0, r.y0);
-    const x1 = Math.min(doc.width - 1, r.x1);
-    const y1 = Math.min(doc.height - 1, r.y1);
-    if (x1 < x0 || y1 < y0) return false;
-
-    const w = x1 - x0 + 1;
-    const h = y1 - y0 + 1;
-    const tiles = new Int32Array(w * h);
-    let found = false;
-
-    if (!this.beginStroke('Lift tiles')) return false;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const tile = layer.data[cellIndex(doc, x0 + x, y0 + y)];
-        tiles[y * w + x] = tile;
-        if (tile !== EMPTY) found = true;
-        this.write(layer, x0 + x, y0 + y, EMPTY);
-      }
-    }
-
-    if (!found) {
-      // Nothing there: undo the clear and leave no selection behind.
-      this.abortStroke();
-      this.store.toast('Nothing to pick up there');
-      return false;
-    }
-
-    this.endStroke();
-    this.store.selection = { x: x0, y: y0, w, h, tiles, layerId: layer.id, lifted: true };
-    this.store.changed();
-    return true;
-  }
-
-  /** Writes a floating selection back into its layer and clears it. */
-  commitSelection(): void {
-    const selection = this.store.selection;
-    if (!selection) return;
-    const layer = this.doc.layers.find((l) => l.id === selection.layerId);
-    this.store.selection = null;
-
-    if (!layer || layer.kind !== 'tiles') {
-      this.store.changed();
-      return;
-    }
-
-    if (this.beginStroke('Move tiles')) {
-      for (let y = 0; y < selection.h; y++) {
-        for (let x = 0; x < selection.w; x++) {
-          const tile = selection.tiles[y * selection.w + x];
-          // Holes in the block stay holes rather than erasing what is beneath.
-          if (tile === EMPTY) continue;
-          this.write(layer, selection.x + x, selection.y + y, tile);
-        }
-      }
-      this.endStroke();
-    }
-    this.store.changed();
-  }
-
-  /**
-   * Sends the floating block in front of or behind what is already on the
-   * map. Depth in a tilemap is layer order, so this re-targets which layer
-   * the block will land on when it is dropped.
-   *
-   * Moving past the top or bottom creates a new layer, so "bring to front"
-   * always has somewhere to go.
-   */
-  moveSelectionDepth(delta: number): void {
-    const selection = this.store.selection;
-    if (!selection) return;
-    const doc = this.doc;
-    const current = doc.layers.findIndex((l) => l.id === selection.layerId);
-    if (current === -1) return;
-
-    const target = current + delta;
-    if (target < 0 || target >= doc.layers.length) {
-      this.structural(delta > 0 ? 'Add layer in front' : 'Add layer behind', () => {
-        const layer = createLayer(doc.width, doc.height, `Layer ${doc.layers.length + 1}`);
-        const at = delta > 0 ? doc.layers.length : 0;
-        doc.layers.splice(at, 0, layer);
-        doc.activeLayer = at;
-        selection.layerId = layer.id;
-      });
-      this.store.toast(delta > 0 ? 'Moved in front, on a new layer' : 'Moved behind, on a new layer');
-      return;
-    }
-
-    const layer = doc.layers[target];
-    if (layer.kind !== 'tiles') {
-      this.store.toast('That layer holds a reference image');
-      return;
-    }
-    selection.layerId = layer.id;
-    doc.activeLayer = target;
-    this.store.toast(`${delta > 0 ? 'In front' : 'Behind'}: ${layer.name}`);
-    this.store.restructured();
-  }
-
-  /** Throws the floating block away without putting it back. */
-  deleteSelection(): void {
-    if (!this.store.selection) return;
-    this.store.selection = null;
-    this.store.changed();
-    this.store.toast('Deleted');
-  }
-
-  /** Re-orients the floating block in place, around its own centre. */
-  transformSelection(kind: 'flipH' | 'flipV' | 'rotate'): void {
-    const selection = this.store.selection;
-    if (!selection) return;
-    const stamp: Stamp = { w: selection.w, h: selection.h, tiles: selection.tiles };
-    const next =
-      kind === 'flipH' ? flipStampH(stamp) : kind === 'flipV' ? flipStampV(stamp) : rotateStampCW(stamp);
-
-    // Rotation swaps the block's dimensions, so recentre it to stop the
-    // selection drifting away from where it sits.
-    const cx = selection.x + selection.w / 2;
-    const cy = selection.y + selection.h / 2;
-    selection.tiles = next.tiles;
-    selection.w = next.w;
-    selection.h = next.h;
-    selection.x = Math.round(cx - next.w / 2);
-    selection.y = Math.round(cy - next.h / 2);
-    this.store.changed();
-  }
-
   // --- Structural operations ----------------------------------------------
 
   addLayer(name?: string): void {
@@ -402,10 +253,17 @@ export class Editor {
       const doc = this.doc;
       const source = doc.layers[index];
       if (!source) return;
+      const base = { id: uid('layer'), name: `${source.name} copy` };
       const copy: Layer =
         source.kind === 'tiles'
-          ? { ...source, id: uid('layer'), name: `${source.name} copy`, data: source.data.slice() }
-          : { ...source, id: uid('layer'), name: `${source.name} copy` };
+          ? { ...source, ...base, data: source.data.slice() }
+          : source.kind === 'objects'
+            ? {
+                ...source,
+                ...base,
+                objects: source.objects.map((o) => ({ ...o, id: uid('obj'), rect: { ...o.rect } })),
+              }
+            : { ...source, ...base };
       doc.layers.splice(index + 1, 0, copy);
       doc.activeLayer = index + 1;
     });
@@ -546,11 +404,18 @@ export class Editor {
    * the array's new indices.
    */
   removeTileset(index: number): void {
-    if (!this.doc.tilesets[index]) return;
+    const removed = this.doc.tilesets[index];
+    if (!removed) return;
     this.structural('Remove tileset', () => {
       const doc = this.doc;
       doc.tilesets.splice(index, 1);
       for (const layer of doc.layers) {
+        // Objects refer to their sheet by id, so only ones from the removed
+        // sheet need to go; nothing has to be renumbered.
+        if (layer.kind === 'objects') {
+          layer.objects = layer.objects.filter((o) => o.tilesetId !== removed.id);
+          continue;
+        }
         if (!isTileLayer(layer)) continue;
         const data = layer.data;
         for (let i = 0; i < data.length; i++) {

@@ -43,7 +43,11 @@ const MAX_ENTRIES = 120;
 
 /** Copies a layer deeply enough that later edits cannot reach into history. */
 function copyLayer(layer: Layer): Layer {
-  return layer.kind === 'tiles' ? { ...layer, data: layer.data.slice() } : { ...layer };
+  if (layer.kind === 'tiles') return { ...layer, data: layer.data.slice() };
+  if (layer.kind === 'objects') {
+    return { ...layer, objects: layer.objects.map((o) => ({ ...o, rect: { ...o.rect } })) };
+  }
+  return { ...layer };
 }
 
 export function snapshot(doc: Doc): DocSnapshot {
@@ -55,7 +59,7 @@ export function snapshot(doc: Doc): DocSnapshot {
     background: doc.background,
     activeLayer: doc.activeLayer,
     layers: doc.layers.map(copyLayer),
-    tilesets: doc.tilesets.map((t) => ({ ...t })),
+    tilesets: doc.tilesets.map((t) => ({ ...t, assets: t.assets?.map((a) => ({ ...a })) })),
   };
 }
 

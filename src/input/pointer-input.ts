@@ -1,10 +1,11 @@
-import { isMovableImage, type ImageLayer } from '../core/doc';
+import { isMovableImage, type ImageLayer, type MapObject } from '../core/doc';
 import type { Shape, Store } from '../core/store';
 import { clampZoom, screenToCell, screenToWorld, zoomAt } from '../render/camera';
 import type { Renderer } from '../render/renderer';
 import type { Editor } from '../tools/edit';
 import { lineCells } from '../tools/geometry';
 import { hitsHandle, scaleFromHandle, snapPlacement } from '../tools/image-transform';
+import { HANDLE_HIT, objectHandlePoint, objectScreenRect, type ObjectTools } from '../tools/objects';
 
 interface TrackedPointer {
   id: number;
@@ -19,25 +20,36 @@ interface TrackedPointer {
   lastY: number;
 }
 
-type Mode = 'idle' | 'draw' | 'pan' | 'gesture' | 'image' | 'selection-rect' | 'selection-move';
+type Mode =
+  | 'idle'
+  | 'draw'
+  | 'pan'
+  | 'gesture'
+  | 'image'
+  | 'object-move'
+  | 'object-scale'
+  | 'object-pinch';
 
 /** A multi-finger tap only counts as a shortcut if it is quick and still. */
 const TAP_MAX_MS = 320;
 const TAP_MAX_MOVE = 12;
 /** Window for the second tap of a double-tap. */
 const DOUBLE_TAP_MS = 380;
+/** How far from a selected object a pinch may start and still resize it. */
+const PINCH_REACH = 90;
 
 /**
  * Translates pointer events into editing and navigation.
  *
  * The rules that matter on an iPad:
- *  - The Apple Pencil always draws. While it is touching the glass every
- *    `touch` pointer is dropped, which is what makes palm rejection work.
- *  - Fingers navigate by default: one finger pans, two pinch and pan. Drawing
- *    with a finger is opt-in, and even then a second finger rolls the stroke
- *    back and takes over as a pinch.
- *  - Two-finger tap undoes and three-finger tap redoes, matching the system
- *    gesture iPad users already have in their hands.
+ *  - The Apple Pencil draws, and grabs placed assets directly. While it is
+ *    touching the glass every `touch` pointer is dropped, which is what makes
+ *    palm rejection work.
+ *  - Fingers navigate: one finger pans, two pinch to zoom. A tap selects an
+ *    asset, and only an already-selected asset follows a finger drag, so a map
+ *    full of trees can still be panned without grabbing one.
+ *  - Pinching over a selected asset resizes it instead of zooming the map.
+ *  - Two-finger tap undoes and three-finger tap redoes.
  */
 export class PointerInput {
   private readonly pointers = new Map<number, TrackedPointer>();
@@ -50,12 +62,11 @@ export class PointerInput {
   /** Where the current single-finger touch began, for tap detection. */
   private tapStart: { clientX: number; clientY: number; x: number; y: number } | null = null;
   private lastTap: { time: number; cell: { x: number; y: number } } | null = null;
+  /** The asset under a finger that went down, selected only if it was a tap. */
+  private tapObject: MapObject | null = null;
+  private tapObjectLayer: string | null = null;
 
-  /**
-   * Called when a placed tile is double-tapped. Fingers do not paint unless
-   * you opt in, so a finger double-tap is free to mean "edit this tile"
-   * without colliding with drawing.
-   */
+  /** Called when a placed ground tile is double-tapped. */
   onDoubleTap: ((cell: { x: number; y: number }, clientX: number, clientY: number) => void) | null = null;
 
   /** Captured when a stroke starts so a mid-stroke tool change cannot confuse it. */
@@ -64,14 +75,17 @@ export class PointerInput {
   private lastCell: { x: number; y: number } | null = null;
   private anchorCell: { x: number; y: number } | null = null;
 
-  /** Offset from the selection's corner to where it was grabbed. */
-  private selectionGrab = { dx: 0, dy: 0 };
-
   /** Reference image being dragged, with its placement when the drag began. */
   private imageLayer: ImageLayer | null = null;
   private imageAction: 'move' | 'scale' = 'move';
   private imageStart = { x: 0, y: 0, w: 0, h: 0 };
   private imageGrabWorld = { x: 0, y: 0 };
+
+  /** Asset gesture state. */
+  private grab = { dx: 0, dy: 0 };
+  private objectMoved = false;
+  private scaleStart = 1;
+  private scaleStartDistance = 1;
 
   /** Pinch baseline, captured when the second finger lands. */
   private pinchDistance = 1;
@@ -89,6 +103,7 @@ export class PointerInput {
     private readonly store: Store,
     private readonly editor: Editor,
     private readonly renderer: Renderer,
+    private readonly objects: ObjectTools,
   ) {
     this.rect = canvas.getBoundingClientRect();
 
@@ -99,11 +114,10 @@ export class PointerInput {
     canvas.addEventListener('pointerleave', this.onLeave);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    // With a mouse, a click paints, so double-click only opens the menu from
-    // tools that do not change the map on click.
+    // A mouse click paints, so double-click only opens the tile menu from the
+    // pan tool, where a click changes nothing.
     canvas.addEventListener('dblclick', (e) => {
-      const tool = this.store.tool;
-      if (tool !== 'select' && tool !== 'pan') return;
+      if (this.store.tool !== 'pan') return;
       const { x, y } = this.local(e);
       this.onDoubleTap?.(this.cellAt(x, y), e.clientX, e.clientY);
     });
@@ -131,10 +145,98 @@ export class PointerInput {
     return screenToCell(this.store.camera, this.store.doc, x, y);
   }
 
+  private worldAt(x: number, y: number) {
+    return screenToWorld(this.store.camera, x, y);
+  }
+
   private touchCount(): number {
     let n = 0;
     for (const p of this.pointers.values()) if (p.type === 'touch') n += 1;
     return n;
+  }
+
+  // --- Assets --------------------------------------------------------------
+
+  private onSelectedHandle(x: number, y: number): boolean {
+    const found = this.objects.selected();
+    if (!found) return false;
+    const handle = objectHandlePoint(this.store.camera, found.obj);
+    return Math.hypot(x - handle.x, y - handle.y) <= HANDLE_HIT;
+  }
+
+  /** True when a screen point is on or near the selected asset. */
+  private nearSelected(x: number, y: number, reach: number): boolean {
+    const found = this.objects.selected();
+    if (!found) return false;
+    const r = objectScreenRect(this.store.camera, found.obj);
+    return x >= r.x - reach && x <= r.x + r.w + reach && y >= r.y - reach && y <= r.y + r.h + reach;
+  }
+
+  private startObjectMove(pointer: TrackedPointer, obj: MapObject): void {
+    const world = this.worldAt(pointer.x, pointer.y);
+    this.mode = 'object-move';
+    this.activeId = pointer.id;
+    this.grab = { dx: world.x - obj.x, dy: world.y - obj.y };
+    this.objectMoved = false;
+    this.objects.beginGesture();
+  }
+
+  private startObjectScale(pointer: TrackedPointer): void {
+    const found = this.objects.selected();
+    if (!found) return;
+    const world = this.worldAt(pointer.x, pointer.y);
+    this.mode = 'object-scale';
+    this.activeId = pointer.id;
+    this.scaleStart = found.obj.scale;
+    this.scaleStartDistance = Math.max(1, Math.hypot(world.x - found.obj.x, world.y - found.obj.y));
+    this.objects.beginGesture();
+  }
+
+  /**
+   * Handles a press that lands on an asset, or on the selected asset's grip.
+   * Returns false when the press missed every asset, so the caller can fall
+   * through to the active tool.
+   */
+  private pressAsset(pointer: TrackedPointer, precise: boolean): boolean {
+    if (this.spaceHeld || this.store.tool === 'pan') return false;
+
+    if (this.onSelectedHandle(pointer.x, pointer.y)) {
+      this.startObjectScale(pointer);
+      return true;
+    }
+
+    const world = this.worldAt(pointer.x, pointer.y);
+    const hit = this.objects.hitTest(world.x, world.y);
+    if (!hit) return false;
+
+    // The eraser removes an asset outright rather than painting under it.
+    if (this.store.tool === 'eraser') {
+      this.objects.select(hit.layer, hit.obj);
+      this.objects.remove();
+      this.mode = 'idle';
+      this.activeId = pointer.id;
+      return true;
+    }
+
+    const selected = this.objects.selected();
+    const isSelected = selected?.obj === hit.obj;
+
+    // Remember what a finger landed on, so a tap can select it on release and
+    // a tap on the selected asset does not count as tapping bare map.
+    if (!precise) {
+      this.tapObject = hit.obj;
+      this.tapObjectLayer = hit.layer.id;
+    }
+
+    if (precise || isSelected) {
+      // The Pencil grabs at once; a finger only drags what is already chosen.
+      this.objects.select(hit.layer, hit.obj);
+      this.startObjectMove(pointer, hit.obj);
+      return true;
+    }
+
+    // A finger on an unselected asset: a tap selects it, a drag pans.
+    return false;
   }
 
   // --- Starting an interaction --------------------------------------------
@@ -147,8 +249,6 @@ export class PointerInput {
     if (tool === 'pan') return { shape: 'pan', erases: false };
     if (tool === 'picker') return { shape: 'picker', erases: false };
     if (tool === 'eraser') return { shape: this.store.eraserShape, erases: true };
-    // `select` never reaches here: it is handled before a stroke begins.
-    if (tool === 'select') return { shape: 'pan', erases: false };
     return { shape: tool, erases: false };
   }
 
@@ -167,10 +267,11 @@ export class PointerInput {
     this.imageLayer = layer;
     this.imageAction = hitsHandle(this.store.camera, layer, pointer.x, pointer.y) ? 'scale' : 'move';
     this.imageStart = { x: layer.x, y: layer.y, w: layer.w, h: layer.h };
-    this.imageGrabWorld = screenToWorld(this.store.camera, pointer.x, pointer.y);
+    this.imageGrabWorld = this.worldAt(pointer.x, pointer.y);
     this.editor.beginImageTransform();
   }
 
+  /** The Pencil, a mouse, or a drawing finger has touched down. */
   private startDraw(pointer: TrackedPointer, penEraser: boolean): void {
     // Placing the scale-test character takes priority: while that mode is on,
     // a tap moves the character rather than painting.
@@ -186,6 +287,10 @@ export class PointerInput {
       return;
     }
 
+    if (this.pressAsset(pointer, true)) return;
+    // Pressing on bare map means you have moved on from the selected asset.
+    this.objects.deselect();
+
     const active = this.store.doc.layers[this.store.doc.activeLayer];
     if (!this.spaceHeld && this.store.tool !== 'pan' && isMovableImage(active)) {
       this.startImageDrag(pointer, active);
@@ -200,11 +305,6 @@ export class PointerInput {
 
     this.activeId = pointer.id;
     const cell = this.cellAt(pointer.x, pointer.y);
-
-    if (this.store.tool === 'select' && !this.spaceHeld) {
-      this.startSelect(cell);
-      return;
-    }
 
     if (shape === 'picker') {
       this.mode = 'draw';
@@ -249,29 +349,6 @@ export class PointerInput {
     this.renderer.requestDraw();
   }
 
-  /**
-   * The select tool does one of two things depending on where you press:
-   * inside a floating block it drags that block, anywhere else it starts a
-   * new marquee (dropping whatever was floating first).
-   */
-  private startSelect(cell: { x: number; y: number }): void {
-    const selection = this.store.selection;
-
-    if (selection && insideSelection(selection, cell)) {
-      this.mode = 'selection-move';
-      this.selectionGrab = { dx: cell.x - selection.x, dy: cell.y - selection.y };
-      return;
-    }
-
-    // Pressing outside the block means you are done with it.
-    if (selection) this.editor.commitSelection();
-
-    this.mode = 'selection-rect';
-    this.anchorCell = cell;
-    this.store.preview = { x0: cell.x, y0: cell.y, x1: cell.x, y1: cell.y };
-    this.renderer.requestDraw();
-  }
-
   private startGesture(): void {
     const touches = [...this.pointers.values()].filter((p) => p.type === 'touch');
     if (touches.length < 2) return;
@@ -279,8 +356,17 @@ export class PointerInput {
     this.pinchDistance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
     this.pinchZoom = this.store.camera.zoom;
     this.pinchMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    this.mode = 'gesture';
     this.activeId = null;
+
+    // Pinching over the selected asset resizes it; anywhere else zooms.
+    const found = this.objects.selected();
+    if (found && this.nearSelected(this.pinchMid.x, this.pinchMid.y, PINCH_REACH)) {
+      this.mode = 'object-pinch';
+      this.scaleStart = found.obj.scale;
+      this.objects.beginGesture();
+      return;
+    }
+    this.mode = 'gesture';
   }
 
   // --- Event handlers ------------------------------------------------------
@@ -327,9 +413,14 @@ export class PointerInput {
       this.gestureStart = performance.now();
       this.gestureMoved = false;
       this.tapStart = { clientX: e.clientX, clientY: e.clientY, x, y };
+      this.tapObject = null;
+      this.tapObjectLayer = null;
+
+      if (this.pressAsset(pointer, false)) return;
+
       const drawsWithFinger =
         this.store.settings.fingerDraws && this.store.tool !== 'pan' && !this.spaceHeld;
-      if (drawsWithFinger) this.startDraw(pointer, false);
+      if (drawsWithFinger && !this.tapObject) this.startDraw(pointer, false);
       else this.beginPan(pointer);
       return;
     }
@@ -337,6 +428,7 @@ export class PointerInput {
     // Second finger: whatever was happening becomes a pinch.
     if (this.mode === 'draw') this.editor.abortStroke();
     else if (this.mode === 'image') this.cancelImageDrag();
+    else if (this.mode === 'object-move' || this.mode === 'object-scale') this.objects.cancelGesture();
     this.store.preview = null;
     this.anchorCell = null;
     this.startGesture();
@@ -365,20 +457,37 @@ export class PointerInput {
       return;
     }
 
-    if (this.mode === 'image' && e.pointerId === this.activeId) {
-      this.updateImageDrag(x, y);
+    if (this.mode === 'object-pinch') {
+      this.updateObjectPinch();
       return;
     }
 
-    if (e.pointerId === this.activeId && (this.mode === 'selection-rect' || this.mode === 'selection-move')) {
-      const cell = this.cellAt(x, y);
-      if (this.mode === 'selection-rect' && this.anchorCell) {
-        this.store.preview = { x0: this.anchorCell.x, y0: this.anchorCell.y, x1: cell.x, y1: cell.y };
-      } else if (this.store.selection) {
-        this.store.selection.x = cell.x - this.selectionGrab.dx;
-        this.store.selection.y = cell.y - this.selectionGrab.dy;
+    if (e.pointerId === this.activeId && this.mode === 'object-move') {
+      const found = this.objects.selected();
+      if (found) {
+        // Ignore the wobble of a tap. Moving within the slop and releasing
+        // must leave the asset exactly where it was, with no undo step.
+        const slop = e.pointerType === 'touch' ? TAP_MAX_MOVE : 3;
+        if (!this.objectMoved && Math.hypot(x - tracked.startX, y - tracked.startY) <= slop) return;
+        this.objectMoved = true;
+        const world = this.worldAt(x, y);
+        this.objects.moveTo(found.obj, world.x - this.grab.dx, world.y - this.grab.dy);
       }
-      this.renderer.requestDraw();
+      return;
+    }
+
+    if (e.pointerId === this.activeId && this.mode === 'object-scale') {
+      const found = this.objects.selected();
+      if (found) {
+        const world = this.worldAt(x, y);
+        const distance = Math.hypot(world.x - found.obj.x, world.y - found.obj.y);
+        this.objects.scaleTo(found.obj, this.scaleStart * (distance / this.scaleStartDistance));
+      }
+      return;
+    }
+
+    if (this.mode === 'image' && e.pointerId === this.activeId) {
+      this.updateImageDrag(x, y);
       return;
     }
 
@@ -414,19 +523,30 @@ export class PointerInput {
     if (e.pointerType === 'pen') this.penDown = false;
     if (!tracked) return;
 
-    if (this.mode === 'gesture') {
-      // Rebase the pinch when a finger lifts but others remain, otherwise the
-      // view would jump as the midpoint moves.
-      if (this.touchCount() >= 2) this.startGesture();
-      else if (this.touchCount() === 0) this.endInteraction();
+    if (this.mode === 'gesture' || this.mode === 'object-pinch') {
+      // Rebase when a finger lifts but others remain, otherwise the view or
+      // the asset would jump as the midpoint moves.
+      if (this.touchCount() >= 2) {
+        if (this.mode === 'object-pinch') this.objects.endGesture('Resize');
+        this.startGesture();
+      } else if (this.touchCount() === 0) {
+        if (this.mode === 'object-pinch') this.objects.endGesture('Resize');
+        this.endInteraction();
+      } else if (this.mode === 'object-pinch') {
+        // One finger left: finish the resize, ignore the remaining finger.
+        this.objects.endGesture('Resize');
+        this.mode = 'idle';
+      }
       return;
     }
 
     if (e.pointerId === this.activeId) {
       if (this.mode === 'draw') this.finishDraw();
       else if (this.mode === 'image') this.finishImageDrag();
-      else if (this.mode === 'selection-rect') this.finishSelectRect();
-      else if (this.mode === 'selection-move') this.store.changed();
+      else if (this.mode === 'object-move') {
+        if (this.objectMoved) this.objects.endGesture('Move');
+        else this.objects.cancelGesture();
+      } else if (this.mode === 'object-scale') this.objects.endGesture('Resize');
       this.mode = 'idle';
       this.activeId = null;
       this.lastCell = null;
@@ -465,7 +585,8 @@ export class PointerInput {
     for (const [id, p] of [...this.pointers]) {
       if (p.type === 'touch') this.pointers.delete(id);
     }
-    if (this.mode === 'gesture' || this.mode === 'pan') {
+    if (this.mode === 'object-pinch') this.objects.cancelGesture();
+    if (this.mode === 'gesture' || this.mode === 'pan' || this.mode === 'object-pinch') {
       this.mode = 'idle';
       this.activeId = null;
     }
@@ -524,7 +645,7 @@ export class PointerInput {
   private updateImageDrag(x: number, y: number): void {
     const layer = this.imageLayer;
     if (!layer) return;
-    const world = screenToWorld(this.store.camera, x, y);
+    const world = this.worldAt(x, y);
 
     if (this.imageAction === 'scale') {
       const { w, h } = scaleFromHandle(this.imageStart, world.x, world.y);
@@ -561,15 +682,6 @@ export class PointerInput {
     this.editor.applyImagePlacement(layer, this.imageStart);
     this.editor.cancelImageTransform();
     this.renderer.requestDraw();
-  }
-
-  private finishSelectRect(): void {
-    const preview = this.store.preview;
-    this.store.preview = null;
-    this.anchorCell = null;
-    if (!preview) return;
-    this.editor.liftSelection(preview);
-    this.store.emit('ui');
   }
 
   private finishDraw(): void {
@@ -616,7 +728,17 @@ export class PointerInput {
     this.renderer.requestDraw();
   }
 
-  /** Two quick taps on the same cell open that tile's menu. */
+  /** Scales the selected asset by how far the two fingers have spread. */
+  private updateObjectPinch(): void {
+    const touches = [...this.pointers.values()].filter((p) => p.type === 'touch');
+    const found = this.objects.selected();
+    if (touches.length < 2 || !found) return;
+    const [a, b] = touches;
+    const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    this.objects.scaleTo(found.obj, this.scaleStart * (distance / this.pinchDistance));
+  }
+
+  /** Two quick taps on the same ground cell open that tile's menu. */
   private registerTap(point: { clientX: number; clientY: number; x: number; y: number }): void {
     const now = performance.now();
     const cell = this.cellAt(point.x, point.y);
@@ -629,24 +751,39 @@ export class PointerInput {
     this.lastTap = { time: now, cell };
   }
 
-  /** Called when the last pointer lifts: resolves multi-finger tap shortcuts. */
+  /** Called when the last pointer lifts: resolves taps and tap shortcuts. */
   private endInteraction(): void {
     const elapsed = performance.now() - this.gestureStart;
     const fingers = this.gestureMaxFingers;
     const wasTap = !this.gestureMoved && elapsed < TAP_MAX_MS;
+    const tappedObject = this.tapObject;
+    const tappedLayer = this.tapObjectLayer;
 
     this.mode = 'idle';
     this.activeId = null;
     this.gestureMaxFingers = 0;
     this.gestureMoved = false;
+    this.tapObject = null;
+    this.tapObjectLayer = null;
     this.store.preview = null;
     this.anchorCell = null;
 
     if (!wasTap) return;
-    if (fingers === 1 && this.tapStart) {
-      this.registerTap(this.tapStart);
+
+    if (fingers === 1) {
+      // A finger tap on an asset selects it; on bare map it deselects, and
+      // two of those in a row open the ground tile's menu.
+      if (tappedObject && tappedLayer) {
+        const layer = this.store.doc.layers.find((l) => l.id === tappedLayer);
+        if (layer?.kind === 'objects') this.objects.select(layer, tappedObject);
+        return;
+      }
+      const hadSelection = !!this.objects.selected();
+      this.objects.deselect();
+      if (!hadSelection && this.tapStart) this.registerTap(this.tapStart);
       return;
     }
+
     if (fingers === 2) {
       this.editor.undo();
       this.store.toast('Undo');
@@ -660,10 +797,6 @@ export class PointerInput {
 /** Apple Pencil Pro and Surface-style pens report the eraser end as button 5. */
 function isPenEraser(e: PointerEvent): boolean {
   return e.pointerType === 'pen' && ((e.buttons & 32) !== 0 || e.button === 5);
-}
-
-function insideSelection(s: { x: number; y: number; w: number; h: number }, cell: { x: number; y: number }): boolean {
-  return cell.x >= s.x && cell.y >= s.y && cell.x < s.x + s.w && cell.y < s.y + s.h;
 }
 
 function labelFor(shape: Shape, erasing: boolean): string {

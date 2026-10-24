@@ -25,6 +25,47 @@ export interface Tileset {
    * derived from the image size, because the image grows ahead of use.
    */
   generated?: boolean;
+  /**
+   * How the sheet divides into draggable assets. `grid` cuts it into equal
+   * tiles, which suits ground. `objects` finds each separate thing by where
+   * the transparent background splits them, so a tree is one asset rather
+   * than the six squares it happens to cover.
+   */
+  splitMode?: 'grid' | 'objects';
+  /** Detected asset rectangles, used when `splitMode` is `objects`. */
+  assets?: AssetRect[];
+}
+
+/** A rectangle of a sheet image, in source pixels. */
+export interface AssetRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * One placed asset. Unlike a tile it is not locked to the grid's size or
+ * orientation: it can be scaled, turned, mirrored and recoloured on its own.
+ */
+export interface MapObject {
+  id: string;
+  /** Sheet the artwork comes from. By id, so removing other sheets is safe. */
+  tilesetId: string;
+  /** The artwork's rectangle within that sheet, captured at placement. */
+  rect: AssetRect;
+  /** Centre position in world pixels. */
+  x: number;
+  y: number;
+  scale: number;
+  /** Quarter turns clockwise, 0 to 3. Pixel art only stays crisp at 90 degrees. */
+  rotation: number;
+  flipX: boolean;
+  flipY: boolean;
+  /** Recolour, relative to the artwork as drawn. */
+  hueShift: number;
+  saturation: number;
+  brightness: number;
 }
 
 interface LayerBase {
@@ -63,7 +104,16 @@ export interface ImageLayer extends LayerBase {
   naturalH: number;
 }
 
-export type Layer = TileLayer | ImageLayer;
+/**
+ * Free-placed assets. Order within `objects` is depth: later objects draw in
+ * front, which is how "bring forward" and "send backward" work.
+ */
+export interface ObjectLayer extends LayerBase {
+  kind: 'objects';
+  objects: MapObject[];
+}
+
+export type Layer = TileLayer | ImageLayer | ObjectLayer;
 
 export function isTileLayer(layer: Layer | null | undefined): layer is TileLayer {
   return !!layer && layer.kind === 'tiles';
@@ -71,6 +121,29 @@ export function isTileLayer(layer: Layer | null | undefined): layer is TileLayer
 
 export function isImageLayer(layer: Layer | null | undefined): layer is ImageLayer {
   return !!layer && layer.kind === 'image';
+}
+
+export function isObjectLayer(layer: Layer | null | undefined): layer is ObjectLayer {
+  return !!layer && layer.kind === 'objects';
+}
+
+export function createObjectLayer(name = 'Objects'): ObjectLayer {
+  return {
+    kind: 'objects',
+    id: uid('layer'),
+    name,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    objects: [],
+  };
+}
+
+/** On-screen footprint of an object in world pixels, after turning and scaling. */
+export function objectSize(obj: MapObject): { w: number; h: number } {
+  const w = obj.rect.w * obj.scale;
+  const h = obj.rect.h * obj.scale;
+  return obj.rotation % 2 === 1 ? { w: h, h: w } : { w, h };
 }
 
 export interface Doc {

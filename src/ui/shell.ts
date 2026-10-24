@@ -5,19 +5,23 @@ import type { Shape, Store, ToolId } from '../core/store';
 import { clampZoom, zoomAt } from '../render/camera';
 import type { Renderer } from '../render/renderer';
 import type { Editor } from '../tools/edit';
+import type { ObjectTools } from '../tools/objects';
 import type { CharacterPanel } from './character-panel';
 import { button, clear, el } from './dom';
 import { icon, type IconName } from './icons';
 import { LayersPanel } from './layers';
 import { MapPanel } from './map-panel';
-import { PalettePanel } from './palette';
+import { PalettePanel, type PaletteActions } from './palette';
 
 export interface ShellActions {
   addTileset: () => void;
   editTileset: (index: number) => void;
   removeTileset: (index: number) => void;
-  dragOver: (clientX: number, clientY: number) => void;
-  drop: (clientX: number, clientY: number) => void;
+  tapAsset: PaletteActions['tapAsset'];
+  dragStart: PaletteActions['dragStart'];
+  dragMove: PaletteActions['dragMove'];
+  dragEnd: PaletteActions['dragEnd'];
+  recolorObject: (anchor: HTMLElement) => void;
   addImageLayer: () => void;
   replaceImage: (index: number) => void;
   newMap: () => void;
@@ -44,7 +48,6 @@ const TOOLS: { id: ToolId; icon: IconName; label: string; key: string }[] = [
   { id: 'fill', icon: 'fill', label: 'Fill', key: 'G' },
   { id: 'rect', icon: 'rect', label: 'Rectangle', key: 'R' },
   { id: 'line', icon: 'line', label: 'Line', key: 'L' },
-  { id: 'select', icon: 'select', label: 'Select', key: 'V' },
   { id: 'picker', icon: 'picker', label: 'Pick tile', key: 'I' },
   { id: 'pan', icon: 'pan', label: 'Pan', key: 'H' },
 ];
@@ -87,13 +90,16 @@ export class Shell {
     private readonly studio: Studio,
     private readonly characterView: CharacterView,
     private readonly characterPanel: CharacterPanel,
+    private readonly objects: ObjectTools,
   ) {
     this.palette = new PalettePanel(store, {
       addTileset: actions.addTileset,
       editTileset: actions.editTileset,
       removeTileset: actions.removeTileset,
-      dragOver: actions.dragOver,
-      drop: actions.drop,
+      tapAsset: actions.tapAsset,
+      dragStart: actions.dragStart,
+      dragMove: actions.dragMove,
+      dragEnd: actions.dragEnd,
     });
     this.layersPanel = new LayersPanel(store, editor, {
       addImageLayer: actions.addImageLayer,
@@ -316,24 +322,31 @@ export class Shell {
     const store = this.store;
     const chips: HTMLElement[] = [];
 
-    // A floating selection owns the bar: while tiles are held, every control
-    // here acts on them and nothing else is relevant.
-    const selection = store.selection;
-    if (this.mode === 'map' && selection) {
-      const layer = store.doc.layers.find((l) => l.id === selection.layerId);
+    // A selected asset owns the bar: every control here acts on it, and
+    // nothing else is relevant until you tap away.
+    const found = this.mode === 'map' ? this.objects.selected() : null;
+    if (found) {
+      // Built directly rather than through `selectionChip`, which rebuilds the
+      // bar on click and would detach this button before the colour popover
+      // could anchor to it.
+      const recolor: HTMLButtonElement = button('chip', 'Recolour', () => this.actions.recolorObject(recolor), [
+        icon('palette', 17),
+      ]);
       this.optionsBar.append(
-        el('span', { class: 'chip-label', text: `${selection.w} x ${selection.h} on ${layer?.name ?? 'layer'}` }),
+        el('span', { class: 'chip-label', text: `${Math.round(found.obj.scale * 100)}%` }),
         el('div', { class: 'divider vertical' }),
-        this.selectionChip('sendBackward', 'Send behind', () => this.editor.moveSelectionDepth(-1)),
-        this.selectionChip('bringForward', 'Bring in front', () => this.editor.moveSelectionDepth(1)),
+        this.selectionChip('rotate', 'Rotate', () => this.objects.rotate()),
+        this.selectionChip('flipH', 'Flip across', () => this.objects.flipAcross()),
+        this.selectionChip('flipV', 'Flip down', () => this.objects.flipDown()),
+        recolor,
         el('div', { class: 'divider vertical' }),
-        this.selectionChip('flipH', 'Flip across', () => this.editor.transformSelection('flipH')),
-        this.selectionChip('flipV', 'Flip down', () => this.editor.transformSelection('flipV')),
-        this.selectionChip('rotate', 'Rotate', () => this.editor.transformSelection('rotate')),
+        this.selectionChip('sendBackward', 'Send backward', () => this.objects.sendBackward()),
+        this.selectionChip('bringForward', 'Bring forward', () => this.objects.bringForward()),
+        this.selectionChip('copy', 'Duplicate', () => this.objects.duplicate()),
         el('div', { class: 'divider vertical' }),
-        this.selectionChip('trash', 'Delete', () => this.editor.deleteSelection(), 'danger'),
-        button('chip primary-chip', 'Drop it here', () => {
-          this.editor.commitSelection();
+        this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger'),
+        button('chip primary-chip', 'Done', () => {
+          this.objects.deselect();
           this.refreshChrome();
         }, [icon('check', 17), el('span', { class: 'chip-text', text: 'Done' })]),
       );

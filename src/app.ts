@@ -46,12 +46,14 @@ export class App {
   private readonly studio = new Studio();
   private readonly characterView: CharacterView;
   private readonly characterPanel: CharacterPanel;
+  private readonly objects: ObjectTools;
 
   constructor(root: HTMLElement) {
     this.canvas = el('canvas', { class: 'map-canvas' });
     this.renderer = new Renderer(this.canvas, this.store);
     this.editor = new Editor(this.store, this.renderer);
-    this.input = new PointerInput(this.canvas, this.store, this.editor, this.renderer);
+    this.objects = new ObjectTools(this.store, this.renderer);
+    this.input = new PointerInput(this.canvas, this.store, this.editor, this.renderer, this.objects);
 
     this.characterView = new CharacterView(this.studio, this.store.settings);
     this.characterPanel = new CharacterPanel(this.store, this.studio, this.characterView, {
@@ -63,8 +65,11 @@ export class App {
       addTileset: () => this.addTileset(),
       editTileset: (index) => this.editTileset(index),
       removeTileset: (index) => this.confirmRemoveTileset(index),
-      dragOver: (x, y) => this.dragOver(x, y),
-      drop: (x, y) => this.drop(x, y),
+      tapAsset: (sheet, asset) => this.tapAsset(sheet, asset),
+      dragStart: (tilesetId, rect) => this.dragStart(tilesetId, rect),
+      dragMove: (x, y) => this.dragMove(x, y),
+      dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
+      recolorObject: (anchor) => this.recolorObject(anchor),
       addImageLayer: () => void this.addImageLayer(),
       replaceImage: (index) => void this.replaceImage(index),
       newMap: () => this.newMap(),
@@ -72,7 +77,7 @@ export class App {
       exportMap: () => openExportDialog(this.store, this.studio.characters),
       fitToView: () => this.fit(),
       playTest: () => this.startPlayTest(),
-    }, this.studio, this.characterView, this.characterPanel);
+    }, this.studio, this.characterView, this.characterPanel, this.objects);
 
     this.autosave = createAutosave(() => serializeProject(this.store.doc, this.studio.characters));
 
@@ -315,37 +320,99 @@ export class App {
     });
   }
 
-  // --- Drag and drop from the palette --------------------------------------
+  // --- The asset library ---------------------------------------------------
 
-  /**
-   * Works out where a palette drag would land. The block is centred on the
-   * finger, so what you drop is where you are pointing rather than hanging
-   * off to the bottom-right of it.
-   */
-  private dropCell(clientX: number, clientY: number): { x: number; y: number } | null {
-    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+  /** World point under a screen position, or null when it is off the map view. */
+  private worldUnder(clientX: number, clientY: number): { x: number; y: number } | null {
     const rect = this.canvas.getBoundingClientRect();
     const inside =
       clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
     if (!inside) return null;
-    const cell = screenToCell(this.store.camera, this.store.doc, clientX - rect.left, clientY - rect.top);
-    const stamp = this.store.stamp;
-    return { x: cell.x - Math.floor((stamp.w - 1) / 2), y: cell.y - Math.floor((stamp.h - 1) / 2) };
+    return screenToWorld(this.store.camera, clientX - rect.left, clientY - rect.top);
   }
 
-  private dragOver(clientX: number, clientY: number): void {
-    this.store.dropPreview = this.dropCell(clientX, clientY);
+  /**
+   * A tap on an asset. Separate objects are added to the middle of the view,
+   * selected and ready to move, which is the quickest route for anyone who
+   * has not discovered press-and-hold. Ground tiles become the brush instead,
+   * because ground is painted, not placed one square at a time.
+   */
+  private tapAsset(sheetIndex: number, assetIndex: number): void {
+    const sheet = this.store.doc.tilesets[sheetIndex];
+    if (!sheet) return;
+    const rect = assetsOf(sheet)[assetIndex];
+    if (!rect) return;
+    this.store.libraryPick = { tilesetId: sheet.id, index: assetIndex };
+
+    if (sheet.splitMode === 'objects') {
+      const centre = screenToWorld(this.store.camera, this.renderer.viewW / 2, this.renderer.viewH / 2);
+      this.objects.place(sheet.id, rect, centre.x, centre.y);
+      this.shell.palette.draw();
+      this.store.toast('Added. Drag it into place, or pinch to resize.');
+      return;
+    }
+
+    this.store.setStamp(singleStamp(sheetIndex, assetIndex), null);
+    if (this.store.tool !== 'brush' && this.store.tool !== 'fill' && this.store.tool !== 'rect') {
+      this.store.setTool('brush');
+    }
+    this.shell.palette.draw();
+  }
+
+  private dragStart(tilesetId: string, rect: AssetRect): void {
+    this.store.drag = { tilesetId, rect, world: null };
+  }
+
+  private dragMove(clientX: number, clientY: number): void {
+    if (!this.store.drag) return;
+    this.store.drag.world = this.worldUnder(clientX, clientY);
     this.renderer.requestDraw();
   }
 
-  private drop(clientX: number, clientY: number): void {
-    const at = this.dropCell(clientX, clientY);
-    this.store.dropPreview = null;
+  private dragEnd(clientX: number, clientY: number, dropped: boolean): void {
+    const drag = this.store.drag;
+    this.store.drag = null;
     this.renderer.requestDraw();
+    if (!drag || !dropped) return;
+    const at = this.worldUnder(clientX, clientY);
+    // Released somewhere other than the map: treat it as changing your mind.
     if (!at) return;
-    if (!this.editor.beginStroke('Place tiles')) return;
-    this.editor.paintStamp(at.x, at.y);
-    this.editor.endStroke();
+    this.objects.place(drag.tilesetId, drag.rect, at.x, at.y);
+  }
+
+  /**
+   * Opens the colour wheel for the selected asset. The wheel starts on the
+   * asset's own colour, and moving it is applied as a change relative to that,
+   * so every shade shifts together rather than flattening to one colour.
+   */
+  private recolorObject(anchor: HTMLElement): void {
+    const found = this.objects.selected();
+    if (!found) return;
+    const { obj } = found;
+    const sheet = this.store.doc.tilesets.find((t) => t.id === obj.tilesetId);
+    if (!sheet?.image) return;
+
+    const base = dominantColor(cropAsset(sheet.image, obj.rect));
+    const startColor = hsvToHex({
+      h: (((base.h + obj.hueShift) % 360) + 360) % 360,
+      s: Math.min(1, base.s * obj.saturation),
+      v: Math.min(1, base.v * obj.brightness),
+    });
+
+    this.objects.beginGesture();
+    openColorPopover({
+      anchor,
+      initial: startColor,
+      onChange: (hex) => {
+        const target = hexToHsv(hex);
+        this.objects.setColor(obj, {
+          hueShift: target.h - base.h,
+          saturation: base.s > 0.02 ? target.s / base.s : 1,
+          brightness: base.v > 0.02 ? target.v / base.v : 1,
+        });
+      },
+      onClose: () => this.objects.endGesture('Recolour'),
+    });
   }
 
   // --- Per-tile menu -------------------------------------------------------

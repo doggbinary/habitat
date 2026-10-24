@@ -1,29 +1,8 @@
-import { createDoc, type Doc } from './doc';
+import { createDoc, type AssetRect, type Doc } from './doc';
 import { History } from './history';
 import { EMPTY_STAMP, type Stamp } from './stamp';
 
-export type ToolId = 'brush' | 'eraser' | 'fill' | 'rect' | 'line' | 'picker' | 'pan' | 'select';
-
-/**
- * A block of tiles lifted off the map and held in the air.
- *
- * While a selection is floating its source cells are already cleared, so what
- * you see is the truth: dropping it writes exactly what is drawn. Nothing is
- * committed until you finish, so moving it around costs one undo step, not one
- * per nudge.
- */
-export interface MapSelection {
-  /** Current top-left position in tiles. */
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  tiles: Int32Array;
-  /** Layer the block came from, and must return to. */
-  layerId: string;
-  /** True once the source cells have been cleared. */
-  lifted: boolean;
-}
+export type ToolId = 'brush' | 'eraser' | 'fill' | 'rect' | 'line' | 'picker' | 'pan';
 
 /**
  * The geometry a stroke lays down. The eraser reuses these shapes rather than
@@ -105,10 +84,17 @@ export class Store {
   hover: { x: number; y: number } | null = null;
   /** Live preview rect for the rectangle and line tools. */
   preview: { x0: number; y0: number; x1: number; y1: number } | null = null;
-  /** Tiles currently picked up with the select tool. */
-  selection: MapSelection | null = null;
-  /** Where a tile dragged out of the palette would land, in tiles. */
-  dropPreview: { x: number; y: number } | null = null;
+  /** The placed asset whose options are showing. */
+  selectedObject: { layerId: string; objectId: string } | null = null;
+  /** The library asset being dragged onto the map, and where it would land. */
+  drag: {
+    tilesetId: string;
+    rect: AssetRect;
+    /** World position under the finger, or null while off the map. */
+    world: { x: number; y: number } | null;
+  } | null = null;
+  /** The asset picked in the library, used to paint ground with the brush. */
+  libraryPick: { tilesetId: string; index: number } | null = null;
 
   private readonly listeners = new Map<EventName, Set<Listener>>();
 
