@@ -8,7 +8,6 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * fetch at runtime, which means it works in airplane mode from first launch.
  */
 const config: CapacitorConfig = {
-  // TODO: replace with the bundle identifier registered in App Store Connect.
   appId: 'com.oliviabee.pixelfusion',
   appName: 'Pixel Fusion',
   webDir: 'dist',

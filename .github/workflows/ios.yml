@@ -1,9 +1,15 @@
 name: Build iOS app
 
 # iOS binaries can only be compiled on macOS, so this runs on a hosted Mac.
-# It builds unsigned by default, which verifies the project compiles without
-# needing any Apple credentials. Signing and TestFlight upload turn on
-# automatically once the secrets described below exist.
+#
+# Without credentials it builds unsigned, which proves the project compiles.
+# Once these four repository secrets exist it signs the app and ships it to
+# TestFlight instead:
+#
+#   APPSTORE_ISSUER_ID   App Store Connect > Users and Access > Integrations > Keys
+#   APPSTORE_KEY_ID      the ID of that same key
+#   APPSTORE_PRIVATE_KEY the full contents of the downloaded AuthKey_*.p8
+#   APPLE_TEAM_ID        your 10-character Apple Developer team ID
 on:
   push:
     branches: [main]
@@ -20,6 +26,13 @@ jobs:
   build:
     runs-on: macos-latest
 
+    env:
+      # Secrets cannot be referenced directly in `if:`, so presence is
+      # resolved once here and tested as a plain value below.
+      HAS_SIGNING: ${{ secrets.APPSTORE_KEY_ID != '' && secrets.APPLE_TEAM_ID != '' }}
+      ARCHIVE_PATH: ${{ github.workspace }}/build/App.xcarchive
+      EXPORT_PATH: ${{ github.workspace }}/build/export
+
     steps:
       - uses: actions/checkout@v4
 
@@ -30,8 +43,6 @@ jobs:
 
       - run: npm ci
 
-      # Builds the web app, then copies it into the native project and
-      # refreshes the plugin list.
       - name: Build web and sync to iOS
         run: |
           npm run build
@@ -40,21 +51,106 @@ jobs:
       - name: Show available Xcode
         run: xcodebuild -version
 
-      # An unsigned build proves the project and all Capacitor plugins
-      # compile. It cannot run on a device, which is what signing is for.
+      # Every TestFlight upload needs a build number higher than the last, and
+      # the run number is monotonic and never reused.
+      - name: Set build number
+        run: |
+          cd ios/App
+          xcrun agvtool new-version -all ${{ github.run_number }}
+
+      # --- Unsigned path: no credentials configured ------------------------
+
       - name: Build unsigned archive
+        if: env.HAS_SIGNING != 'true'
         run: |
           xcodebuild \
             -project ios/App/App.xcodeproj \
             -scheme App \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -archivePath "$ARCHIVE_PATH" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             archive
 
-      - name: Report archive contents
+      - name: Note about signing
+        if: env.HAS_SIGNING != 'true'
         run: |
-          echo "Archive built at $RUNNER_TEMP/App.xcarchive"
-          ls -la "$RUNNER_TEMP/App.xcarchive/Products/Applications" || true
+          echo "Built unsigned. Add the four APPSTORE_* / APPLE_TEAM_ID secrets"
+          echo "to sign this build and send it to TestFlight automatically."
+
+      # --- Signed path: ship to TestFlight ---------------------------------
+
+      # altool and xcodebuild both look for the key in this exact location.
+      - name: Install App Store Connect API key
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "${{ secrets.APPSTORE_PRIVATE_KEY }}" \
+            > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APPSTORE_KEY_ID }}.p8
+
+      - name: Archive signed
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APPSTORE_KEY_ID }}.p8 \
+            -authenticationKeyID ${{ secrets.APPSTORE_KEY_ID }} \
+            -authenticationKeyIssuerID ${{ secrets.APPSTORE_ISSUER_ID }} \
+            DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
+            archive
+
+      - name: Write export options
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          mkdir -p build
+          cat > build/ExportOptions.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>TEAM_ID_PLACEHOLDER</string>
+          </dict>
+          </plist>
+          PLIST
+          sed -i '' "s/TEAM_ID_PLACEHOLDER/${{ secrets.APPLE_TEAM_ID }}/" build/ExportOptions.plist
+
+      - name: Export IPA
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APPSTORE_KEY_ID }}.p8 \
+            -authenticationKeyID ${{ secrets.APPSTORE_KEY_ID }} \
+            -authenticationKeyIssuerID ${{ secrets.APPSTORE_ISSUER_ID }}
+
+      - name: Upload to TestFlight
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          IPA=$(find "$EXPORT_PATH" -name '*.ipa' | head -n 1)
+          echo "Uploading $IPA"
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA" \
+            --apiKey ${{ secrets.APPSTORE_KEY_ID }} \
+            --apiIssuer ${{ secrets.APPSTORE_ISSUER_ID }}
+
+      - name: Keep the build
+        if: env.HAS_SIGNING == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-fusion-ipa
+          path: ${{ env.EXPORT_PATH }}/*.ipa
+          if-no-files-found: warn
