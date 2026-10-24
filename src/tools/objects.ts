@@ -30,6 +30,13 @@ export function objectScreenRect(camera: Camera, obj: MapObject): { x: number; y
   };
 }
 
+/** True when two placed assets cover some of the same ground. */
+export function overlaps(a: MapObject, b: MapObject): boolean {
+  const sa = objectSize(a);
+  const sb = objectSize(b);
+  return Math.abs(a.x - b.x) * 2 < sa.w + sb.w && Math.abs(a.y - b.y) * 2 < sa.h + sb.h;
+}
+
 /** The resize grip sits on the bottom-right corner, where a thumb expects it. */
 export function objectHandlePoint(camera: Camera, obj: MapObject): { x: number; y: number } {
   const r = objectScreenRect(camera, obj);
@@ -246,24 +253,55 @@ export class ObjectTools {
     this.reorder(-1);
   }
 
-  private reorder(delta: number): void {
+  bringToFront(): void {
+    this.reorder(1, true);
+  }
+
+  sendToBack(): void {
+    this.reorder(-1, true);
+  }
+
+  /**
+   * Where one step forward or back would put the selected asset, or -1 when
+   * nothing overlaps it on that side.
+   *
+   * A step passes the next asset that actually overlaps it, not merely the
+   * next one in the list. Passing an asset across the map changes nothing
+   * you can see, and a button that looks broken is worse than none.
+   */
+  private stepTarget(delta: 1 | -1): number {
+    const found = this.selected();
+    if (!found) return -1;
+    const { layer, obj } = found;
+    const index = layer.objects.indexOf(obj);
+    for (let i = index + delta; i >= 0 && i < layer.objects.length; i += delta) {
+      if (overlaps(obj, layer.objects[i])) return i;
+    }
+    return -1;
+  }
+
+  /** True when moving the selected asset that way would change what you see. */
+  canReorder(delta: 1 | -1): boolean {
+    return this.stepTarget(delta) !== -1;
+  }
+
+  private reorder(delta: 1 | -1, all = false): void {
     const found = this.selected();
     if (!found) return;
     const { layer, obj } = found;
     const index = layer.objects.indexOf(obj);
-    const target = index + delta;
-
-    if (target >= 0 && target < layer.objects.length) {
-      this.apply(delta > 0 ? 'Bring forward' : 'Send backward', (l) => {
-        l.objects.splice(index, 1);
-        l.objects.splice(target, 0, obj);
-      });
+    const step = this.stepTarget(delta);
+    if (step === -1) {
+      // Say so instead of silently doing nothing.
+      this.store.toast(delta > 0 ? 'Nothing in front of it' : 'Nothing behind it');
       return;
     }
-
-    // Already at the front or back of its layer: there is nothing further in
-    // this layer to pass, so say so instead of silently doing nothing.
-    this.store.toast(delta > 0 ? 'Already in front' : 'Already at the back');
+    const target = all ? (delta > 0 ? layer.objects.length - 1 : 0) : step;
+    const label = all ? (delta > 0 ? 'Bring to front' : 'Send to back') : delta > 0 ? 'Bring forward' : 'Send backward';
+    this.apply(label, (l) => {
+      l.objects.splice(index, 1);
+      l.objects.splice(target, 0, obj);
+    });
   }
 
   duplicate(): void {

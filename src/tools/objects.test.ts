@@ -120,7 +120,38 @@ describe('front and back', () => {
     withObjects(fakeObject({ id: 'a' }), fakeObject({ id: 'b' }));
     tools.bringForward();
     expect(layer.objects.map((o) => o.id)).toEqual(['a', 'b']);
-    expect(toast).toHaveBeenCalledWith('Already in front');
+    expect(toast).toHaveBeenCalledWith('Nothing in front of it');
+  });
+
+  it('steps past the next asset it overlaps, skipping ones elsewhere on the map', () => {
+    const [a] = withObjects(
+      fakeObject({ id: 'a' }),
+      fakeObject({ id: 'far', x: 400 }),
+      fakeObject({ id: 'b' }),
+      fakeObject({ id: 'c' }),
+    );
+    tools.select(layer, a);
+    tools.bringForward();
+    expect(layer.objects.map((o) => o.id)).toEqual(['far', 'b', 'a', 'c']);
+  });
+
+  it('cannot reorder past assets it does not touch, and says which way is possible', () => {
+    const [a] = withObjects(fakeObject({ id: 'a' }), fakeObject({ id: 'far', x: 400 }), fakeObject({ id: 'b' }));
+    tools.select(layer, a);
+    expect(tools.canReorder(-1)).toBe(false);
+    expect(tools.canReorder(1)).toBe(true);
+    tools.select(layer, layer.objects[1]);
+    expect(tools.canReorder(1)).toBe(false);
+    expect(tools.canReorder(-1)).toBe(false);
+  });
+
+  it('brings an asset all the way to the front, and sends one all the way back', () => {
+    const [a] = withObjects(fakeObject({ id: 'a' }), fakeObject({ id: 'b' }), fakeObject({ id: 'c' }));
+    tools.select(layer, a);
+    tools.bringToFront();
+    expect(layer.objects.map((o) => o.id)).toEqual(['b', 'c', 'a']);
+    tools.sendToBack();
+    expect(layer.objects.map((o) => o.id)).toEqual(['a', 'b', 'c']);
   });
 
   it('reordering can be undone', () => {

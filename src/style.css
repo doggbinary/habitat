@@ -326,11 +326,12 @@ textarea {
   left: 12px;
   bottom: calc(12px + var(--sa-bottom));
   display: flex;
+  /* Wrap rather than scroll: a hidden scrollbar hides buttons too. */
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding: 5px;
   max-width: calc(100% - 24px);
-  overflow-x: auto;
   background: rgba(22, 24, 31, 0.92);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border);
@@ -512,6 +513,19 @@ textarea {
   background: var(--accent-dim);
   color: var(--accent);
   font-weight: 600;
+}
+
+.order-group {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.order-chip.chip {
+  padding: 0 9px;
+  color: var(--text);
 }
 
 .edit-bar {
@@ -1445,5 +1459,10 @@ textarea {
 
   .chip-text {
     display: none;
+  }
+
+  /* Order arrows mean nothing without their words. */
+  .order-chip .chip-text {
+    display: inline;
   }
 }

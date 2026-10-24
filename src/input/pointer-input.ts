@@ -28,7 +28,9 @@ type Mode =
   | 'image'
   | 'object-move'
   | 'object-scale'
-  | 'object-pinch';
+  | 'object-pinch'
+  | 'selection-rect'
+  | 'selection-move';
 
 /** A multi-finger tap only counts as a shortcut if it is quick and still. */
 const TAP_MAX_MS = 320;
@@ -80,6 +82,9 @@ export class PointerInput {
   private imageAction: 'move' | 'scale' = 'move';
   private imageStart = { x: 0, y: 0, w: 0, h: 0 };
   private imageGrabWorld = { x: 0, y: 0 };
+
+  /** Offset from a held block's corner to the cell it was grabbed by. */
+  private selectionGrab = { dx: 0, dy: 0 };
 
   /** Asset gesture state. */
   private grab = { dx: 0, dy: 0 };
@@ -198,7 +203,8 @@ export class PointerInput {
    * through to the active tool.
    */
   private pressAsset(pointer: TrackedPointer, precise: boolean): boolean {
-    if (this.spaceHeld || this.store.tool === 'pan') return false;
+    // The select tool is for painted ground, so it reaches through assets.
+    if (this.spaceHeld || this.store.tool === 'pan' || this.store.tool === 'select') return false;
 
     if (this.onSelectedHandle(pointer.x, pointer.y)) {
       this.startObjectScale(pointer);
@@ -208,6 +214,7 @@ export class PointerInput {
     const world = this.worldAt(pointer.x, pointer.y);
     const hit = this.objects.hitTest(world.x, world.y);
     if (!hit) return false;
+    this.editor.commitSelection();
 
     // The eraser removes an asset outright rather than painting under it.
     if (this.store.tool === 'eraser') {
@@ -246,7 +253,8 @@ export class PointerInput {
     if (this.spaceHeld) return { shape: 'pan', erases: false };
     if (penEraser) return { shape: this.store.eraserShape, erases: true };
     const tool = this.store.tool;
-    if (tool === 'pan') return { shape: 'pan', erases: false };
+    // `select` is handled before a stroke begins; it never paints.
+    if (tool === 'pan' || tool === 'select') return { shape: 'pan', erases: false };
     if (tool === 'picker') return { shape: 'picker', erases: false };
     if (tool === 'eraser') return { shape: this.store.eraserShape, erases: true };
     return { shape: tool, erases: false };
@@ -294,6 +302,11 @@ export class PointerInput {
     const active = this.store.doc.layers[this.store.doc.activeLayer];
     if (!this.spaceHeld && this.store.tool !== 'pan' && isMovableImage(active)) {
       this.startImageDrag(pointer, active);
+      return;
+    }
+
+    if (this.store.tool === 'select' && !this.spaceHeld && !penEraser) {
+      this.startSelect(pointer);
       return;
     }
 
@@ -346,6 +359,46 @@ export class PointerInput {
     } else {
       this.editor.paintStamp(cell.x, cell.y);
     }
+    this.renderer.requestDraw();
+  }
+
+  /** True when a screen point is over the block currently held up. */
+  private onHeldBlock(x: number, y: number): boolean {
+    const selection = this.store.selection;
+    if (!selection) return false;
+    const cell = this.cellAt(x, y);
+    return (
+      cell.x >= selection.x &&
+      cell.y >= selection.y &&
+      cell.x < selection.x + selection.w &&
+      cell.y < selection.y + selection.h
+    );
+  }
+
+  private grabHeldBlock(pointer: TrackedPointer): void {
+    const selection = this.store.selection;
+    if (!selection) return;
+    const cell = this.cellAt(pointer.x, pointer.y);
+    this.mode = 'selection-move';
+    this.activeId = pointer.id;
+    this.selectionGrab = { dx: cell.x - selection.x, dy: cell.y - selection.y };
+  }
+
+  /**
+   * Pressing inside the held block drags it; anywhere else sets it down and
+   * starts drawing a box around the next tiles to pick up.
+   */
+  private startSelect(pointer: TrackedPointer): void {
+    if (this.onHeldBlock(pointer.x, pointer.y)) {
+      this.grabHeldBlock(pointer);
+      return;
+    }
+    this.editor.commitSelection();
+    const cell = this.cellAt(pointer.x, pointer.y);
+    this.mode = 'selection-rect';
+    this.activeId = pointer.id;
+    this.anchorCell = cell;
+    this.store.preview = { x0: cell.x, y0: cell.y, x1: cell.x, y1: cell.y };
     this.renderer.requestDraw();
   }
 
@@ -416,6 +469,12 @@ export class PointerInput {
       this.tapObject = null;
       this.tapObjectLayer = null;
 
+      // Like a selected asset, a held block follows a finger, so it can be
+      // moved without the Pencil while the rest of the map still pans.
+      if (this.store.tool === 'select' && !this.spaceHeld && this.onHeldBlock(x, y)) {
+        this.grabHeldBlock(pointer);
+        return;
+      }
       if (this.pressAsset(pointer, false)) return;
 
       const drawsWithFinger =
@@ -429,6 +488,7 @@ export class PointerInput {
     if (this.mode === 'draw') this.editor.abortStroke();
     else if (this.mode === 'image') this.cancelImageDrag();
     else if (this.mode === 'object-move' || this.mode === 'object-scale') this.objects.cancelGesture();
+    else if (this.mode === 'selection-move') this.store.changed();
     this.store.preview = null;
     this.anchorCell = null;
     this.startGesture();
@@ -491,6 +551,30 @@ export class PointerInput {
       return;
     }
 
+    if (e.pointerId === this.activeId && this.mode === 'selection-rect') {
+      const cell = this.cellAt(x, y);
+      if (this.anchorCell) {
+        this.store.preview = { x0: this.anchorCell.x, y0: this.anchorCell.y, x1: cell.x, y1: cell.y };
+      }
+      this.renderer.requestDraw();
+      return;
+    }
+
+    if (e.pointerId === this.activeId && this.mode === 'selection-move') {
+      const selection = this.store.selection;
+      const cell = this.cellAt(x, y);
+      if (selection) {
+        const nx = cell.x - this.selectionGrab.dx;
+        const ny = cell.y - this.selectionGrab.dy;
+        if (nx !== selection.x || ny !== selection.y) {
+          selection.x = nx;
+          selection.y = ny;
+          this.renderer.requestDraw();
+        }
+      }
+      return;
+    }
+
     if (this.mode === 'pan' && e.pointerId === this.activeId) {
       const camera = this.store.camera;
       // Pan in world units so the map tracks the finger exactly at any zoom.
@@ -547,6 +631,8 @@ export class PointerInput {
         if (this.objectMoved) this.objects.endGesture('Move');
         else this.objects.cancelGesture();
       } else if (this.mode === 'object-scale') this.objects.endGesture('Resize');
+      else if (this.mode === 'selection-rect') this.finishSelectRect();
+      else if (this.mode === 'selection-move') this.store.changed();
       this.mode = 'idle';
       this.activeId = null;
       this.lastCell = null;
@@ -709,6 +795,13 @@ export class PointerInput {
     this.strokeErases = false;
   }
 
+  private finishSelectRect(): void {
+    const preview = this.store.preview;
+    this.store.preview = null;
+    this.anchorCell = null;
+    if (preview) this.editor.liftSelection(preview);
+  }
+
   private updatePinch(): void {
     const touches = [...this.pointers.values()].filter((p) => p.type === 'touch');
     if (touches.length < 2) return;
@@ -771,11 +864,20 @@ export class PointerInput {
     if (!wasTap) return;
 
     if (fingers === 1) {
+      // Tapping away from a held block sets it down, the way tapping away
+      // from a selected asset deselects it.
+      if (this.store.selection) {
+        if (!this.tapStart || !this.onHeldBlock(this.tapStart.x, this.tapStart.y)) this.editor.commitSelection();
+        return;
+      }
       // A finger tap on an asset selects it; on bare map it deselects, and
       // two of those in a row open the ground tile's menu.
       if (tappedObject && tappedLayer) {
         const layer = this.store.doc.layers.find((l) => l.id === tappedLayer);
-        if (layer?.kind === 'objects') this.objects.select(layer, tappedObject);
+        if (layer?.kind === 'objects') {
+          this.editor.commitSelection();
+          this.objects.select(layer, tappedObject);
+        }
         return;
       }
       const hadSelection = !!this.objects.selected();

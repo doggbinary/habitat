@@ -248,3 +248,151 @@ describe('structural edits', () => {
     expect(store.doc.layers).toHaveLength(1);
   });
 });
+
+describe('picking up and moving painted tiles', () => {
+  const block = () => {
+    set(1, 1, T(1));
+    set(2, 1, T(2));
+    set(1, 2, T(3));
+  };
+  const lift = () => editor.liftSelection({ x0: 1, y0: 1, x1: 2, y1: 2 });
+
+  it('lifts a block off the map and holds it', () => {
+    block();
+    expect(lift()).toBe(true);
+    expect(at(1, 1)).toBe(EMPTY);
+    expect(store.selection).toMatchObject({ x: 1, y: 1, w: 2, h: 2 });
+    expect([...store.selection!.tiles]).toEqual([T(1), T(2), T(3), EMPTY]);
+  });
+
+  it('picks up nothing from bare ground, and records nothing', () => {
+    expect(lift()).toBe(false);
+    expect(store.selection).toBeNull();
+    expect(store.history.canUndo).toBe(false);
+  });
+
+  it('moves a block as a single undo step', () => {
+    block();
+    lift();
+    store.selection!.x = 4;
+    store.selection!.y = 3;
+    editor.commitSelection();
+    expect(at(4, 3)).toBe(T(1));
+    expect(at(5, 3)).toBe(T(2));
+    expect(at(4, 4)).toBe(T(3));
+    expect(at(1, 1)).toBe(EMPTY);
+
+    editor.undo();
+    expect(at(1, 1)).toBe(T(1));
+    expect(at(4, 3)).toBe(EMPTY);
+    expect(store.history.canUndo).toBe(false);
+  });
+
+  it('records nothing when a block is set down where it started', () => {
+    block();
+    lift();
+    editor.commitSelection();
+    expect(at(1, 1)).toBe(T(1));
+    expect(store.history.canUndo).toBe(false);
+  });
+
+  it('keeps the holes in a block from erasing what is beneath', () => {
+    block();
+    set(5, 4, T(7));
+    lift();
+    store.selection!.x = 4;
+    store.selection!.y = 3;
+    editor.commitSelection();
+    expect(at(5, 4)).toBe(T(7));
+  });
+
+  it('puts a block back where it came from when undone straight after lifting', () => {
+    block();
+    lift();
+    store.selection!.x = 5;
+    editor.undo();
+    expect(store.selection).toBeNull();
+    expect(at(1, 1)).toBe(T(1));
+    expect(at(5, 1)).toBe(EMPTY);
+  });
+
+  it('flips and rotates a held block around its centre', () => {
+    block();
+    lift();
+    editor.transformSelection('flipH');
+    expect([...store.selection!.tiles].map((t) => (t === EMPTY ? -1 : indexOf(t)))).toEqual([2, 1, -1, 3]);
+    editor.transformSelection('rotate');
+    expect(store.selection).toMatchObject({ w: 2, h: 2, x: 1, y: 1 });
+  });
+
+  it('deletes a held block, and undo brings it back', () => {
+    block();
+    lift();
+    editor.deleteSelection();
+    expect(store.selection).toBeNull();
+    expect(at(1, 1)).toBe(EMPTY);
+    editor.undo();
+    expect(at(1, 1)).toBe(T(1));
+  });
+
+  it('sets a held block down before any structural change, so it is never stranded', () => {
+    block();
+    lift();
+    store.selection!.x = 4;
+    editor.addLayer();
+    expect(store.selection).toBeNull();
+    expect(at(4, 1)).toBe(T(1));
+  });
+
+  it('sets a held block down before painting', () => {
+    block();
+    lift();
+    store.selection!.x = 4;
+    paint(0, 5, T(8));
+    expect(store.selection).toBeNull();
+    expect(at(4, 1)).toBe(T(1));
+  });
+
+  it('sets the block down instead of undoing when something else was recorded since the lift', () => {
+    block();
+    lift();
+    store.selection!.x = 4;
+    store.history.transact('Unrelated', () => {});
+    editor.undo();
+    expect(store.selection).toBeNull();
+    expect(at(4, 1)).toBe(T(1));
+  });
+
+  it('sends a block in front onto a new layer, and lands it there', () => {
+    block();
+    lift();
+    editor.moveSelectionDepth(1);
+    expect(store.doc.layers).toHaveLength(2);
+    expect(store.selection!.layerId).toBe(store.doc.layers[1].id);
+    editor.commitSelection();
+    expect(at(1, 1, store.doc.layers[1] as TileLayer)).toBe(T(1));
+    expect(at(1, 1)).toBe(EMPTY);
+  });
+
+  it('saves the held block as if it were set down, without setting it down', () => {
+    block();
+    lift();
+    store.selection!.x = 4;
+    const saved = editor.settledDoc();
+    const savedLayer = saved.layers[0] as TileLayer;
+    expect(savedLayer.data[1 * store.doc.width + 4]).toBe(T(1));
+    expect(store.selection).not.toBeNull();
+    expect(at(4, 1)).toBe(EMPTY);
+  });
+
+  it('places a picked block once, holes and all', () => {
+    set(1, 0, T(9));
+    store.stamp = { w: 2, h: 2, tiles: Int32Array.from([T(1), EMPTY, T(3), T(4)]) };
+    editor.placeStamp(0, 0);
+    expect(at(0, 0)).toBe(T(1));
+    expect(at(1, 0)).toBe(T(9));
+    expect(at(1, 1)).toBe(T(4));
+    editor.undo();
+    expect(at(0, 0)).toBe(EMPTY);
+  });
+});

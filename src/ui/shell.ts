@@ -23,6 +23,9 @@ export interface ShellActions {
   dragEnd: PaletteActions['dragEnd'];
   setSplitMode: PaletteActions['setSplitMode'];
   editAssets: PaletteActions['editAssets'];
+  pickTiles: PaletteActions['pickTiles'];
+  tilesDragMove: PaletteActions['tilesDragMove'];
+  tilesDragEnd: PaletteActions['tilesDragEnd'];
   recolorObject: (anchor: HTMLElement) => void;
   addImageLayer: () => void;
   replaceImage: (index: number) => void;
@@ -50,6 +53,7 @@ const TOOLS: { id: ToolId; icon: IconName; label: string; key: string }[] = [
   { id: 'fill', icon: 'fill', label: 'Fill', key: 'G' },
   { id: 'rect', icon: 'rect', label: 'Rectangle', key: 'R' },
   { id: 'line', icon: 'line', label: 'Line', key: 'L' },
+  { id: 'select', icon: 'select', label: 'Select', key: 'V' },
   { id: 'picker', icon: 'picker', label: 'Pick tile', key: 'I' },
   { id: 'pan', icon: 'pan', label: 'Pan', key: 'H' },
 ];
@@ -104,6 +108,9 @@ export class Shell {
       dragEnd: actions.dragEnd,
       setSplitMode: actions.setSplitMode,
       editAssets: actions.editAssets,
+      pickTiles: actions.pickTiles,
+      tilesDragMove: actions.tilesDragMove,
+      tilesDragEnd: actions.tilesDragEnd,
     });
     this.layersPanel = new LayersPanel(store, editor, {
       addImageLayer: actions.addImageLayer,
@@ -210,6 +217,7 @@ export class Shell {
   }
 
   setMode(mode: Mode): void {
+    if (mode !== 'map') this.editor.commitSelection();
     this.mode = mode;
     const character = mode === 'character';
     this.renderer.canvas.classList.toggle('inactive', character);
@@ -346,8 +354,8 @@ export class Shell {
         this.selectionChip('flipV', 'Flip down', () => this.objects.flipDown()),
         recolor,
         el('div', { class: 'divider vertical' }),
-        this.selectionChip('sendBackward', 'Send backward', () => this.objects.sendBackward()),
-        this.selectionChip('bringForward', 'Bring forward', () => this.objects.bringForward()),
+        this.orderGroup(),
+        el('div', { class: 'divider vertical' }),
         this.selectionChip('copy', 'Duplicate', () => this.objects.duplicate()),
         el('div', { class: 'divider vertical' }),
         this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger'),
@@ -355,6 +363,36 @@ export class Shell {
           this.objects.deselect();
           this.refreshChrome();
         }, [icon('check', 17), el('span', { class: 'chip-text', text: 'Done' })]),
+      );
+      return;
+    }
+
+    // Held tiles own the bar the same way, until they are set down.
+    const held = this.mode === 'map' ? store.selection : null;
+    if (held) {
+      const layer = store.doc.layers.find((l) => l.id === held.layerId);
+      this.optionsBar.append(
+        el('span', { class: 'chip-label', text: `${held.w} x ${held.h} on ${layer?.name ?? 'layer'}` }),
+        el('div', { class: 'divider vertical' }),
+        this.selectionChip('rotate', 'Rotate', () => this.editor.transformSelection('rotate')),
+        this.selectionChip('flipH', 'Flip across', () => this.editor.transformSelection('flipH')),
+        this.selectionChip('flipV', 'Flip down', () => this.editor.transformSelection('flipV')),
+        el('div', { class: 'divider vertical' }),
+        this.selectionChip('sendBackward', 'Send behind', () => this.editor.moveSelectionDepth(-1)),
+        this.selectionChip('bringForward', 'Bring in front', () => this.editor.moveSelectionDepth(1)),
+        el('div', { class: 'divider vertical' }),
+        this.selectionChip('trash', 'Delete', () => this.editor.deleteSelection(), 'danger'),
+        button('chip primary-chip', 'Place', () => {
+          this.editor.commitSelection();
+          this.refreshChrome();
+        }, [icon('check', 17), el('span', { class: 'chip-text', text: 'Place' })]),
+      );
+      return;
+    }
+
+    if (this.mode === 'map' && store.tool === 'select') {
+      this.optionsBar.append(
+        el('span', { class: 'chip-label', text: 'Draw a box around painted tiles to pick them up' }),
       );
       return;
     }
@@ -457,12 +495,37 @@ export class Shell {
   }
 
   /** A chip acting on the floating selection; refreshes the bar afterwards. */
-  private selectionChip(name: IconName, label: string, run: () => void, variant = ''): HTMLElement {
+  /**
+   * Front-to-back order for the selected asset, labelled the way Canva does
+   * it. A direction greys out when nothing overlaps on that side, because
+   * moving past assets elsewhere on the map would change nothing you can see.
+   */
+  private orderGroup(): HTMLElement {
+    const canBack = this.objects.canReorder(-1);
+    const canFront = this.objects.canReorder(1);
+    const chip = (name: IconName, text: string, label: string, enabled: boolean, run: () => void) => {
+      const node = this.selectionChip(name, label, run, 'order-chip', text);
+      node.disabled = !enabled;
+      return node;
+    };
+    const group = el('div', { class: 'order-group', role: 'group' }, [
+      chip('toBack', 'To back', 'Send to back, behind everything it overlaps', canBack, () => this.objects.sendToBack()),
+      chip('sendBackward', 'Backward', 'Send backward one step', canBack, () => this.objects.sendBackward()),
+      chip('bringForward', 'Forward', 'Bring forward one step', canFront, () => this.objects.bringForward()),
+      chip('toFront', 'To front', 'Bring to front, in front of everything it overlaps', canFront, () =>
+        this.objects.bringToFront(),
+      ),
+    ]);
+    group.setAttribute('aria-label', 'Order');
+    return group;
+  }
+
+  private selectionChip(name: IconName, label: string, run: () => void, variant = '', text = ''): HTMLButtonElement {
     return button(`chip ${variant}`.trim(), label, () => {
       run();
       this.refreshChrome();
       this.renderer.requestDraw();
-    }, [icon(name, 17)]);
+    }, text ? [icon(name, 17), el('span', { class: 'chip-text', text })] : [icon(name, 17)]);
   }
 
   /**

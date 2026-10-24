@@ -7,13 +7,22 @@ import {
   isTileLayer,
   resizedLayerData,
   uid,
+  type Doc,
   type ImageLayer,
   type Layer,
   type TileLayer,
   type Tileset,
 } from '../core/doc';
 import { snapshot, Stroke, type DocSnapshot } from '../core/history';
-import { isEmptyStamp, randomTile, stampTileAt } from '../core/stamp';
+import {
+  flipStampH,
+  flipStampV,
+  isEmptyStamp,
+  randomTile,
+  rotateStampCW,
+  stampTileAt,
+  type Stamp,
+} from '../core/stamp';
 import type { Store } from '../core/store';
 import { EMPTY, flagsOf, indexOf, pack, tilesetOf, type PackedTile } from '../core/tiles';
 import type { Renderer } from '../render/renderer';
@@ -74,6 +83,7 @@ export class Editor {
   }
 
   beginStroke(label: string): boolean {
+    this.commitSelection();
     const layer = this.targetLayer();
     if (!layer) {
       const target = this.paintLayer();
@@ -117,13 +127,202 @@ export class Editor {
   }
 
   private write(layer: TileLayer, x: number, y: number, tile: PackedTile): void {
+    this.put(layer, x, y, tile, this.stroke);
+  }
+
+  private put(layer: TileLayer, x: number, y: number, tile: PackedTile, stroke: Stroke | null): void {
     if (!inBounds(this.doc, x, y)) return;
     const index = cellIndex(this.doc, x, y);
     const before = layer.data[index];
     if (before === tile) return;
     layer.data[index] = tile;
-    this.stroke?.record(index, before, tile);
+    stroke?.record(index, before, tile);
     this.renderer.markCell(layer.id, x, y);
+  }
+
+  /** Places the brush block once, exactly as picked, as its own undo step. */
+  placeStamp(x: number, y: number): void {
+    const stamp = this.store.stamp;
+    if (isEmptyStamp(stamp) || !this.beginStroke('Place tiles')) return;
+    const layer = this.targetLayer();
+    if (layer) {
+      for (let sy = 0; sy < stamp.h; sy++) {
+        for (let sx = 0; sx < stamp.w; sx++) {
+          const tile = stamp.tiles[sy * stamp.w + sx];
+          if (tile !== EMPTY) this.write(layer, x + sx, y + sy, tile);
+        }
+      }
+    }
+    this.endStroke();
+  }
+
+  // --- Selection ------------------------------------------------------------
+
+  /** History revision right after a lift, while that lift is still the newest step. */
+  private liftRevision = -1;
+
+  /**
+   * Picks up a rectangle of painted tiles. The source cells are cleared
+   * straight away, so what floats is exactly what will be set down.
+   */
+  liftSelection(rect: Rect): boolean {
+    this.commitSelection();
+    const doc = this.doc;
+    const r = normalizeRect(rect);
+    const x0 = Math.max(0, r.x0);
+    const y0 = Math.max(0, r.y0);
+    const x1 = Math.min(doc.width - 1, r.x1);
+    const y1 = Math.min(doc.height - 1, r.y1);
+    if (x1 < x0 || y1 < y0) return false;
+    if (!this.beginStroke('Pick up tiles')) return false;
+    const layer = this.targetLayer();
+    if (!layer) {
+      this.abortStroke();
+      return false;
+    }
+
+    const w = x1 - x0 + 1;
+    const h = y1 - y0 + 1;
+    const tiles = new Int32Array(w * h);
+    let found = false;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const tile = layer.data[cellIndex(doc, x0 + x, y0 + y)];
+        tiles[y * w + x] = tile;
+        if (tile !== EMPTY) found = true;
+        this.write(layer, x0 + x, y0 + y, EMPTY);
+      }
+    }
+    if (!found) {
+      this.abortStroke();
+      this.store.toast(`Nothing painted there on ${layer.name}`);
+      return false;
+    }
+
+    this.endStroke();
+    this.store.selection = { x: x0, y: y0, w, h, tiles, layerId: layer.id };
+    this.liftRevision = this.store.history.version;
+    this.store.changed();
+    return true;
+  }
+
+  /**
+   * Sets a held block down where it now sits. Picking up and setting down
+   * fold into one undo step, and setting a block down where it started
+   * records nothing at all.
+   */
+  commitSelection(): void {
+    const selection = this.store.selection;
+    if (!selection) return;
+    this.store.selection = null;
+    const liftedJustNow = this.store.history.version === this.liftRevision;
+    this.liftRevision = -1;
+
+    const layer = this.doc.layers.find((l) => l.id === selection.layerId);
+    if (!isTileLayer(layer)) {
+      this.store.changed();
+      return;
+    }
+
+    const stroke = new Stroke(layer.id, 'Move tiles');
+    const lift = liftedJustNow ? this.store.history.takeLastCells(layer.id) : null;
+    if (lift) {
+      for (let i = 0; i < lift.indices.length; i++) stroke.record(lift.indices[i], lift.before[i], lift.after[i]);
+    }
+    for (let y = 0; y < selection.h; y++) {
+      for (let x = 0; x < selection.w; x++) {
+        const tile = selection.tiles[y * selection.w + x];
+        // Holes in the block stay holes rather than erasing what is beneath.
+        if (tile !== EMPTY) this.put(layer, selection.x + x, selection.y + y, tile, stroke);
+      }
+    }
+    this.store.history.commitStroke(stroke);
+    this.store.changed();
+  }
+
+  /** Throws the held block away. Undo brings it back where it came from. */
+  deleteSelection(): void {
+    if (!this.store.selection) return;
+    this.store.selection = null;
+    this.liftRevision = -1;
+    this.store.changed();
+    this.store.toast('Deleted');
+  }
+
+  /** Re-orients the held block around its own centre. */
+  transformSelection(kind: 'flipH' | 'flipV' | 'rotate'): void {
+    const selection = this.store.selection;
+    if (!selection) return;
+    const stamp: Stamp = { w: selection.w, h: selection.h, tiles: selection.tiles };
+    const next = kind === 'flipH' ? flipStampH(stamp) : kind === 'flipV' ? flipStampV(stamp) : rotateStampCW(stamp);
+    // Rotation swaps width and height, so recentre to stop the block drifting.
+    const cx = selection.x + selection.w / 2;
+    const cy = selection.y + selection.h / 2;
+    selection.tiles = next.tiles;
+    selection.w = next.w;
+    selection.h = next.h;
+    selection.x = Math.round(cx - next.w / 2);
+    selection.y = Math.round(cy - next.h / 2);
+    this.store.changed();
+  }
+
+  /**
+   * Sends the held block in front of or behind what is already painted.
+   * Depth in a tilemap is layer order, so this changes which tile layer the
+   * block lands on. Past the top or bottom a new layer is made, so "in front"
+   * always has somewhere to go.
+   */
+  moveSelectionDepth(delta: 1 | -1): void {
+    const selection = this.store.selection;
+    if (!selection) return;
+    const doc = this.doc;
+    const current = doc.layers.findIndex((l) => l.id === selection.layerId);
+    if (current === -1) return;
+
+    let target = current + delta;
+    while (target >= 0 && target < doc.layers.length && !isTileLayer(doc.layers[target])) target += delta;
+
+    const layer = doc.layers[target];
+    if (isTileLayer(layer)) {
+      selection.layerId = layer.id;
+      doc.activeLayer = target;
+      this.store.toast(`${delta > 0 ? 'In front' : 'Behind'}: ${layer.name}`);
+      this.store.restructured();
+      return;
+    }
+
+    // Recorded directly: going through `transact` would set the block down.
+    this.store.history.transact(delta > 0 ? 'Add layer in front' : 'Add layer behind', () => {
+      const created = createLayer(doc.width, doc.height, `Layer ${doc.layers.length + 1}`);
+      const at = delta > 0 ? doc.layers.length : 0;
+      doc.layers.splice(at, 0, created);
+      doc.activeLayer = at;
+      selection.layerId = created.id;
+    });
+    this.renderer.invalidateAll();
+    this.store.restructured();
+    this.store.toast(delta > 0 ? 'In front, on a new layer' : 'Behind, on a new layer');
+  }
+
+  /** The document with any held block set down, without changing anything. */
+  settledDoc(): Doc {
+    const selection = this.store.selection;
+    if (!selection) return this.doc;
+    const doc = this.doc;
+    const layers = doc.layers.map((layer) => {
+      if (layer.id !== selection.layerId || !isTileLayer(layer)) return layer;
+      const data = layer.data.slice();
+      for (let y = 0; y < selection.h; y++) {
+        for (let x = 0; x < selection.w; x++) {
+          const tile = selection.tiles[y * selection.w + x];
+          const cx = selection.x + x;
+          const cy = selection.y + y;
+          if (tile !== EMPTY && inBounds(doc, cx, cy)) data[cellIndex(doc, cx, cy)] = tile;
+        }
+      }
+      return { ...layer, data };
+    });
+    return { ...doc, layers };
   }
 
   // --- Painting ------------------------------------------------------------
@@ -253,7 +452,7 @@ export class Editor {
   // --- Structural operations ----------------------------------------------
 
   addLayer(name?: string): void {
-    this.store.history.transact('Add layer', () => {
+    this.transact('Add layer', () => {
       const doc = this.doc;
       const layer = createLayer(doc.width, doc.height, name ?? `Layer ${doc.layers.length + 1}`);
       doc.layers.splice(doc.activeLayer + 1, 0, layer);
@@ -265,7 +464,7 @@ export class Editor {
 
   /** Inserts a reference image above the active layer and selects it. */
   addImageLayer(layer: ImageLayer): void {
-    this.store.history.transact('Add reference image', () => {
+    this.transact('Add reference image', () => {
       const doc = this.doc;
       doc.layers.splice(doc.activeLayer + 1, 0, layer);
       doc.activeLayer = Math.min(doc.activeLayer + 1, doc.layers.length - 1);
@@ -275,7 +474,7 @@ export class Editor {
   }
 
   duplicateLayer(index: number): void {
-    this.store.history.transact('Duplicate layer', () => {
+    this.transact('Duplicate layer', () => {
       const doc = this.doc;
       const source = doc.layers[index];
       if (!source) return;
@@ -334,7 +533,7 @@ export class Editor {
     placement: { x: number; y: number; w: number; h: number },
     label = 'Move reference image',
   ): void {
-    this.store.history.transact(label, () => {
+    this.transact(label, () => {
       layer.x = placement.x;
       layer.y = placement.y;
       layer.w = placement.w;
@@ -348,7 +547,7 @@ export class Editor {
       this.store.toast('A map needs at least one layer');
       return;
     }
-    this.store.history.transact('Delete layer', () => {
+    this.transact('Delete layer', () => {
       const doc = this.doc;
       doc.layers.splice(index, 1);
       doc.activeLayer = Math.min(doc.activeLayer, doc.layers.length - 1);
@@ -360,7 +559,7 @@ export class Editor {
   moveLayer(index: number, delta: number): void {
     const target = index + delta;
     if (target < 0 || target >= this.doc.layers.length) return;
-    this.store.history.transact('Reorder layers', () => {
+    this.transact('Reorder layers', () => {
       const doc = this.doc;
       const [layer] = doc.layers.splice(index, 1);
       doc.layers.splice(target, 0, layer);
@@ -373,7 +572,7 @@ export class Editor {
   clearLayer(index: number): void {
     const layer = this.doc.layers[index];
     if (!isTileLayer(layer)) return;
-    this.store.history.transact('Clear layer', () => {
+    this.transact('Clear layer', () => {
       layer.data.fill(EMPTY);
     });
     this.renderer.invalidateAll();
@@ -390,7 +589,7 @@ export class Editor {
       this.store.toast('Only tile layers can be merged');
       return;
     }
-    this.store.history.transact('Merge down', () => {
+    this.transact('Merge down', () => {
       for (let i = 0; i < lower.data.length; i++) {
         if (upper.data[i] !== EMPTY) lower.data[i] = upper.data[i];
       }
@@ -401,9 +600,18 @@ export class Editor {
     this.store.restructured();
   }
 
+  /**
+   * Records a structural change. A held block is set down first, so a change
+   * to layers, tilesets or map size can never strand tiles in the air.
+   */
+  private transact(label: string, mutate: () => void): void {
+    this.commitSelection();
+    this.store.history.transact(label, mutate);
+  }
+
   /** Applies a structural change and refreshes every cache. */
   structural(label: string, mutate: () => void): void {
-    this.store.history.transact(label, mutate);
+    this.transact(label, mutate);
     this.renderer.invalidateAll();
     this.store.restructured();
   }
@@ -472,12 +680,24 @@ export class Editor {
   }
 
   undo(): void {
+    if (this.store.selection) {
+      if (this.store.history.version !== this.liftRevision) {
+        // Something was recorded since the lift, so undoing it would leave
+        // the held tiles with nowhere to go. Set them down instead.
+        this.commitSelection();
+        return;
+      }
+      // Straight after a lift, undo puts the block back where it came from.
+      this.store.selection = null;
+      this.liftRevision = -1;
+    }
     if (!this.store.history.undo()) return;
     this.renderer.invalidateAll();
     this.store.restructured();
   }
 
   redo(): void {
+    this.commitSelection();
     if (!this.store.history.redo()) return;
     this.renderer.invalidateAll();
     this.store.restructured();

@@ -10,7 +10,7 @@ import type { PackedTile } from './tiles';
  * because they can change the shape of every layer buffer at once.
  */
 
-interface CellEntry {
+export interface CellEntry {
   kind: 'cells';
   label: string;
   layerId: string;
@@ -128,8 +128,27 @@ export class Stroke {
 export class History {
   private undoStack: Entry[] = [];
   private redoStack: Entry[] = [];
+  /** Bumped by every change to either stack, so callers can tell if anything happened since. */
+  private revision = 0;
 
   constructor(private readonly doc: () => Doc) {}
+
+  get version(): number {
+    return this.revision;
+  }
+
+  /**
+   * Removes the newest entry without applying it, so a caller can fold it
+   * into the change it is about to record. Only cell entries on the given
+   * layer qualify, since nothing else can be folded into a stroke.
+   */
+  takeLastCells(layerId: string): CellEntry | null {
+    const last = this.undoStack.at(-1);
+    if (last?.kind !== 'cells' || last.layerId !== layerId) return null;
+    this.undoStack.pop();
+    this.revision += 1;
+    return last;
+  }
 
   get canUndo(): boolean {
     return this.undoStack.length > 0;
@@ -150,12 +169,14 @@ export class History {
   clear(): void {
     this.undoStack = [];
     this.redoStack = [];
+    this.revision += 1;
   }
 
   private push(entry: Entry): void {
     this.undoStack.push(entry);
     if (this.undoStack.length > MAX_ENTRIES) this.undoStack.shift();
     this.redoStack = [];
+    this.revision += 1;
   }
 
   commitStroke(stroke: Stroke): boolean {
@@ -200,6 +221,7 @@ export class History {
     if (entry.kind === 'cells') this.applyCells(entry, entry.before);
     else restore(this.doc(), entry.before);
     this.redoStack.push(entry);
+    this.revision += 1;
     return true;
   }
 
@@ -209,6 +231,7 @@ export class History {
     if (entry.kind === 'cells') this.applyCells(entry, entry.after);
     else restore(this.doc(), entry.after);
     this.undoStack.push(entry);
+    this.revision += 1;
     return true;
   }
 }

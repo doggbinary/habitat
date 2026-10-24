@@ -30,7 +30,7 @@ import { importSpriteSheet } from './character/import';
 import { frameIndex } from './character/model';
 import { Studio } from './character/studio';
 import { CharacterView } from './character/view';
-import { EMPTY_STAMP, singleStamp } from './core/stamp';
+import { EMPTY_STAMP, singleStamp, stampFromRegion } from './core/stamp';
 import { EMPTY } from './core/tiles';
 import { openAssetMenu } from './ui/asset-menu';
 import { CharacterPanel } from './ui/character-panel';
@@ -103,17 +103,31 @@ export class App {
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
       setSplitMode: (sheet, mode) => this.setSplitMode(sheet, mode),
       editAssets: (sheet, op, indices) => this.editAssets(sheet, op, indices),
+      pickTiles: (sheet, region) => this.pickTiles(sheet, region),
+      tilesDragMove: (x, y) => this.tilesDragMove(x, y),
+      tilesDragEnd: (x, y, dropped) => this.tilesDragEnd(x, y, dropped),
       recolorObject: (anchor) => this.recolorObject(anchor),
       addImageLayer: () => void this.addImageLayer(),
       replaceImage: (index) => void this.replaceImage(index),
       newMap: () => this.newMap(),
       openProject: () => void this.openProject(),
-      exportMap: () => openExportDialog(this.store, this.studio.characters),
+      exportMap: () => {
+        this.editor.commitSelection();
+        openExportDialog(this.store, this.studio.characters);
+      },
       fitToView: () => this.fit(),
       playTest: () => this.startPlayTest(),
     }, this.studio, this.characterView, this.characterPanel, this.objects);
 
-    this.autosave = createAutosave(() => serializeProject(this.store.doc, this.studio.characters));
+    // Tiles held up with the select tool are saved where they float, so
+    // closing the app mid-move never loses them.
+    this.autosave = createAutosave(() => serializeProject(this.editor.settledDoc(), this.studio.characters));
+
+    // Held tiles belong to the select tool; picking up any other tool sets them down.
+    this.store.on('ui', () => {
+      const tool = this.store.tool;
+      if (this.store.selection && tool !== 'select' && tool !== 'pan') this.editor.commitSelection();
+    });
 
     this.store.on('doc', () => {
       this.renderer.requestDraw();
@@ -201,6 +215,9 @@ export class App {
     this.store.setStamp(EMPTY_STAMP);
     this.store.hover = null;
     this.store.preview = null;
+    // Anything held or in flight belonged to the previous map.
+    this.store.selection = null;
+    this.store.tileDrop = null;
     this.renderer.invalidateAll();
     this.store.restructured();
 
@@ -282,6 +299,7 @@ export class App {
    * standing, so what you were looking at is where you begin.
    */
   startPlayTest(): void {
+    this.editor.commitSelection();
     const character = this.studio.character;
     if (!character) {
       this.store.toast('Make a character first');
@@ -485,6 +503,43 @@ export class App {
       this.store.setTool('brush');
     }
     this.shell.palette.draw();
+  }
+
+  /** A tile or block picked on a ground sheet becomes the brush. */
+  private pickTiles(sheetIndex: number, region: { x: number; y: number; w: number; h: number }): void {
+    const sheet = this.store.doc.tilesets[sheetIndex];
+    if (!sheet) return;
+    const stamp = stampFromRegion(sheetIndex, sheet.cols, region.x, region.y, region.w, region.h, sheet.count);
+    this.store.libraryPick = null;
+    this.store.setStamp(stamp, region);
+    if (this.store.tool !== 'brush' && this.store.tool !== 'fill' && this.store.tool !== 'rect') {
+      this.store.setTool('brush');
+    }
+  }
+
+  /** The picked ground block lands centred under the finger. */
+  private tilesDragMove(clientX: number, clientY: number): void {
+    const rect = this.canvas.getBoundingClientRect();
+    const inside =
+      clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    const stamp = this.store.stamp;
+    if (!inside || stamp.w === 0) {
+      this.store.tileDrop = null;
+    } else {
+      const cell = screenToCell(this.store.camera, this.store.doc, clientX - rect.left, clientY - rect.top);
+      this.store.tileDrop = { x: cell.x - Math.floor(stamp.w / 2), y: cell.y - Math.floor(stamp.h / 2) };
+    }
+    this.renderer.requestDraw();
+  }
+
+  private tilesDragEnd(clientX: number, clientY: number, dropped: boolean): void {
+    if (dropped) this.tilesDragMove(clientX, clientY);
+    const drop = this.store.tileDrop;
+    this.store.tileDrop = null;
+    this.renderer.requestDraw();
+    // Released off the map, or cancelled by the system: you changed your mind.
+    if (!drop || !dropped) return;
+    this.editor.placeStamp(drop.x, drop.y);
   }
 
   private dragStart(tilesetId: string, rect: AssetRect): void {

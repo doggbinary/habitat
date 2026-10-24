@@ -2,7 +2,24 @@ import { createDoc, type AssetRect, type Doc } from './doc';
 import { History } from './history';
 import { EMPTY_STAMP, type Stamp } from './stamp';
 
-export type ToolId = 'brush' | 'eraser' | 'fill' | 'rect' | 'line' | 'picker' | 'pan';
+export type ToolId = 'brush' | 'eraser' | 'fill' | 'rect' | 'line' | 'picker' | 'pan' | 'select';
+
+/**
+ * A block of painted tiles picked up off the map with the select tool.
+ *
+ * Its source cells are cleared when it is lifted, so what you see is the
+ * truth: setting it down writes exactly what is drawn floating.
+ */
+export interface MapSelection {
+  /** Current top-left position in tiles. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  tiles: Int32Array;
+  /** Layer the block came from, and will be set down on. */
+  layerId: string;
+}
 
 /**
  * The geometry a stroke lays down. The eraser reuses these shapes rather than
@@ -95,6 +112,10 @@ export class Store {
   } | null = null;
   /** The asset picked in the library, used to paint ground with the brush. */
   libraryPick: { tilesetId: string; index: number } | null = null;
+  /** Painted tiles currently held up with the select tool. */
+  selection: MapSelection | null = null;
+  /** Where a block of ground tiles dragged out of the palette would land, top-left in tiles. */
+  tileDrop: { x: number; y: number } | null = null;
 
   private readonly listeners = new Map<EventName, Set<Listener>>();
 

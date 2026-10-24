@@ -141,6 +141,8 @@ export class Renderer {
     ctx.strokeRect(originX - 0.5, originY - 0.5, mapW * zoom + 1, mapH * zoom + 1);
 
     this.drawCharacterPreview(doc, originX, originY, zoom);
+    this.drawHeldBlock(doc, originX, originY, zoom);
+    this.drawTileDrop(doc, originX, originY, zoom);
     this.drawDragPreview(doc, originX, originY, zoom);
     this.drawObjectSelection();
 
@@ -285,6 +287,56 @@ export class Renderer {
     ctx.restore();
   }
 
+  /**
+   * Painted tiles picked up with the select tool. Drawn above every layer
+   * with a soft shadow, so they read as held above the map, not part of it.
+   */
+  private drawHeldBlock(doc: Doc, originX: number, originY: number, zoom: number): void {
+    const selection = this.store.selection;
+    if (!selection) return;
+    const { ctx } = this;
+    const cell = doc.tileSize * zoom;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.45)';
+    ctx.shadowBlur = 10 * Math.min(2, zoom);
+    ctx.shadowOffsetY = 3 * Math.min(2, zoom);
+    for (let y = 0; y < selection.h; y++) {
+      for (let x = 0; x < selection.w; x++) {
+        const tile = selection.tiles[y * selection.w + x];
+        if (tile === EMPTY) continue;
+        drawTile(ctx, doc, tile, originX + (selection.x + x) * cell, originY + (selection.y + y) * cell, cell);
+      }
+    }
+    ctx.restore();
+
+    const x = originX + selection.x * cell;
+    const y = originY + selection.y * cell;
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(x, y, selection.w * cell, selection.h * cell);
+    ctx.strokeStyle = COLOR_SELECT;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 5]);
+    ctx.strokeRect(x, y, selection.w * cell, selection.h * cell);
+    ctx.setLineDash([]);
+  }
+
+  /** Where a block of ground tiles dragged out of the palette will land. */
+  private drawTileDrop(doc: Doc, originX: number, originY: number, zoom: number): void {
+    const drop = this.store.tileDrop;
+    const stamp = this.store.stamp;
+    if (!drop || isEmptyStamp(stamp)) return;
+    const { ctx } = this;
+    const cell = doc.tileSize * zoom;
+    ctx.globalAlpha = 0.7;
+    this.drawStampAnchored(doc, drop.x, drop.y, originX, originY, cell);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = COLOR_CURSOR;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(originX + drop.x * cell, originY + drop.y * cell, stamp.w * cell, stamp.h * cell);
+  }
+
   /** The asset being dragged out of the library, shown where it would land. */
   private drawDragPreview(doc: Doc, originX: number, originY: number, zoom: number): void {
     const drag = this.store.drag;
@@ -401,6 +453,17 @@ export class Renderer {
     const hover = store.hover;
 
     const erasing = tool === 'eraser';
+
+    if (tool === 'select') {
+      if (!preview) return;
+      const r = normalizeRect(preview);
+      ctx.strokeStyle = COLOR_SELECT;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([7, 5]);
+      ctx.strokeRect(originX + r.x0 * cell, originY + r.y0 * cell, (r.x1 - r.x0 + 1) * cell, (r.y1 - r.y0 + 1) * cell);
+      ctx.setLineDash([]);
+      return;
+    }
 
     if (preview && (tool === 'rect' || tool === 'line')) {
       const r = normalizeRect(preview);
