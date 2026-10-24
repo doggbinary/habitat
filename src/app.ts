@@ -9,19 +9,7 @@ import {
   type Doc,
   type Tileset,
 } from './core/doc';
-import {
-  DETECT_VERSION,
-  alphaChannel,
-  assetsOf,
-  deleteAssets,
-  detectSheetProps,
-  gridOf,
-  groundOf,
-  mergeAssets,
-  replaceAsset,
-  splitAssetByGrid,
-  suggestSplitMode,
-} from './core/assets';
+import { DETECT_VERSION, assetsOf, deleteAssets, detectSheetAssets, mergeAssets, tileIndexOf } from './core/assets';
 import { dominantColor, recolorToCanvas } from './io/recolor';
 import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
 import { cropAsset } from './render/object-draw';
@@ -32,7 +20,7 @@ import { importSpriteSheet } from './character/import';
 import { frameIndex } from './character/model';
 import { Studio } from './character/studio';
 import { CharacterView } from './character/view';
-import { EMPTY_STAMP, singleStamp, type Stamp } from './core/stamp';
+import { EMPTY_STAMP, singleStamp } from './core/stamp';
 import { EMPTY, flagsOf, indexOf, pack, tilesetOf, withFlags, type PackedTile } from './core/tiles';
 import { openAssetMenu } from './ui/asset-menu';
 import { CharacterPanel } from './ui/character-panel';
@@ -56,17 +44,21 @@ import { Editor } from './tools/edit';
 import { el } from './ui/dom';
 import { Shell } from './ui/shell';
 
-/** Detects a sheet's props using its own tile grid. */
-function detectProps(sheet: Tileset): AssetRect[] {
-  return detectSheetProps(sheet);
+/**
+ * True when a sheet's assets need finding: never found, or found by an older
+ * detector. Hand-edited sheets are never redone over the user's changes.
+ */
+function needsDetection(sheet: Tileset): boolean {
+  if (sheet.generated || !sheet.image) return false;
+  if (!sheet.assets) return true;
+  return !sheet.assetsEdited && (sheet.assetsVersion ?? 0) < DETECT_VERSION;
 }
 
-/**
- * True when a sheet's props came from an older detector. Hand-edited sheets
- * are never stale: redetecting would throw away the user's merges and splits.
- */
-function isStale(sheet: Tileset): boolean {
-  return !sheet.assetsEdited && (sheet.assetsVersion ?? 0) < DETECT_VERSION;
+/** Finds a sheet's assets and stamps them with the detector that found them. */
+function detectInto(sheet: Tileset): void {
+  sheet.assets = detectSheetAssets(sheet);
+  sheet.assetsVersion = DETECT_VERSION;
+  sheet.splitMode = 'objects';
 }
 
 export class App {
@@ -103,11 +95,7 @@ export class App {
       dragStart: (tilesetId, rect) => this.dragStart(tilesetId, rect),
       dragMove: (x, y) => this.dragMove(x, y),
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
-      setSplitMode: (sheet, mode) => this.setSplitMode(sheet, mode),
       editAssets: (sheet, op, indices) => this.editAssets(sheet, op, indices),
-      pickTiles: (stamp, region) => this.pickTiles(stamp, region),
-      tilesDragMove: (x, y) => this.tilesDragMove(x, y),
-      tilesDragEnd: (x, y, dropped) => this.tilesDragEnd(x, y, dropped),
       recolorObject: (anchor) => this.recolorObject(anchor),
       recolorHeldTiles: (anchor) => this.recolorHeldTiles(anchor),
       addImageLayer: () => void this.addImageLayer(),
@@ -201,15 +189,11 @@ export class App {
 
   /** Installs a document and resets everything derived from the old one. */
   private adoptDoc(doc: Doc): void {
-    // A project saved by an older detector may hold badly split props; redo
-    // those sheets now. Placed objects keep the rectangle they were placed
-    // with, so nothing already on the map changes.
+    // Every sheet is a list of whole assets now, including sheets saved when
+    // there was a separate ground view, or by an older detector. Placed
+    // assets keep the rectangle they were placed with, so the map is unchanged.
     for (const sheet of doc.tilesets) {
-      if (sheet.splitMode !== 'objects' || !sheet.image || !isStale(sheet)) continue;
-      const assets = detectProps(sheet);
-      if (assets.length === 0) continue;
-      sheet.assets = assets;
-      sheet.assetsVersion = DETECT_VERSION;
+      if (needsDetection(sheet)) detectInto(sheet);
     }
 
     this.store.doc = doc;
@@ -218,19 +202,24 @@ export class App {
     this.store.setStamp(EMPTY_STAMP);
     this.store.hover = null;
     this.store.preview = null;
-    // Anything held or in flight belonged to the previous map.
+    // Anything held belonged to the previous map.
     this.store.selection = null;
-    this.store.tileDrop = null;
     this.renderer.invalidateAll();
     this.store.restructured();
 
     if (doc.tilesets.length > 0) this.selectFirstTile();
   }
 
+  /** Starts the brush on the sheet's first floor square, if it has any. */
   private selectFirstTile(): void {
     const tileset = this.store.doc.tilesets[this.store.activeTileset];
-    if (!tileset || tileset.count === 0) return;
-    this.store.setStamp(singleStamp(this.store.activeTileset, 0), { x: 0, y: 0, w: 1, h: 1 });
+    if (!tileset) return;
+    for (const rect of assetsOf(tileset)) {
+      const tile = tileIndexOf(tileset, rect);
+      if (tile === -1) continue;
+      this.store.setStamp(singleStamp(this.store.activeTileset, tile));
+      return;
+    }
   }
 
   /** Brings an existing character sheet into the studio as a new character. */
@@ -354,26 +343,12 @@ export class App {
       onConfirm: async (spec) => {
         try {
           const tileset = await makeTileset(spec.src, spec.name, spec.tileW, spec.tileH, spec.margin, spec.spacing);
-          // A sheet that is mostly background is separate props, so each
-          // prop becomes one draggable asset instead of the grid squares it
-          // happens to cover. Ground sheets fill their squares and stay a grid.
-          if (tileset.image && suggestSplitMode(tileset.image, tileset.name) === 'objects') {
-            const assets = detectProps(tileset);
-            if (assets.length > 0) {
-              tileset.splitMode = 'objects';
-              tileset.assets = assets;
-              tileset.assetsVersion = DETECT_VERSION;
-            }
-          }
+          detectInto(tileset);
           this.editor.addTileset(tileset);
           this.store.activeTileset = this.store.doc.tilesets.length - 1;
           this.selectFirstTile();
           this.shell.openTab('tiles');
-          this.store.toast(
-            tileset.splitMode === 'objects'
-              ? `${tileset.name} added — found ${tileset.assets!.length} props`
-              : `${tileset.name} added — ${tileset.count} tiles`,
-          );
+          this.store.toast(`${tileset.name} added: ${tileset.assets!.length} assets`);
         } catch {
           this.store.toast('That image could not be imported');
         }
@@ -392,6 +367,8 @@ export class App {
       onConfirm: async (spec) => {
         try {
           const tileset = await makeTileset(spec.src, spec.name, spec.tileW, spec.tileH, spec.margin, spec.spacing);
+          // A new grid or image changes what the assets are.
+          detectInto(tileset);
           this.editor.replaceTileset(index, tileset);
           this.store.toast('Tileset updated');
         } catch {
@@ -413,84 +390,38 @@ export class App {
   }
 
   /**
-   * A tap on an asset. Separate objects are added to the middle of the view,
-   * selected and ready to move, which is the quickest route for anyone who
-   * has not discovered press-and-hold. Ground tiles become the brush instead,
-   * because ground is painted, not placed one square at a time.
+   * Applies a hand correction to a sheet's assets. The sheet is then marked
+   * as edited, so a future detector never redoes it over the user's changes.
    */
-  /**
-   * Switches a sheet between painted ground and placeable props. Props are
-   * found the first time they are asked for and kept, so switching back and
-   * forth is instant and undoable.
-   */
-  private setSplitMode(sheetIndex: number, mode: 'grid' | 'objects'): void {
-    const sheet = this.store.doc.tilesets[sheetIndex];
-    if (!sheet || (sheet.splitMode ?? 'grid') === mode) return;
-
-    let assets = sheet.assets;
-    const fresh = mode === 'objects' && (!assets?.length || isStale(sheet));
-    if (fresh) {
-      if (!sheet.image) return;
-      assets = detectProps(sheet);
-      if (assets.length === 0) {
-        this.store.toast('No separate props found on this sheet');
-        return;
-      }
-    }
-
-    this.editor.structural(mode === 'objects' ? 'Use as props' : 'Use as ground', () => {
-      sheet.splitMode = mode;
-      if (assets) sheet.assets = assets;
-      if (fresh) sheet.assetsVersion = DETECT_VERSION;
-    });
-    this.store.libraryPick = null;
-    if (mode === 'objects') {
-      this.store.toast(`${assets!.length} props`);
-    } else {
-      const ground = groundOf(sheet)?.cells.reduce((sum, c) => sum + c, 0) ?? 0;
-      this.store.toast(ground > 0 ? `${ground} ground tiles` : 'No ground tiles on this sheet, only props');
-    }
-  }
-
-  /**
-   * Applies a hand correction to a sheet's props. The sheet is then marked as
-   * edited, so a future detector never redoes it over the user's changes.
-   */
-  private editAssets(sheetIndex: number, op: 'merge' | 'split' | 'delete', indices: number[]): void {
+  private editAssets(sheetIndex: number, op: 'merge' | 'delete', indices: number[]): void {
     const sheet = this.store.doc.tilesets[sheetIndex];
     const current = sheet?.assets;
     if (!sheet || !current || indices.length === 0) return;
 
-    let next = current;
-    let label = 'Edit props';
-    if (op === 'merge') {
-      next = mergeAssets(current, indices);
-      label = 'Merge props';
-    } else if (op === 'delete') {
-      next = deleteAssets(current, indices);
-      label = 'Delete props';
-    } else {
-      const target = current[indices[0]];
-      if (!target || !sheet.image) return;
-      const { alpha, w } = alphaChannel(sheet.image);
-      const pieces = splitAssetByGrid(alpha, w, target, gridOf(sheet));
-      if (pieces.length < 2) {
-        this.store.toast('That prop already fits in one tile');
-        return;
-      }
-      next = replaceAsset(current, indices[0], pieces);
-      label = 'Split into tiles';
-    }
+    const next = op === 'merge' ? mergeAssets(current, indices) : deleteAssets(current, indices);
     if (next === current) return;
-
+    const label = op === 'merge' ? 'Merge assets' : 'Delete assets';
     this.editor.structural(label, () => {
       sheet.assets = next;
       sheet.assetsEdited = true;
     });
     this.store.libraryPick = null;
-    this.store.toast(`${label}: ${next.length} props`);
+    this.store.toast(`${label}: ${next.length} left`);
   }
 
+  /** The tools that paint the grid, as opposed to placing or selecting. */
+  private get paintTool(): boolean {
+    const tool = this.store.tool;
+    return tool === 'brush' || tool === 'fill' || tool === 'rect' || tool === 'line';
+  }
+
+  /**
+   * A tap on an asset. A floor square, picked while a painting tool is in
+   * hand, becomes the brush, because floors are painted, not placed one
+   * square at a time. Anything else is added to the middle of the view,
+   * selected and ready to move, which is the quickest route for anyone who
+   * has not discovered press-and-hold.
+   */
   private tapAsset(sheetIndex: number, assetIndex: number): void {
     const sheet = this.store.doc.tilesets[sheetIndex];
     if (!sheet) return;
@@ -498,61 +429,27 @@ export class App {
     if (!rect) return;
     this.store.libraryPick = { tilesetId: sheet.id, index: assetIndex };
 
-    if (sheet.splitMode === 'objects') {
-      // With an asset selected on the map, a tap swaps it out, the way
-      // replacing an image works in Canva. Done deselects, to add new ones.
-      if (this.objects.selected()) {
-        this.objects.swap(sheet.id, rect);
-        this.shell.palette.draw();
-        this.store.toast('Swapped. Tap Done first to add a new one instead.');
-        return;
-      }
-      const centre = screenToWorld(this.store.camera, this.renderer.viewW / 2, this.renderer.viewH / 2);
-      this.objects.place(sheet.id, rect, centre.x, centre.y);
+    // With an asset selected on the map, a tap swaps it out, the way
+    // replacing an image works in Canva. Done deselects, to add new ones.
+    if (this.objects.selected()) {
+      this.objects.swap(sheet.id, rect);
       this.shell.palette.draw();
-      this.store.toast('Added. Drag it into place, or pinch to resize.');
+      this.store.toast('Swapped. Tap Done first to add a new one instead.');
       return;
     }
 
-    this.store.setStamp(singleStamp(sheetIndex, assetIndex), null);
-    if (this.store.tool !== 'brush' && this.store.tool !== 'fill' && this.store.tool !== 'rect') {
-      this.store.setTool('brush');
+    const tile = tileIndexOf(sheet, rect);
+    if (tile !== -1 && this.paintTool) {
+      this.store.setStamp(singleStamp(sheetIndex, tile), null);
+      this.shell.palette.draw();
+      this.store.toast('Painting with this square. Drag it instead to place it as an asset.');
+      return;
     }
+
+    const centre = screenToWorld(this.store.camera, this.renderer.viewW / 2, this.renderer.viewH / 2);
+    this.objects.place(sheet.id, rect, centre.x, centre.y);
     this.shell.palette.draw();
-  }
-
-  /** A tile or block picked on a ground sheet becomes the brush. */
-  private pickTiles(stamp: Stamp, region: { x: number; y: number; w: number; h: number }): void {
-    this.store.libraryPick = null;
-    this.store.setStamp(stamp, region);
-    if (this.store.tool !== 'brush' && this.store.tool !== 'fill' && this.store.tool !== 'rect') {
-      this.store.setTool('brush');
-    }
-  }
-
-  /** The picked ground block lands centred under the finger. */
-  private tilesDragMove(clientX: number, clientY: number): void {
-    const rect = this.canvas.getBoundingClientRect();
-    const inside =
-      clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
-    const stamp = this.store.stamp;
-    if (!inside || stamp.w === 0) {
-      this.store.tileDrop = null;
-    } else {
-      const cell = screenToCell(this.store.camera, this.store.doc, clientX - rect.left, clientY - rect.top);
-      this.store.tileDrop = { x: cell.x - Math.floor(stamp.w / 2), y: cell.y - Math.floor(stamp.h / 2) };
-    }
-    this.renderer.requestDraw();
-  }
-
-  private tilesDragEnd(clientX: number, clientY: number, dropped: boolean): void {
-    if (dropped) this.tilesDragMove(clientX, clientY);
-    const drop = this.store.tileDrop;
-    this.store.tileDrop = null;
-    this.renderer.requestDraw();
-    // Released off the map, or cancelled by the system: you changed your mind.
-    if (!drop || !dropped) return;
-    this.editor.placeStamp(drop.x, drop.y);
+    this.store.toast('Added. Drag it into place, or pinch to resize.');
   }
 
   private dragStart(tilesetId: string, rect: AssetRect): void {

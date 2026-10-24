@@ -21,11 +21,7 @@ export interface ShellActions {
   dragStart: PaletteActions['dragStart'];
   dragMove: PaletteActions['dragMove'];
   dragEnd: PaletteActions['dragEnd'];
-  setSplitMode: PaletteActions['setSplitMode'];
   editAssets: PaletteActions['editAssets'];
-  pickTiles: PaletteActions['pickTiles'];
-  tilesDragMove: PaletteActions['tilesDragMove'];
-  tilesDragEnd: PaletteActions['tilesDragEnd'];
   recolorObject: (anchor: HTMLElement) => void;
   recolorHeldTiles: (anchor: HTMLElement) => void;
   addImageLayer: () => void;
@@ -107,11 +103,7 @@ export class Shell {
       dragStart: actions.dragStart,
       dragMove: actions.dragMove,
       dragEnd: actions.dragEnd,
-      setSplitMode: actions.setSplitMode,
       editAssets: actions.editAssets,
-      pickTiles: actions.pickTiles,
-      tilesDragMove: actions.tilesDragMove,
-      tilesDragEnd: actions.tilesDragEnd,
     });
     this.layersPanel = new LayersPanel(store, editor, {
       addImageLayer: actions.addImageLayer,
@@ -590,7 +582,7 @@ export class Shell {
     if (this.mode === 'character') return;
 
     const tabs: { id: TabId; label: string; icon: IconName }[] = [
-      { id: 'tiles', label: 'Tiles', icon: 'tiles' },
+      { id: 'tiles', label: 'Assets', icon: 'tiles' },
       { id: 'layers', label: 'Layers', icon: 'layers' },
       { id: 'map', label: 'Map', icon: 'settings' },
     ];

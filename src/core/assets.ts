@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 3;
+export const DETECT_VERSION = 4;
 
 /** A cell this solid reads as floor: ground texture runs edge to edge. */
 const FLOOR_FILL = 0.97;
@@ -37,10 +37,6 @@ const SMALL_RUN = 3;
  */
 export function isGroundSheetName(name: string): boolean {
   return /(?:^|[^a-z0-9])a[1-5](?:[^0-9]|$)/i.test(name);
-}
-
-function isObjectSheetName(name: string): boolean {
-  return /(?:^|[^a-z0-9])[b-e](?:[^a-z]|$)/i.test(name);
 }
 
 /**
@@ -147,13 +143,6 @@ export function deleteAssets(assets: AssetRect[], indices: number[]): AssetRect[
   const drop = new Set(indices);
   return assets.filter((_, i) => !drop.has(i));
 }
-
-/** Replaces one asset with the pieces it was split into, in its place. */
-export function replaceAsset(assets: AssetRect[], index: number, pieces: AssetRect[]): AssetRect[] {
-  if (!assets[index]) return assets;
-  return [...assets.slice(0, index), ...pieces, ...assets.slice(index + 1)];
-}
-
 /**
  * The detection itself, on a plain alpha channel so it can be reasoned about
  * and tested without a canvas.
@@ -471,54 +460,6 @@ function findIslands(solid: Uint8Array, sheetW: number, region: AssetRect, gap: 
   return rects;
 }
 
-/**
- * Cuts one asset into a grid cell per piece that holds anything, fitted
- * tight. Never applied automatically: it is the user's "split into tiles"
- * for art drawn to blend together, such as a strip of tulip beds.
- */
-export function splitAssetByGrid(
-  alpha: Uint8Array,
-  sheetW: number,
-  region: AssetRect,
-  tile: TileGrid,
-  minArea = 16,
-): AssetRect[] {
-  const pitchX = tile.w + tile.spacing;
-  const pitchY = tile.h + tile.spacing;
-  const firstCol = Math.max(0, Math.floor((region.x - tile.margin) / pitchX));
-  const firstRow = Math.max(0, Math.floor((region.y - tile.margin) / pitchY));
-  const lastCol = Math.floor((region.x + region.w - 1 - tile.margin) / pitchX);
-  const lastRow = Math.floor((region.y + region.h - 1 - tile.margin) / pitchY);
-  const rects: AssetRect[] = [];
-
-  for (let row = firstRow; row <= lastRow; row++) {
-    for (let col = firstCol; col <= lastCol; col++) {
-      const cx0 = Math.max(region.x, tile.margin + col * pitchX);
-      const cy0 = Math.max(region.y, tile.margin + row * pitchY);
-      const cx1 = Math.min(region.x + region.w, tile.margin + col * pitchX + tile.w) - 1;
-      const cy1 = Math.min(region.y + region.h, tile.margin + row * pitchY + tile.h) - 1;
-
-      let x0 = Number.POSITIVE_INFINITY;
-      let y0 = Number.POSITIVE_INFINITY;
-      let x1 = -1;
-      let y1 = -1;
-      let area = 0;
-      for (let y = cy0; y <= cy1; y++) {
-        for (let x = cx0; x <= cx1; x++) {
-          if (alpha[y * sheetW + x] <= ALPHA_CUTOFF) continue;
-          if (x < x0) x0 = x;
-          if (y < y0) y0 = y;
-          if (x > x1) x1 = x;
-          if (y > y1) y1 = y;
-          area += 1;
-        }
-      }
-      if (area >= minArea) rects.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
-    }
-  }
-  return rects;
-}
-
 /** Marks every pixel within `radius` of a solid one. */
 function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
   // Two separable passes, horizontal then vertical, which grows a square
@@ -566,35 +507,7 @@ function readingOrder(rects: AssetRect[]): AssetRect[] {
   return rows.flatMap((row) => row.sort((a, b) => a.x - b.x));
 }
 
-/** Fraction of the sheet that is transparent, used to suggest a split mode. */
-export function transparencyRatio(image: HTMLImageElement | HTMLCanvasElement): number {
-  const w = image instanceof HTMLImageElement ? image.naturalWidth : image.width;
-  const h = image instanceof HTMLImageElement ? image.naturalHeight : image.height;
-  if (w === 0 || h === 0) return 0;
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return 0;
-  ctx.drawImage(image, 0, 0);
-  const data = ctx.getImageData(0, 0, w, h).data;
-  let clear = 0;
-  for (let i = 3; i < data.length; i += 4) if (data[i] <= ALPHA_CUTOFF) clear += 1;
-  return clear / (w * h);
-}
-
-/**
- * A sheet that is mostly background is almost certainly a sheet of separate
- * props; one that is mostly filled is ground tiles that butt up against each
- * other and would otherwise fuse into a single giant "object".
- */
-export function suggestSplitMode(image: HTMLImageElement | HTMLCanvasElement, name = ''): 'grid' | 'objects' {
-  if (isGroundSheetName(name)) return 'grid';
-  if (isObjectSheetName(name)) return 'objects';
-  return transparencyRatio(image) > 0.35 ? 'objects' : 'grid';
-}
-
-/** The tile grid a sheet was sliced with, for detection's grid fallback. */
+/** The tile grid a sheet was sliced with. */
 export function gridOf(tileset: Tileset): TileGrid {
   return { w: tileset.tileW, h: tileset.tileH, margin: tileset.margin, spacing: tileset.spacing };
 }
@@ -603,29 +516,29 @@ export function sheetGrid(tileset: Tileset): SheetGrid {
   return { ...gridOf(tileset), cols: tileset.cols, rows: tileset.rows };
 }
 
-/** Which of a sheet's cells are ground. */
-export function groundOf(tileset: Tileset): Ground | null {
-  if (!tileset.image) return null;
-  const { alpha, w, h } = alphaChannel(tileset.image);
-  return findGround(alpha, w, h, sheetGrid(tileset), isGroundSheetName(tileset.name));
-}
-
 /**
- * A sheet's props, found with its ground left out, so the floor a prop
- * stands beside never fuses with it into one giant asset.
+ * Every asset on a sheet, whole: first the props, found with the floor left
+ * out so a bench never fuses with the grass beside it, then each floor
+ * square on its own. A ground sheet (A1 to A5) is all floor squares.
  */
-export function detectSheetProps(tileset: Tileset): AssetRect[] {
+export function detectSheetAssets(tileset: Tileset): AssetRect[] {
   if (!tileset.image) return [];
   const { alpha, w, h } = alphaChannel(tileset.image);
-  // On a ground sheet every cell is ground, so there would be nothing left
-  // to find; any props there come from the whole image instead.
-  const ground = isGroundSheetName(tileset.name) ? undefined : findGround(alpha, w, h, sheetGrid(tileset));
-  return detectAssetsInMask(alpha, w, h, { tile: gridOf(tileset), ground });
+  return assetsInMask(alpha, w, h, sheetGrid(tileset), isGroundSheetName(tileset.name));
 }
 
-/** The assets a sheet offers, whichever way it is split. */
-export function assetsOf(tileset: Tileset): AssetRect[] {
-  if (tileset.splitMode === 'objects' && tileset.assets) return tileset.assets;
+/** `detectSheetAssets` on a plain alpha channel, so it can be tested without a canvas. */
+export function assetsInMask(alpha: Uint8Array, w: number, h: number, grid: SheetGrid, groundSheet: boolean): AssetRect[] {
+  const ground = findGround(alpha, w, h, grid, groundSheet);
+  const props = groundSheet ? [] : detectAssetsInMask(alpha, w, h, { tile: grid, ground });
+  const floor: AssetRect[] = [];
+  forEachCell(grid, w, h, (index, x, y, cw, ch) => {
+    if (ground.cells[index]) floor.push({ x, y, w: cw, h: ch });
+  });
+  return [...props, ...floor];
+}
+
+function gridCells(tileset: Tileset): AssetRect[] {
   const rects: AssetRect[] = [];
   for (let i = 0; i < tileset.count; i++) {
     const col = i % tileset.cols;
@@ -638,4 +551,28 @@ export function assetsOf(tileset: Tileset): AssetRect[] {
     });
   }
   return rects;
+}
+
+/**
+ * The assets a sheet offers. The edited-tiles sheet grows a square at a time
+ * as tiles are recoloured, so its squares are listed directly.
+ */
+export function assetsOf(tileset: Tileset): AssetRect[] {
+  if (tileset.generated) return gridCells(tileset);
+  return tileset.assets ?? [];
+}
+
+/**
+ * The tile an asset is, when it is exactly one square of the sheet's grid,
+ * so it can be painted with the brush; otherwise -1.
+ */
+export function tileIndexOf(tileset: Tileset, rect: AssetRect): number {
+  if (rect.w !== tileset.tileW || rect.h !== tileset.tileH) return -1;
+  const stepX = tileset.tileW + tileset.spacing;
+  const stepY = tileset.tileH + tileset.spacing;
+  const dx = rect.x - tileset.margin;
+  const dy = rect.y - tileset.margin;
+  if (dx < 0 || dy < 0 || dx % stepX !== 0 || dy % stepY !== 0) return -1;
+  const index = (dy / stepY) * tileset.cols + dx / stepX;
+  return index < tileset.count ? index : -1;
 }

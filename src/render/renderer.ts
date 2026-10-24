@@ -142,7 +142,6 @@ export class Renderer {
 
     this.drawCharacterPreview(doc, originX, originY, zoom);
     this.drawHeldBlock(doc, originX, originY, zoom);
-    this.drawTileDrop(doc, originX, originY, zoom);
     this.drawDragPreview(doc, originX, originY, zoom);
     this.drawObjectSelection();
 
@@ -320,21 +319,6 @@ export class Renderer {
     ctx.setLineDash([7, 5]);
     ctx.strokeRect(x, y, selection.w * cell, selection.h * cell);
     ctx.setLineDash([]);
-  }
-
-  /** Where a block of ground tiles dragged out of the palette will land. */
-  private drawTileDrop(doc: Doc, originX: number, originY: number, zoom: number): void {
-    const drop = this.store.tileDrop;
-    const stamp = this.store.stamp;
-    if (!drop || isEmptyStamp(stamp)) return;
-    const { ctx } = this;
-    const cell = doc.tileSize * zoom;
-    ctx.globalAlpha = 0.7;
-    this.drawStampAnchored(doc, drop.x, drop.y, originX, originY, cell);
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = COLOR_CURSOR;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(originX + drop.x * cell, originY + drop.y * cell, stamp.w * cell, stamp.h * cell);
   }
 
   /** The asset being dragged out of the library, shown where it would land. */

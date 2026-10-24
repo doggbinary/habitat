@@ -409,14 +409,4 @@ describe('picking up and moving painted tiles', () => {
     expect(at(5, 2)).toBe(EMPTY);
   });
 
-  it('places a picked block once, holes and all', () => {
-    set(1, 0, T(9));
-    store.stamp = { w: 2, h: 2, tiles: Int32Array.from([T(1), EMPTY, T(3), T(4)]) };
-    editor.placeStamp(0, 0);
-    expect(at(0, 0)).toBe(T(1));
-    expect(at(1, 0)).toBe(T(9));
-    expect(at(1, 1)).toBe(T(4));
-    editor.undo();
-    expect(at(0, 0)).toBe(EMPTY);
-  });
 });

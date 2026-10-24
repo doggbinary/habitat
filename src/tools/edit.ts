@@ -140,22 +140,6 @@ export class Editor {
     this.renderer.markCell(layer.id, x, y);
   }
 
-  /** Places the brush block once, exactly as picked, as its own undo step. */
-  placeStamp(x: number, y: number): void {
-    const stamp = this.store.stamp;
-    if (isEmptyStamp(stamp) || !this.beginStroke('Place tiles')) return;
-    const layer = this.targetLayer();
-    if (layer) {
-      for (let sy = 0; sy < stamp.h; sy++) {
-        for (let sx = 0; sx < stamp.w; sx++) {
-          const tile = stamp.tiles[sy * stamp.w + sx];
-          if (tile !== EMPTY) this.write(layer, x + sx, y + sy, tile);
-        }
-      }
-    }
-    this.endStroke();
-  }
-
   // --- Selection ------------------------------------------------------------
 
   /** History revision right after a lift, while that lift is still the newest step. */

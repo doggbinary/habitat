@@ -116,8 +116,6 @@ export class Store {
   libraryPick: { tilesetId: string; index: number } | null = null;
   /** Painted tiles currently held up with the select tool. */
   selection: MapSelection | null = null;
-  /** Where a block of ground tiles dragged out of the palette would land, top-left in tiles. */
-  tileDrop: { x: number; y: number } | null = null;
 
   private readonly listeners = new Map<EventName, Set<Listener>>();
 

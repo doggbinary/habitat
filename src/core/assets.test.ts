@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   deleteAssets,
   detectAssetsInMask,
+  assetsInMask,
   findGround,
   isGroundSheetName,
   mergeAssets,
-  replaceAsset,
-  splitAssetByGrid,
   type SheetGrid,
   type TileGrid,
 } from './assets';
@@ -127,34 +126,6 @@ describe('fixing detection by hand', () => {
   it('deleting removes only the picked assets', () => {
     expect(deleteAssets([a, b, c], [1])).toEqual([a, c]);
   });
-
-  it('splitting puts the pieces where the original was', () => {
-    const pieces = [
-      { x: 20, y: 5, w: 10, h: 10 },
-      { x: 20, y: 15, w: 10, h: 10 },
-    ];
-    expect(replaceAsset([a, b, c], 1, pieces)).toEqual([a, ...pieces, c]);
-  });
-});
-
-describe('splitting by hand into tiles', () => {
-  it('cuts a strip of blended art into one asset per tile', () => {
-    // Three tulip beds drawn to tile into each other: a solid 144x48 strip.
-    const alpha = blocks(200, 100, [[0, 0, 144, 48]]);
-    expect(splitAssetByGrid(alpha, 200, { x: 0, y: 0, w: 144, h: 48 }, tile)).toEqual([
-      { x: 0, y: 0, w: 48, h: 48 },
-      { x: 48, y: 0, w: 48, h: 48 },
-      { x: 96, y: 0, w: 48, h: 48 },
-    ]);
-  });
-
-  it('skips empty cells and fits each piece tightly', () => {
-    const alpha = blocks(200, 100, [[4, 4, 20, 20], [100, 10, 30, 30]]);
-    expect(splitAssetByGrid(alpha, 200, { x: 0, y: 0, w: 144, h: 48 }, tile)).toEqual([
-      { x: 4, y: 4, w: 20, h: 20 },
-      { x: 100, y: 10, w: 30, h: 30 },
-    ]);
-  });
 });
 
 describe('telling ground from props', () => {
@@ -216,6 +187,35 @@ describe('telling ground from props', () => {
     const alpha = blocks(W, H, [cell(0, 0), cell(1, 0), cell(2, 0), cell(3, 0), [40, 2, 8, 8]]);
     const ground = findGround(alpha, W, H, grid);
     expect(detectAssetsInMask(alpha, W, H, { minArea: 1, ground })).toEqual([{ x: 40, y: 2, w: 8, h: 8 }]);
+  });
+
+  it('lists every asset whole: props first, then each floor square on its own', () => {
+    // A 4-cell floor, and a bush pressed against its end.
+    const alpha = blocks(W, H, [cell(0, 0), cell(1, 0), cell(2, 0), cell(3, 0), [40, 2, 6, 6]]);
+    expect(assetsInMask(alpha, W, H, grid, false)).toEqual([
+      { x: 40, y: 2, w: 6, h: 6 },
+      { x: 0, y: 0, w: 10, h: 10 },
+      { x: 10, y: 0, w: 10, h: 10 },
+      { x: 20, y: 0, w: 10, h: 10 },
+      { x: 30, y: 0, w: 10, h: 10 },
+    ]);
+  });
+
+  it('also offers a small solid run whole, like a fridge, as well as square by square', () => {
+    const alpha = blocks(W, H, [cell(5, 0), cell(5, 1)]);
+    expect(assetsInMask(alpha, W, H, grid, false)).toEqual([
+      { x: 50, y: 0, w: 10, h: 20 },
+      { x: 50, y: 0, w: 10, h: 10 },
+      { x: 50, y: 10, w: 10, h: 10 },
+    ]);
+  });
+
+  it('lists a ground sheet as all floor squares', () => {
+    const alpha = blocks(W, H, [cell(0, 0), [12, 2, 3, 3]]);
+    expect(assetsInMask(alpha, W, H, grid, true)).toEqual([
+      { x: 0, y: 0, w: 10, h: 10 },
+      { x: 10, y: 0, w: 10, h: 10 },
+    ]);
   });
 
   it('reads sheet kinds from RPG Maker style names', () => {

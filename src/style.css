@@ -489,32 +489,6 @@ textarea {
 }
 
 /* Ground or props: two equal halves, so the current choice is obvious. */
-.split-switch {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  padding: 3px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 11px;
-}
-
-.split-btn {
-  min-height: 36px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  cursor: pointer;
-}
-
-.split-btn.active {
-  background: var(--accent-dim);
-  color: var(--accent);
-  font-weight: 600;
-}
-
 .order-group {
   display: inline-flex;
   gap: 2px;
@@ -546,9 +520,16 @@ textarea {
 .palette-meta {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
   gap: 10px;
   font-size: 12px;
   color: var(--muted);
+}
+
+.palette-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .palette-transforms {
