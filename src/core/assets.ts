@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 5;
+export const DETECT_VERSION = 6;
 
 /** A cell this solid reads as floor: ground texture runs edge to edge. */
 const FLOOR_FILL = 0.97;
@@ -44,9 +44,9 @@ export function isGroundSheetName(name: string): boolean {
  * Tuned below the size of the smallest real props on typical sheets: a chair
  * beside a table is a prop in its own right and must not be swallowed.
  */
-const FRAGMENT_SHARE = 1 / 16;
+const FRAGMENT_SHARE = 1 / 12;
 /** ...if it sits within this many pixels of it... */
-const FRAGMENT_REACH = 4;
+const FRAGMENT_REACH = 8;
 /** ...and that neighbour is at least this many times its size. */
 const FRAGMENT_PARENT_RATIO = 6;
 
@@ -370,13 +370,20 @@ function absorbFragments(islands: Island[], maxFragment: number): Island[] {
   const order = [...pool].sort((a, b) => a.area - b.area);
   const gone = new Set<Island>();
 
+  // A piece hanging directly under something much bigger, within its width,
+  // is part of it even when larger than a scrap: swing seats. A chair beside
+  // a table, or a post standing above a hedge, is never taken.
+  const tucked = (scrap: Island, other: Island) =>
+    scrap.y >= other.y + other.h && scrap.x >= other.x && scrap.x + scrap.w <= other.x + other.w;
+
   for (const scrap of order) {
-    if (scrap.area >= maxFragment || gone.has(scrap)) continue;
+    if (scrap.area >= maxFragment * 3 || gone.has(scrap)) continue;
     let parent: Island | null = null;
     let best = FRAGMENT_REACH + 1;
     for (const other of pool) {
       if (other === scrap || gone.has(other)) continue;
       if (other.area < scrap.area * FRAGMENT_PARENT_RATIO) continue;
+      if (scrap.area >= maxFragment && !tucked(scrap, other)) continue;
       const d = boxGap(scrap, other);
       if (d < best) {
         best = d;
@@ -571,7 +578,15 @@ export function assetsInImage(rgba: Uint8ClampedArray, w: number, h: number, gri
     pieces.set(root, [...(pieces.get(root) ?? []), i]);
   }
   const floor = [...pieces.values()].map((members) => cellsBox(members, grid));
-  return readingOrder([...props, ...floor]);
+  return readingOrder([...withoutInnerPieces(props), ...floor]);
+}
+
+/** Drops any asset lying entirely inside another: it is a piece of that one, not an asset. */
+function withoutInnerPieces(rects: AssetRect[]): AssetRect[] {
+  const inside = (a: AssetRect, b: AssetRect) =>
+    a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
+  // Of two identical boxes, the first is kept.
+  return rects.filter((r, i) => !rects.some((other, j) => j !== i && inside(r, other) && (!inside(other, r) || j < i)));
 }
 
 /** How much sharper the change across the edge between cells `a` and `b` is than inside them. */
