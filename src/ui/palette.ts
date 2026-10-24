@@ -1,5 +1,5 @@
 import type { Tileset } from '../core/doc';
-import { EMPTY_STAMP, flipStampH, flipStampV, rotateStampCW, singleStamp, stampFromRegion } from '../core/stamp';
+import { EMPTY_STAMP, singleStamp, stampFromRegion } from '../core/stamp';
 import type { Store } from '../core/store';
 import { button, clear, el } from './dom';
 import { icon } from './icons';
@@ -7,14 +7,19 @@ import { icon } from './icons';
 const MIN_CELL = 22;
 const MAX_CELL = 72;
 
+/** Below this speed at release, inertia is not worth starting. */
+const FLING_MIN = 0.08;
+const FLING_DECAY = 0.94;
+
 /**
- * The tile picker. Tapping selects one tile; dragging selects a rectangular
- * block that becomes a multi-tile stamp.
+ * The tile picker.
  *
- * Touch gets special treatment: by default a finger drag scrolls the palette,
- * because a long tileset is unusable otherwise. The "select region" toggle
- * flips the canvas to `touch-action: none` so a finger can draw a marquee
- * instead. An Apple Pencil always draws a marquee and never scrolls.
+ * Scrolling and selecting used to fight each other: a finger drag did both at
+ * once, which made multi-tile selection impossible on touch. They are now
+ * separated by *where* the drag starts. Dragging from a tile draws a selection
+ * marquee; dragging from a blank square scrolls the sheet, because a blank
+ * square has nothing to select anyway. Two fingers always scroll, which is the
+ * fallback for a densely packed sheet with no blank squares to grab.
  */
 export class PalettePanel {
   readonly element: HTMLElement;
@@ -26,9 +31,18 @@ export class PalettePanel {
   private readonly empty: HTMLElement;
 
   private cell = 32;
-  private regionSelect = false;
-  private dragging = false;
+
+  /** Which tiles are fully transparent, so they can act as scroll handles. */
+  private blankTiles = new Uint8Array(0);
+  private blankKey = '';
+
+  private mode: 'idle' | 'select' | 'scroll' = 'idle';
+  private activeId: number | null = null;
   private dragStart: { x: number; y: number } | null = null;
+  private lastPoint = { x: 0, y: 0 };
+  private velocity = { x: 0, y: 0 };
+  private flingHandle = 0;
+  private readonly pointers = new Map<number, { type: string; x: number; y: number }>();
 
   constructor(
     private readonly store: Store,
@@ -64,11 +78,63 @@ export class PalettePanel {
     window.addEventListener('resize', () => this.layout());
   }
 
-  // --- Selection -----------------------------------------------------------
-
   private activeTileset(): Tileset | null {
     return this.store.doc.tilesets[this.store.activeTileset] ?? null;
   }
+
+  // --- Blank-tile analysis -------------------------------------------------
+
+  /**
+   * Finds the fully transparent tiles. These become the scroll handles, and
+   * are also skipped when selecting so a marquee never picks up nothing.
+   */
+  private analyzeBlanks(tileset: Tileset): void {
+    const key = `${tileset.id}:${tileset.tileW}x${tileset.tileH}:${tileset.margin}:${tileset.spacing}:${tileset.count}`;
+    if (this.blankKey === key) return;
+    this.blankKey = key;
+    this.blankTiles = new Uint8Array(tileset.count);
+    if (!tileset.image) return;
+
+    const probe = document.createElement('canvas');
+    probe.width = tileset.tileW;
+    probe.height = tileset.tileH;
+    const ctx = probe.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+
+    for (let i = 0; i < tileset.count; i++) {
+      const col = i % tileset.cols;
+      const row = Math.floor(i / tileset.cols);
+      ctx.clearRect(0, 0, tileset.tileW, tileset.tileH);
+      ctx.drawImage(
+        tileset.image,
+        tileset.margin + col * (tileset.tileW + tileset.spacing),
+        tileset.margin + row * (tileset.tileH + tileset.spacing),
+        tileset.tileW,
+        tileset.tileH,
+        0,
+        0,
+        tileset.tileW,
+        tileset.tileH,
+      );
+      const { data } = ctx.getImageData(0, 0, tileset.tileW, tileset.tileH);
+      let blank = 1;
+      for (let p = 3; p < data.length; p += 4) {
+        if (data[p] > 8) {
+          blank = 0;
+          break;
+        }
+      }
+      this.blankTiles[i] = blank;
+    }
+  }
+
+  private isBlankAt(tileset: Tileset, x: number, y: number): boolean {
+    const index = y * tileset.cols + x;
+    if (index >= tileset.count) return true;
+    return this.blankTiles[index] === 1;
+  }
+
+  // --- Selection -----------------------------------------------------------
 
   private tileAt(clientX: number, clientY: number): { x: number; y: number } | null {
     const tileset = this.activeTileset();
@@ -87,17 +153,41 @@ export class PalettePanel {
     const y0 = Math.min(a.y, b.y);
     const w = Math.abs(a.x - b.x) + 1;
     const h = Math.abs(a.y - b.y) + 1;
-    const stamp = stampFromRegion(
-      this.store.activeTileset,
-      tileset.cols,
-      x0,
-      y0,
-      w,
-      h,
-      tileset.count,
+    this.store.setStamp(
+      stampFromRegion(this.store.activeTileset, tileset.cols, x0, y0, w, h, tileset.count),
+      { x: x0, y: y0, w, h },
     );
-    this.store.setStamp(stamp, { x: x0, y: y0, w, h });
     this.draw();
+  }
+
+  // --- Pointer handling ----------------------------------------------------
+
+  private touchCount(): number {
+    let n = 0;
+    for (const p of this.pointers.values()) if (p.type === 'touch') n += 1;
+    return n;
+  }
+
+  private stopFling(): void {
+    if (this.flingHandle) cancelAnimationFrame(this.flingHandle);
+    this.flingHandle = 0;
+  }
+
+  /** Carries a flick onwards so the sheet feels like a normal scroll view. */
+  private startFling(): void {
+    this.stopFling();
+    const step = () => {
+      this.velocity.x *= FLING_DECAY;
+      this.velocity.y *= FLING_DECAY;
+      if (Math.abs(this.velocity.x) < FLING_MIN && Math.abs(this.velocity.y) < FLING_MIN) {
+        this.flingHandle = 0;
+        return;
+      }
+      this.scroller.scrollLeft -= this.velocity.x;
+      this.scroller.scrollTop -= this.velocity.y;
+      this.flingHandle = requestAnimationFrame(step);
+    };
+    this.flingHandle = requestAnimationFrame(step);
   }
 
   private bindPointer(): void {
@@ -106,44 +196,83 @@ export class PalettePanel {
     canvas.addEventListener(
       'pointerdown',
       (e) => {
-        const marquee = e.pointerType !== 'touch' || this.regionSelect;
+        this.stopFling();
+        this.pointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
+
+        const tileset = this.activeTileset();
         const cell = this.tileAt(e.clientX, e.clientY);
-        if (!cell) return;
-        if (marquee) {
-          e.preventDefault();
-          canvas.setPointerCapture?.(e.pointerId);
-          this.dragging = true;
+        if (!tileset || !cell) return;
+
+        e.preventDefault();
+        canvas.setPointerCapture?.(e.pointerId);
+        this.activeId = e.pointerId;
+        this.lastPoint = { x: e.clientX, y: e.clientY };
+        this.velocity = { x: 0, y: 0 };
+
+        // Two fingers always scroll, whatever is under them.
+        if (this.touchCount() >= 2) {
+          this.mode = 'scroll';
+          return;
         }
+
+        // A blank square has nothing to pick, so it scrolls instead.
+        if (e.pointerType === 'touch' && this.isBlankAt(tileset, cell.x, cell.y)) {
+          this.mode = 'scroll';
+          return;
+        }
+
+        this.mode = 'select';
         this.dragStart = cell;
         this.applySelection(cell, cell);
       },
       { passive: false },
     );
 
-    canvas.addEventListener('pointermove', (e) => {
-      if (!this.dragging || !this.dragStart) return;
-      const cell = this.tileAt(e.clientX, e.clientY);
-      if (!cell) return;
-      e.preventDefault();
-      this.applySelection(this.dragStart, cell);
-    });
+    canvas.addEventListener(
+      'pointermove',
+      (e) => {
+        const tracked = this.pointers.get(e.pointerId);
+        if (tracked) {
+          tracked.x = e.clientX;
+          tracked.y = e.clientY;
+        }
+        if (e.pointerId !== this.activeId || this.mode === 'idle') return;
+        e.preventDefault();
+
+        if (this.mode === 'scroll') {
+          const dx = e.clientX - this.lastPoint.x;
+          const dy = e.clientY - this.lastPoint.y;
+          this.scroller.scrollLeft -= dx;
+          this.scroller.scrollTop -= dy;
+          // Blend the velocity so one jittery sample cannot throw the fling.
+          this.velocity.x = this.velocity.x * 0.6 + dx * 0.4;
+          this.velocity.y = this.velocity.y * 0.6 + dy * 0.4;
+          this.lastPoint = { x: e.clientX, y: e.clientY };
+          return;
+        }
+
+        if (!this.dragStart) return;
+        const cell = this.tileAt(e.clientX, e.clientY);
+        if (cell) this.applySelection(this.dragStart, cell);
+      },
+      { passive: false },
+    );
 
     const end = (e: PointerEvent) => {
-      this.dragging = false;
-      this.dragStart = null;
+      this.pointers.delete(e.pointerId);
       if (canvas.hasPointerCapture?.(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+      if (e.pointerId !== this.activeId) return;
+      if (this.mode === 'scroll') this.startFling();
+      this.mode = 'idle';
+      this.activeId = null;
+      this.dragStart = null;
     };
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', end);
   }
 
-  // --- Rendering -----------------------------------------------------------
+  // --- Header --------------------------------------------------------------
 
-  /**
-   * Switches to another tileset, wrapping at either end so the arrows always
-   * do something. The first tile is selected so you can paint immediately
-   * rather than having to pick one before the brush works again.
-   */
   showPage(index: number): void {
     const count = this.store.doc.tilesets.length;
     if (count === 0) return;
@@ -169,8 +298,6 @@ export class PalettePanel {
     const total = doc.tilesets.length;
     const single = total === 1;
 
-    // The dropdown stays in the middle so a project with many sheets can jump
-    // straight to one, while the arrows handle the common case of flipping.
     const select = el('select', { class: 'select' });
     doc.tilesets.forEach((tileset, index) => {
       const option = el('option', { value: String(index), text: tileset.name });
@@ -179,61 +306,33 @@ export class PalettePanel {
     });
     select.addEventListener('change', () => this.showPage(Number(select.value)));
 
-    const prev = button('icon-btn', 'Previous tileset', () => this.showPage(current - 1), [
-      icon('chevronLeft', 20),
-    ]);
-    const next = button('icon-btn', 'Next tileset', () => this.showPage(current + 1), [
-      icon('chevronRight', 20),
-    ]);
+    const prev = button('icon-btn', 'Previous tileset', () => this.showPage(current - 1), [icon('chevronLeft', 20)]);
+    const next = button('icon-btn', 'Next tileset', () => this.showPage(current + 1), [icon('chevronRight', 20)]);
     prev.disabled = single;
     next.disabled = single;
 
-    const pager = el('div', { class: 'palette-pager' }, [
-      prev,
-      select,
-      next,
-    ]);
-
-    const transforms = el('div', { class: 'palette-transforms' }, [
-      button('icon-btn', 'Flip horizontally', () => {
-        this.store.setStamp(flipStampH(this.store.stamp), this.store.paletteSelection);
-      }, [icon('flipH', 18)]),
-      button('icon-btn', 'Flip vertically', () => {
-        this.store.setStamp(flipStampV(this.store.stamp), this.store.paletteSelection);
-      }, [icon('flipV', 18)]),
-      button('icon-btn', 'Rotate 90°', () => {
-        this.store.setStamp(rotateStampCW(this.store.stamp), this.store.paletteSelection);
-      }, [icon('rotate', 18)]),
-      this.toggle('dice', 'Scatter: place a random tile from the selection', this.store.settings.randomize, () => {
-        this.store.settings.randomize = !this.store.settings.randomize;
-        this.buildHeader();
-      }),
-      this.toggle('tiles', 'Select a region with your finger instead of scrolling', this.regionSelect, () => {
-        this.regionSelect = !this.regionSelect;
-        this.canvas.classList.toggle('region-select', this.regionSelect);
-        this.buildHeader();
-      }),
-    ]);
-
     const tileset = doc.tilesets[current];
-    const meta = el('div', { class: 'palette-meta' }, [
-      el('span', { text: single ? `${tileset?.count ?? 0} tiles` : `Sheet ${current + 1} of ${total}` }),
-      el('span', { class: 'muted', text: single ? '' : `${tileset?.count ?? 0} tiles` }),
-    ]);
 
     this.header.append(
-      pager,
-      meta,
-      el('div', { class: 'palette-row' }, [
-        button('icon-btn', 'Tileset settings', () => this.actions.editTileset(this.store.activeTileset), [
-          icon('settings', 18),
-        ]),
-        button('icon-btn', 'Import another tileset', () => this.actions.addTileset(), [icon('plus', 18)]),
-        button('icon-btn danger', 'Remove tileset', () => this.actions.removeTileset(this.store.activeTileset), [
-          icon('trash', 18),
-        ]),
+      el('div', { class: 'palette-pager' }, [prev, select, next]),
+      el('div', { class: 'palette-meta' }, [
+        el('span', { text: single ? `${tileset?.count ?? 0} tiles` : `Sheet ${current + 1} of ${total}` }),
+        el('span', { class: 'muted', text: single ? '' : `${tileset?.count ?? 0} tiles` }),
       ]),
-      transforms,
+      el('div', { class: 'palette-row' }, [
+        button('icon-btn', 'Tileset settings', () => this.actions.editTileset(current), [icon('settings', 18)]),
+        button('icon-btn', 'Import another tileset', () => this.actions.addTileset(), [icon('plus', 18)]),
+        button('icon-btn danger', 'Remove tileset', () => this.actions.removeTileset(current), [icon('trash', 18)]),
+        el('div', { class: 'spacer' }),
+        this.toggle('dice', 'Scatter: place a random tile from the selection', this.store.settings.randomize, () => {
+          this.store.settings.randomize = !this.store.settings.randomize;
+          this.buildHeader();
+        }),
+      ]),
+      el('p', {
+        class: 'hint',
+        text: 'Drag across tiles to select a block. Drag from an empty square, or with two fingers, to scroll.',
+      }),
     );
   }
 
@@ -248,7 +347,8 @@ export class PalettePanel {
     return node;
   }
 
-  /** Recomputes the cell size for the current panel width and repaints. */
+  // --- Rendering -----------------------------------------------------------
+
   layout(): void {
     const tileset = this.activeTileset();
     const hasTiles = !!tileset && tileset.count > 0;
@@ -258,9 +358,9 @@ export class PalettePanel {
     this.buildHeader();
     if (!tileset || !hasTiles) return;
 
+    this.analyzeBlanks(tileset);
+
     const available = Math.max(120, this.scroller.clientWidth - 2);
-    // Prefer showing the whole sheet width, but never shrink a tile below the
-    // point where you cannot tell what it is.
     const ideal = Math.floor(available / tileset.cols);
     this.cell = Math.max(MIN_CELL, Math.min(MAX_CELL, ideal));
 
@@ -288,7 +388,17 @@ export class PalettePanel {
 
     for (let row = 0; row < tileset.rows; row++) {
       for (let col = 0; col < tileset.cols; col++) {
-        if (row * tileset.cols + col >= tileset.count) continue;
+        const index = row * tileset.cols + col;
+        if (index >= tileset.count) continue;
+
+        // Mark the squares that scroll instead of selecting, so the two
+        // behaviours are visible rather than something you discover.
+        if (this.blankTiles[index] === 1) {
+          ctx.fillStyle = 'rgba(255,255,255,0.025)';
+          ctx.fillRect(col * cell + 2, row * cell + 2, cell - 4, cell - 4);
+          continue;
+        }
+
         ctx.drawImage(
           tileset.image,
           tileset.margin + col * (tileset.tileW + tileset.spacing),
@@ -318,11 +428,11 @@ export class PalettePanel {
 
     const selection = this.store.paletteSelection;
     if (selection) {
+      ctx.fillStyle = 'rgba(126,160,255,0.16)';
+      ctx.fillRect(selection.x * cell, selection.y * cell, selection.w * cell, selection.h * cell);
       ctx.strokeStyle = '#7ea0ff';
       ctx.lineWidth = 2;
       ctx.strokeRect(selection.x * cell + 1, selection.y * cell + 1, selection.w * cell - 2, selection.h * cell - 2);
-      ctx.fillStyle = 'rgba(126,160,255,0.16)';
-      ctx.fillRect(selection.x * cell, selection.y * cell, selection.w * cell, selection.h * cell);
     }
   }
 }

@@ -1,5 +1,6 @@
 import type { PixelTool, Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
+import { flipStampH, flipStampV, rotateStampCW, type Stamp } from '../core/stamp';
 import type { Shape, Store, ToolId } from '../core/store';
 import { clampZoom, zoomAt } from '../render/camera';
 import type { Renderer } from '../render/renderer';
@@ -348,6 +349,17 @@ export class Shell {
             ? '1 tile'
             : `${stamp.w} x ${stamp.h} tiles`;
       chips.push(el('span', { class: 'chip-label', text }));
+
+      // Orientation belongs next to the canvas: you decide which way a tile
+      // faces while placing it, not while browsing the sheet.
+      if (stamp.w > 0) {
+        chips.push(
+          el('div', { class: 'divider vertical' }),
+          this.transformChip('flipH', 'Flip across', () => flipStampH(store.stamp)),
+          this.transformChip('flipV', 'Flip down', () => flipStampV(store.stamp)),
+          this.transformChip('rotate', 'Rotate', () => rotateStampCW(store.stamp)),
+        );
+      }
     }
 
     // Only offer the scale preview once there is a character to show.
@@ -387,6 +399,20 @@ export class Shell {
     );
 
     this.optionsBar.append(...chips);
+  }
+
+  /**
+   * Re-orients the brush. Rotating a block also swaps its width and height,
+   * so the palette marquee is cleared: it no longer describes the brush.
+   */
+  private transformChip(name: IconName, label: string, transform: () => Stamp): HTMLElement {
+    return button('chip', label, () => {
+      const next = transform();
+      const selection =
+        next.w === this.store.stamp.w && next.h === this.store.stamp.h ? this.store.paletteSelection : null;
+      this.store.setStamp(next, selection);
+      this.renderer.requestDraw();
+    }, [icon(name, 17)]);
   }
 
   private chipToggle(name: IconName, label: string, active: boolean, onPress: () => void): HTMLElement {

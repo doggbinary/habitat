@@ -513,13 +513,13 @@ textarea {
 .palette-canvas {
   display: block;
   image-rendering: pixelated;
-  /* Default: a finger scrolls the sheet. The region-select toggle hands the
-     gesture to the marquee instead. */
-  touch-action: pan-x pan-y;
+  /* The panel routes scrolling and selecting itself, based on where a drag
+     begins, so the browser must not claim the gesture first. */
+  touch-action: none;
 }
 
-.palette-canvas.region-select {
-  touch-action: none;
+.spacer {
+  flex: 1;
 }
 
 /* --- Layers ------------------------------------------------------------- */
