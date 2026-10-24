@@ -502,15 +502,6 @@ export class App {
     if (!rect) return;
     this.store.libraryPick = { tilesetId: sheet.id, index: assetIndex };
 
-    // With an asset selected on the map, a tap swaps it out, the way
-    // replacing an image works in Canva. Done deselects, to add new ones.
-    if (this.objects.selected()) {
-      this.objects.swap(sheet.id, rect);
-      this.shell.palette.draw();
-      this.store.toast('Swapped. Tap Done first to add a new one instead.');
-      return;
-    }
-
     const tile = tileIndexOf(sheet, rect);
     if (tile !== -1 && this.paintTool) {
       this.store.setStamp(singleStamp(sheetIndex, tile), null);

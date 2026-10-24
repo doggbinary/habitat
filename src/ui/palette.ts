@@ -371,7 +371,7 @@ export class PalettePanel {
         ? this.editBar(current)
         : el('p', {
             class: 'hint',
-            text: 'Tap an asset to add it, or press and hold, then drag it onto the map. Floor squares paint with the brush. With an asset selected on the map, tapping one here swaps it.',
+            text: 'Tap an asset to add it, or press and hold, then drag it onto the map. Floor squares paint with the brush.',
           }),
     );
   }

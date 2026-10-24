@@ -352,10 +352,6 @@ export class Shell {
         this.selectionChip('copy', 'Duplicate', () => this.objects.duplicate()),
         el('div', { class: 'divider vertical' }),
         this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger'),
-        button('chip primary-chip', 'Done', () => {
-          this.objects.deselect();
-          this.refreshChrome();
-        }, [icon('check', 17), el('span', { class: 'chip-text', text: 'Done' })]),
       );
       return;
     }
