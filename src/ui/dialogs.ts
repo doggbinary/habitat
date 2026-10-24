@@ -1,4 +1,5 @@
-import type { Character } from '../character/model';
+import { guessLayout, sheetGeometry, type SheetLayout } from '../character/import';
+import { DIRECTIONS, DIRECTION_LABELS, type Character } from '../character/model';
 import { MAX_MAP_SIZE, MIN_MAP_SIZE, loadImage, sliceCount } from '../core/doc';
 import type { Store } from '../core/store';
 import {
@@ -238,6 +239,185 @@ export function openTilesetDialog(options: {
   });
 
   void refresh();
+}
+
+/**
+ * Imports an existing character sheet. The preview draws the slice grid and
+ * labels each row with the facing it will become, so a wrong row order is
+ * obvious before anything is imported rather than after.
+ */
+export function openSpriteSheetDialog(options: {
+  tileSize: number;
+  onConfirm: (image: HTMLImageElement, layout: SheetLayout, name: string) => void;
+}): void {
+  let image: HTMLImageElement | null = null;
+
+  const name = el('input', { class: 'input', type: 'text', value: '' });
+  const frameW = numberInput(32, 1, 512);
+  const frameH = numberInput(32, 1, 512);
+  const columns = numberInput(4, 1, 32);
+  const margin = numberInput(0, 0, 512);
+  const spacing = numberInput(0, 0, 512);
+
+  // Which sheet row supplies each facing. This is the part that varies most
+  // between tools, so it is adjustable rather than assumed.
+  const rowPickers = DIRECTIONS.map((dir, i) => {
+    const input = numberInput(i, 0, 63);
+    return { dir, input };
+  });
+
+  const canvas = el('canvas', { class: 'tileset-preview' });
+  const summary = el('p', { class: 'hint', text: 'Choose a sprite sheet to begin.' });
+  const chooseLabel = el('span', { text: 'Choose sprite sheet' });
+
+  const layoutNow = (): SheetLayout => ({
+    frameW: Math.max(1, Number(frameW.value) || 1),
+    frameH: Math.max(1, Number(frameH.value) || 1),
+    margin: Math.max(0, Number(margin.value) || 0),
+    spacing: Math.max(0, Number(spacing.value) || 0),
+    columns: Math.max(1, Number(columns.value) || 1),
+    rows: Object.fromEntries(rowPickers.map((p) => [p.dir, Number(p.input.value) || 0])) as SheetLayout['rows'],
+  });
+
+  const redraw = () => {
+    if (!image) return;
+    const layout = layoutNow();
+    const box = 340;
+    const scale = Math.min(box / image.naturalWidth, box / image.naturalHeight, 4);
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    canvas.width = width;
+    canvas.height = height;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.imageSmoothingEnabled = scale < 1;
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(image, 0, 0, width, height);
+
+    const geometry = sheetGeometry(image.naturalWidth, image.naturalHeight, layout);
+
+    ctx.strokeStyle = 'rgba(126,160,255,0.85)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let c = 0; c <= geometry.cols; c++) {
+      const x = Math.round((layout.margin + c * (layout.frameW + layout.spacing)) * scale) + 0.5;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+    }
+    for (let r = 0; r <= geometry.rows; r++) {
+      const y = Math.round((layout.margin + r * (layout.frameH + layout.spacing)) * scale) + 0.5;
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+    }
+    ctx.stroke();
+
+    // Label the rows that will be used.
+    ctx.font = '11px -apple-system, system-ui, sans-serif';
+    ctx.textBaseline = 'top';
+    for (const picker of rowPickers) {
+      const row = Number(picker.input.value) || 0;
+      if (row < 0 || row >= geometry.rows) continue;
+      const y = (layout.margin + row * (layout.frameH + layout.spacing)) * scale;
+      ctx.fillStyle = 'rgba(14,15,19,0.78)';
+      ctx.fillRect(1, y + 1, 46, 14);
+      ctx.fillStyle = '#7ee7b8';
+      ctx.fillText(picker.dir, 4, y + 3);
+    }
+
+    const usedRows = rowPickers.filter((p) => {
+      const r = Number(p.input.value) || 0;
+      return r >= 0 && r < geometry.rows;
+    }).length;
+    const tilesW = Math.max(1, Math.round(layout.frameW / options.tileSize));
+    const tilesH = Math.max(1, Math.round(layout.frameH / options.tileSize));
+    summary.textContent =
+      geometry.cols === 0 || geometry.rows === 0
+        ? 'No whole frames fit with these numbers.'
+        : `${geometry.cols} x ${geometry.rows} grid · using ${layout.columns} frames from ${usedRows} of 4 rows · ${tilesW} x ${tilesH} tiles on your map`;
+  };
+
+  const loadFrom = async (src: string, suggested: string) => {
+    try {
+      image = await loadImage(src);
+      if (!name.value.trim()) name.value = suggested;
+      const guess = guessLayout(image.naturalWidth, image.naturalHeight);
+      frameW.value = String(guess.frameW);
+      frameH.value = String(guess.frameH);
+      columns.value = String(guess.columns);
+      chooseLabel.textContent = 'Replace sheet';
+      redraw();
+    } catch {
+      summary.textContent = 'That image could not be read.';
+      image = null;
+    }
+  };
+
+  const choose = el(
+    'button',
+    {
+      class: 'btn subtle full',
+      type: 'button',
+      on: {
+        click: async () => {
+          const file = await pickFile('image/*');
+          if (!file) return;
+          await loadFrom(await readFileAsDataUrl(file), file.name.replace(/\.[^.]+$/, ''));
+        },
+      },
+    },
+    [chooseLabel],
+  );
+
+  for (const input of [frameW, frameH, columns, margin, spacing, ...rowPickers.map((p) => p.input)]) {
+    input.addEventListener('input', redraw);
+  }
+
+  const body = el('div', { class: 'dialog-body' }, [
+    choose,
+    el('div', { class: 'preview-wrap' }, [canvas]),
+    summary,
+    field('Name', name),
+    el('div', { class: 'grid-2' }, [field('Frame width', frameW), field('Frame height', frameH)]),
+    field('Frames per direction', columns),
+    el('div', { class: 'grid-2' }, [field('Margin', margin), field('Spacing', spacing)]),
+    el('h4', { class: 'panel-title', text: 'Which row is which facing' }),
+    el('p', { class: 'hint', text: 'Rows are numbered from 0 at the top. The preview labels them.' }),
+    el(
+      'div',
+      { class: 'grid-2' },
+      rowPickers.map((p) => field(DIRECTION_LABELS[p.dir], p.input)),
+    ),
+  ]);
+
+  openModal({
+    title: 'Import sprite sheet',
+    wide: true,
+    body,
+    actions: [
+      { label: 'Cancel' },
+      {
+        label: 'Import',
+        variant: 'primary',
+        onSelect: () => {
+          if (!image) {
+            summary.textContent = 'Choose a sprite sheet first.';
+            return false;
+          }
+          const layout = layoutNow();
+          const geometry = sheetGeometry(image.naturalWidth, image.naturalHeight, layout);
+          if (geometry.cols === 0 || geometry.rows === 0) {
+            summary.textContent = 'No whole frames fit with these numbers.';
+            return false;
+          }
+          options.onConfirm(image, layout, name.value.trim() || 'Imported character');
+          return true;
+        },
+      },
+    ],
+  });
 }
 
 export function openNewMapDialog(options: {

@@ -7,6 +7,7 @@ import {
   makeTileset,
   type Doc,
 } from './core/doc';
+import { importSpriteSheet } from './character/import';
 import { frameIndex } from './character/model';
 import { Studio } from './character/studio';
 import { CharacterView } from './character/view';
@@ -18,6 +19,7 @@ import { PointerInput } from './input/pointer-input';
 import {
   openExportDialog,
   openNewMapDialog,
+  openSpriteSheetDialog,
   openTilesetDialog,
   pickFile,
   readFileAsDataUrl,
@@ -49,9 +51,10 @@ export class App {
     this.input = new PointerInput(this.canvas, this.store, this.editor, this.renderer);
 
     this.characterView = new CharacterView(this.studio, this.store.settings);
-    this.characterPanel = new CharacterPanel(this.store, this.studio, this.characterView, () =>
-      this.tryCharacterOnMap(),
-    );
+    this.characterPanel = new CharacterPanel(this.store, this.studio, this.characterView, {
+      tryOnMap: () => this.tryCharacterOnMap(),
+      importSheet: () => this.importSpriteSheet(),
+    });
 
     this.shell = new Shell(root, this.canvas, this.store, this.editor, this.renderer, {
       addTileset: () => this.addTileset(),
@@ -151,6 +154,29 @@ export class App {
     const tileset = this.store.doc.tilesets[this.store.activeTileset];
     if (!tileset || tileset.count === 0) return;
     this.store.setStamp(singleStamp(this.store.activeTileset, 0), { x: 0, y: 0, w: 1, h: 1 });
+  }
+
+  /** Brings an existing character sheet into the studio as a new character. */
+  private importSpriteSheet(): void {
+    openSpriteSheetDialog({
+      tileSize: this.store.doc.tileSize,
+      onConfirm: (image, layout, name) => {
+        try {
+          const character = importSpriteSheet(image, layout, this.store.doc.tileSize, name);
+          this.studio.characters.push(character);
+          this.studio.activeCharacter = this.studio.characters.length - 1;
+          this.studio.direction = 0;
+          this.studio.frame = 0;
+          this.studio.clearHistory();
+          this.studio.emit();
+          this.shell.setMode('character');
+          this.characterView.fit();
+          this.store.toast(`Imported ${name}`);
+        } catch {
+          this.store.toast('That sheet could not be imported');
+        }
+      },
+    });
   }
 
   // --- Character scale preview --------------------------------------------

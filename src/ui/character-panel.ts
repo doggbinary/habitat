@@ -38,7 +38,7 @@ export class CharacterPanel {
     private readonly store: Store,
     private readonly studio: Studio,
     private readonly view: CharacterView,
-    private readonly onTryOnMap: () => void,
+    private readonly actions: { tryOnMap: () => void; importSheet: () => void },
   ) {
     this.previewCanvas = el('canvas', { class: 'sprite-preview' });
     this.element = el('div', { class: 'character-panel' });
@@ -60,6 +60,9 @@ export class CharacterPanel {
           }),
           button('btn primary', 'Create a character', () => this.createCharacter(true), [
             el('span', { text: 'Create a character' }),
+          ]),
+          button('btn subtle', 'Import a sprite sheet', () => this.actions.importSheet(), [
+            el('span', { text: 'Import a sprite sheet' }),
           ]),
           button('btn subtle', 'Start from a blank canvas', () => this.createCharacter(false), [
             el('span', { text: 'Start from a blank canvas' }),
@@ -118,6 +121,7 @@ export class CharacterPanel {
       ]),
       el('div', { class: 'layer-actions' }, [
         button('icon-btn', 'New character', () => this.createCharacter(true), [icon('plus', 18)]),
+        button('icon-btn', 'Import a sprite sheet', () => this.actions.importSheet(), [icon('upload', 18)]),
         button('icon-btn danger', 'Delete character', () => {
           this.studio.removeCharacter(index);
           this.view.fit();
@@ -301,7 +305,7 @@ export class CharacterPanel {
         el('span', { class: 'field-label', text: 'Step speed' }),
         el('div', { class: 'slider-row' }, [speed, readout]),
       ]),
-      button('btn primary full', 'Try it on the map', () => this.onTryOnMap(), [
+      button('btn primary full', 'Try it on the map', () => this.actions.tryOnMap(), [
         el('span', { text: 'Try it on the map' }),
       ]),
       el('p', {
