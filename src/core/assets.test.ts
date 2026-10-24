@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import {
   deleteAssets,
   detectAssetsInMask,
-  assetsInMask,
+  assetsInImage,
   findGround,
   isGroundSheetName,
   mergeAssets,
@@ -189,32 +189,27 @@ describe('telling ground from props', () => {
     expect(detectAssetsInMask(alpha, W, H, { minArea: 1, ground })).toEqual([{ x: 40, y: 2, w: 8, h: 8 }]);
   });
 
-  it('lists every asset whole: props first, then each floor square on its own', () => {
-    // A 4-cell floor, and a bush pressed against its end.
-    const alpha = blocks(W, H, [cell(0, 0), cell(1, 0), cell(2, 0), cell(3, 0), [40, 2, 6, 6]]);
-    expect(assetsInMask(alpha, W, H, grid, false)).toEqual([
-      { x: 40, y: 2, w: 6, h: 6 },
-      { x: 0, y: 0, w: 10, h: 10 },
-      { x: 10, y: 0, w: 10, h: 10 },
-      { x: 20, y: 0, w: 10, h: 10 },
-      { x: 30, y: 0, w: 10, h: 10 },
-    ]);
+  /** An RGBA sheet where each listed cell is filled with one flat colour. */
+  const painted = (cells: [number, number, number][]) => {
+    const rgba = new Uint8ClampedArray(W * H * 4);
+    for (const [col, row, shade] of cells) {
+      for (let y = row * 10; y < row * 10 + 10; y++) {
+        for (let x = col * 10; x < col * 10 + 10; x++) rgba.set([shade, shade, shade, 255], (y * W + x) * 4);
+      }
+    }
+    return rgba;
+  };
+
+  it('keeps one floor patch whole as a single sticker', () => {
+    const rgba = painted([[0, 0, 90], [1, 0, 90], [0, 1, 90], [1, 1, 90]]);
+    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([{ x: 0, y: 0, w: 20, h: 20 }]);
   });
 
-  it('also offers a small solid run whole, like a fridge, as well as square by square', () => {
-    const alpha = blocks(W, H, [cell(5, 0), cell(5, 1)]);
-    expect(assetsInMask(alpha, W, H, grid, false)).toEqual([
-      { x: 50, y: 0, w: 10, h: 20 },
-      { x: 50, y: 0, w: 10, h: 10 },
-      { x: 50, y: 10, w: 10, h: 10 },
-    ]);
-  });
-
-  it('lists a ground sheet as all floor squares', () => {
-    const alpha = blocks(W, H, [cell(0, 0), [12, 2, 3, 3]]);
-    expect(assetsInMask(alpha, W, H, grid, true)).toEqual([
-      { x: 0, y: 0, w: 10, h: 10 },
-      { x: 10, y: 0, w: 10, h: 10 },
+  it('separates two different floors drawn touching, at the seam between them', () => {
+    const rgba = painted([[0, 0, 60], [1, 0, 60], [2, 0, 200], [3, 0, 200]]);
+    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([
+      { x: 0, y: 0, w: 20, h: 10 },
+      { x: 20, y: 0, w: 20, h: 10 },
     ]);
   });
 
