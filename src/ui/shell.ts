@@ -22,6 +22,7 @@ export interface ShellActions {
   openProject: () => void;
   exportMap: () => void;
   fitToView: () => void;
+  playTest: () => void;
 }
 
 type TabId = 'tiles' | 'layers' | 'map';
@@ -41,6 +42,7 @@ const TOOLS: { id: ToolId; icon: IconName; label: string; key: string }[] = [
   { id: 'fill', icon: 'fill', label: 'Fill', key: 'G' },
   { id: 'rect', icon: 'rect', label: 'Rectangle', key: 'R' },
   { id: 'line', icon: 'line', label: 'Line', key: 'L' },
+  { id: 'select', icon: 'select', label: 'Select', key: 'V' },
   { id: 'picker', icon: 'picker', label: 'Pick tile', key: 'I' },
   { id: 'pan', icon: 'pan', label: 'Pan', key: 'H' },
 ];
@@ -310,6 +312,30 @@ export class Shell {
     const store = this.store;
     const chips: HTMLElement[] = [];
 
+    // A floating selection owns the bar: while tiles are held, every control
+    // here acts on them and nothing else is relevant.
+    const selection = store.selection;
+    if (this.mode === 'map' && selection) {
+      const layer = store.doc.layers.find((l) => l.id === selection.layerId);
+      this.optionsBar.append(
+        el('span', { class: 'chip-label', text: `${selection.w} x ${selection.h} on ${layer?.name ?? 'layer'}` }),
+        el('div', { class: 'divider vertical' }),
+        this.selectionChip('sendBackward', 'Send behind', () => this.editor.moveSelectionDepth(-1)),
+        this.selectionChip('bringForward', 'Bring in front', () => this.editor.moveSelectionDepth(1)),
+        el('div', { class: 'divider vertical' }),
+        this.selectionChip('flipH', 'Flip across', () => this.editor.transformSelection('flipH')),
+        this.selectionChip('flipV', 'Flip down', () => this.editor.transformSelection('flipV')),
+        this.selectionChip('rotate', 'Rotate', () => this.editor.transformSelection('rotate')),
+        el('div', { class: 'divider vertical' }),
+        this.selectionChip('trash', 'Delete', () => this.editor.deleteSelection(), 'danger'),
+        button('chip primary-chip', 'Drop it here', () => {
+          this.editor.commitSelection();
+          this.refreshChrome();
+        }, [icon('check', 17), el('span', { class: 'chip-text', text: 'Done' })]),
+      );
+      return;
+    }
+
     if (this.mode === 'character') {
       chips.push(
         el('span', { class: 'chip-label', text: this.studio.character ? 'Pencil draws · fingers pan' : 'No character yet' }),
@@ -383,6 +409,12 @@ export class Shell {
           }),
         );
       }
+      chips.push(
+        button('chip play-chip', 'Walk around your map full screen', () => this.actions.playTest(), [
+          icon('play', 17),
+          el('span', { class: 'chip-text', text: 'Play' }),
+        ]),
+      );
     }
 
     chips.push(el('div', { class: 'divider vertical' }));
@@ -399,6 +431,15 @@ export class Shell {
     );
 
     this.optionsBar.append(...chips);
+  }
+
+  /** A chip acting on the floating selection; refreshes the bar afterwards. */
+  private selectionChip(name: IconName, label: string, run: () => void, variant = ''): HTMLElement {
+    return button(`chip ${variant}`.trim(), label, () => {
+      run();
+      this.refreshChrome();
+      this.renderer.requestDraw();
+    }, [icon(name, 17)]);
   }
 
   /**

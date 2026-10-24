@@ -19,7 +19,7 @@ interface TrackedPointer {
   lastY: number;
 }
 
-type Mode = 'idle' | 'draw' | 'pan' | 'gesture' | 'image';
+type Mode = 'idle' | 'draw' | 'pan' | 'gesture' | 'image' | 'selection-rect' | 'selection-move';
 
 /** A multi-finger tap only counts as a shortcut if it is quick and still. */
 const TAP_MAX_MS = 320;
@@ -50,6 +50,9 @@ export class PointerInput {
   private strokeErases = false;
   private lastCell: { x: number; y: number } | null = null;
   private anchorCell: { x: number; y: number } | null = null;
+
+  /** Offset from the selection's corner to where it was grabbed. */
+  private selectionGrab = { dx: 0, dy: 0 };
 
   /** Reference image being dragged, with its placement when the drag began. */
   private imageLayer: ImageLayer | null = null;
@@ -123,6 +126,8 @@ export class PointerInput {
     if (tool === 'pan') return { shape: 'pan', erases: false };
     if (tool === 'picker') return { shape: 'picker', erases: false };
     if (tool === 'eraser') return { shape: this.store.eraserShape, erases: true };
+    // `select` never reaches here: it is handled before a stroke begins.
+    if (tool === 'select') return { shape: 'pan', erases: false };
     return { shape: tool, erases: false };
   }
 
@@ -175,6 +180,11 @@ export class PointerInput {
     this.activeId = pointer.id;
     const cell = this.cellAt(pointer.x, pointer.y);
 
+    if (this.store.tool === 'select' && !this.spaceHeld) {
+      this.startSelect(cell);
+      return;
+    }
+
     if (shape === 'picker') {
       this.mode = 'draw';
       this.strokeShape = 'brush';
@@ -215,6 +225,29 @@ export class PointerInput {
     } else {
       this.editor.paintStamp(cell.x, cell.y);
     }
+    this.renderer.requestDraw();
+  }
+
+  /**
+   * The select tool does one of two things depending on where you press:
+   * inside a floating block it drags that block, anywhere else it starts a
+   * new marquee (dropping whatever was floating first).
+   */
+  private startSelect(cell: { x: number; y: number }): void {
+    const selection = this.store.selection;
+
+    if (selection && insideSelection(selection, cell)) {
+      this.mode = 'selection-move';
+      this.selectionGrab = { dx: cell.x - selection.x, dy: cell.y - selection.y };
+      return;
+    }
+
+    // Pressing outside the block means you are done with it.
+    if (selection) this.editor.commitSelection();
+
+    this.mode = 'selection-rect';
+    this.anchorCell = cell;
+    this.store.preview = { x0: cell.x, y0: cell.y, x1: cell.x, y1: cell.y };
     this.renderer.requestDraw();
   }
 
@@ -315,6 +348,18 @@ export class PointerInput {
       return;
     }
 
+    if (e.pointerId === this.activeId && (this.mode === 'selection-rect' || this.mode === 'selection-move')) {
+      const cell = this.cellAt(x, y);
+      if (this.mode === 'selection-rect' && this.anchorCell) {
+        this.store.preview = { x0: this.anchorCell.x, y0: this.anchorCell.y, x1: cell.x, y1: cell.y };
+      } else if (this.store.selection) {
+        this.store.selection.x = cell.x - this.selectionGrab.dx;
+        this.store.selection.y = cell.y - this.selectionGrab.dy;
+      }
+      this.renderer.requestDraw();
+      return;
+    }
+
     if (this.mode === 'pan' && e.pointerId === this.activeId) {
       const camera = this.store.camera;
       // Pan in world units so the map tracks the finger exactly at any zoom.
@@ -358,6 +403,8 @@ export class PointerInput {
     if (e.pointerId === this.activeId) {
       if (this.mode === 'draw') this.finishDraw();
       else if (this.mode === 'image') this.finishImageDrag();
+      else if (this.mode === 'selection-rect') this.finishSelectRect();
+      else if (this.mode === 'selection-move') this.store.changed();
       this.mode = 'idle';
       this.activeId = null;
       this.lastCell = null;
@@ -494,6 +541,15 @@ export class PointerInput {
     this.renderer.requestDraw();
   }
 
+  private finishSelectRect(): void {
+    const preview = this.store.preview;
+    this.store.preview = null;
+    this.anchorCell = null;
+    if (!preview) return;
+    this.editor.liftSelection(preview);
+    this.store.emit('ui');
+  }
+
   private finishDraw(): void {
     const shape = this.strokeShape;
 
@@ -565,6 +621,10 @@ export class PointerInput {
 /** Apple Pencil Pro and Surface-style pens report the eraser end as button 5. */
 function isPenEraser(e: PointerEvent): boolean {
   return e.pointerType === 'pen' && ((e.buttons & 32) !== 0 || e.button === 5);
+}
+
+function insideSelection(s: { x: number; y: number; w: number; h: number }, cell: { x: number; y: number }): boolean {
+  return cell.x >= s.x && cell.y >= s.y && cell.x < s.x + s.w && cell.y < s.y + s.h;
 }
 
 function labelFor(shape: Shape, erasing: boolean): string {

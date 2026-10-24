@@ -50,6 +50,12 @@ const PATHS: Record<string, string> = {
   pencilTip: '<path d="M12 2 7 9v9a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9Z"/><path d="M7 9h10"/><path d="M12 14v6"/>',
   file: '<path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/>',
   check: '<path d="m4 12 5 5L20 6"/>',
+  play: '<path d="M7 4.5v15l12-7.5Z"/>',
+  select: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M11 4h2M11 20h2M4 11v2M20 11v2"/>',
+  bringForward: '<rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 21h11a2 2 0 0 0 2-2V8"/>',
+  sendBackward: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 3H5a2 2 0 0 0-2 2v11"/>',
+  palette:
+    '<path d="M12 3a9 9 0 1 0 0 18c.8 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1-.3-.3-.4-.6-.4-1 0-.8.7-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.4-4-8-9-8Z"/><circle cx="7.5" cy="11.5" r="1.2"/><circle cx="10.5" cy="7.5" r="1.2"/><circle cx="15.5" cy="8.5" r="1.2"/>',
 };
 
 export type IconName = keyof typeof PATHS;

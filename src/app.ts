@@ -16,6 +16,7 @@ import { CharacterPanel } from './ui/character-panel';
 import { Store } from './core/store';
 import { bindKeyboard } from './input/keyboard';
 import { PointerInput } from './input/pointer-input';
+import { PlayMode } from './play/play-mode';
 import {
   openExportDialog,
   openNewMapDialog,
@@ -66,6 +67,7 @@ export class App {
       openProject: () => void this.openProject(),
       exportMap: () => openExportDialog(this.store, this.studio.characters),
       fitToView: () => this.fit(),
+      playTest: () => this.startPlayTest(),
     }, this.studio, this.characterView, this.characterPanel);
 
     this.autosave = createAutosave(() => serializeProject(this.store.doc, this.studio.characters));
@@ -218,6 +220,28 @@ export class App {
       this.renderer.requestDraw();
     };
     requestAnimationFrame(step);
+  }
+
+  /**
+   * Full-screen play test. Starts the character wherever the scale preview is
+   * standing, so what you were looking at is where you begin.
+   */
+  startPlayTest(): void {
+    const character = this.studio.character;
+    if (!character) {
+      this.store.toast('Make a character first');
+      return;
+    }
+    const preview = this.store.characterPreview;
+    const tile = preview.enabled
+      ? { x: preview.tx, y: preview.ty }
+      : screenToCell(this.store.camera, this.store.doc, this.renderer.viewW / 2, this.renderer.viewH / 2);
+
+    new PlayMode(this.store.doc, character, tile, () => {
+      // Returning from the test should not look like anything moved.
+      this.renderer.resize();
+      this.renderer.requestDraw();
+    });
   }
 
   /** Drops the character onto the middle of the current view and shows the map. */

@@ -21,6 +21,7 @@ const COLOR_BORDER = 'rgba(126, 160, 255, 0.55)';
 const COLOR_CURSOR = 'rgba(126, 160, 255, 0.95)';
 const COLOR_ERASE = 'rgba(255, 110, 110, 0.95)';
 const COLOR_IMAGE = 'rgba(126, 231, 184, 0.95)';
+const COLOR_SELECT = 'rgba(255, 214, 102, 0.95)';
 
 /** A ready-to-draw frame of the character being previewed on the map. */
 export interface CharacterPreviewSource {
@@ -138,6 +139,7 @@ export class Renderer {
     ctx.strokeRect(originX - 0.5, originY - 0.5, mapW * zoom + 1, mapH * zoom + 1);
 
     this.drawCharacterPreview(doc, originX, originY, zoom);
+    this.drawSelection(doc, originX, originY, zoom);
 
     // A selected reference image takes over the canvas interaction, so show
     // its handles instead of a brush cursor that would not do anything.
@@ -230,6 +232,41 @@ export class Renderer {
       layer.h * zoom,
     );
     ctx.imageSmoothingEnabled = previous;
+  }
+
+  /**
+   * The floating block of lifted tiles. It is drawn above every layer with a
+   * soft shadow, so it reads as held above the map rather than part of it.
+   */
+  private drawSelection(doc: Doc, originX: number, originY: number, zoom: number): void {
+    const selection = this.store.selection;
+    if (!selection) return;
+    const { ctx } = this;
+    const cell = doc.tileSize * zoom;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.45)';
+    ctx.shadowBlur = 10 * Math.min(2, zoom);
+    ctx.shadowOffsetY = 3 * Math.min(2, zoom);
+    for (let y = 0; y < selection.h; y++) {
+      for (let x = 0; x < selection.w; x++) {
+        const tile = selection.tiles[y * selection.w + x];
+        if (tile === EMPTY) continue;
+        drawTile(ctx, doc, tile, originX + (selection.x + x) * cell, originY + (selection.y + y) * cell, cell);
+      }
+    }
+    ctx.restore();
+
+    ctx.strokeStyle = COLOR_SELECT;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 5]);
+    ctx.strokeRect(
+      originX + selection.x * cell,
+      originY + selection.y * cell,
+      selection.w * cell,
+      selection.h * cell,
+    );
+    ctx.setLineDash([]);
   }
 
   /** Dashed outline and corner grip for the selected reference image. */
