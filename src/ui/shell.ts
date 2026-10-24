@@ -21,6 +21,7 @@ export interface ShellActions {
   dragStart: PaletteActions['dragStart'];
   dragMove: PaletteActions['dragMove'];
   dragEnd: PaletteActions['dragEnd'];
+  setSplitMode: PaletteActions['setSplitMode'];
   recolorObject: (anchor: HTMLElement) => void;
   addImageLayer: () => void;
   replaceImage: (index: number) => void;
@@ -100,6 +101,7 @@ export class Shell {
       dragStart: actions.dragStart,
       dragMove: actions.dragMove,
       dragEnd: actions.dragEnd,
+      setSplitMode: actions.setSplitMode,
     });
     this.layersPanel = new LayersPanel(store, editor, {
       addImageLayer: actions.addImageLayer,
@@ -155,8 +157,10 @@ export class Shell {
     // The studio owns its own state, so mirror its changes into the chrome.
     studio.on(() => {
       if (this.mode !== 'character') return;
-      this.buildToolRail();
-      this.buildTopActions();
+      // The whole chrome, not just the rail: the bottom bar and size readout
+      // depend on whether a character exists, which is exactly what changes
+      // when one is created or deleted.
+      this.refreshChrome();
     });
   }
 

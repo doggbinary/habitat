@@ -4,6 +4,38 @@ import type { AssetRect, Tileset } from './doc';
 const ALPHA_CUTOFF = 24;
 
 /**
+ * A detected asset is treated as several props fused together only when it
+ * spans more than this many tiles in both directions...
+ */
+const OVERSIZE_TILES = 4;
+/**
+ * ...and is also this many times larger than the typical asset on the same
+ * sheet. Being big is not enough on its own: a sheet holding one large tree,
+ * or only large props, must keep each one whole. What gives fusion away is a
+ * single blob dwarfing everything else that was found.
+ */
+const OUTLIER_FACTOR = 16;
+
+export interface TileGrid {
+  w: number;
+  h: number;
+  margin: number;
+  spacing: number;
+}
+
+export interface DetectOptions {
+  /** Islands closer than this many pixels are joined into one asset. */
+  gap?: number;
+  /** Islands with fewer opaque pixels than this are dropped as noise. */
+  minArea?: number;
+  /**
+   * The sheet's tile grid. Densely packed sheets put props edge to edge, so
+   * transparency alone cannot separate them; the grid is the fallback.
+   */
+  tile?: TileGrid;
+}
+
+/**
  * Splits a sheet into separate assets by finding the islands of opaque pixels
  * on its transparent background.
  *
@@ -14,11 +46,8 @@ const ALPHA_CUTOFF = 24;
  */
 export function detectAssets(
   image: CanvasImageSource & { width: number; height: number },
-  options: { gap?: number; minArea?: number } = {},
+  options: DetectOptions = {},
 ): AssetRect[] {
-  const gap = options.gap ?? 2;
-  const minArea = options.minArea ?? 16;
-
   const w = 'naturalWidth' in image ? (image as HTMLImageElement).naturalWidth : image.width;
   const h = 'naturalHeight' in image ? (image as HTMLImageElement).naturalHeight : image.height;
   if (w === 0 || h === 0) return [];
@@ -31,22 +60,93 @@ export function detectAssets(
   ctx.drawImage(image, 0, 0);
   const pixels = ctx.getImageData(0, 0, w, h).data;
 
+  const alpha = new Uint8Array(w * h);
+  for (let i = 0; i < alpha.length; i++) alpha[i] = pixels[i * 4 + 3];
+  return detectAssetsInMask(alpha, w, h, options);
+}
+
+/**
+ * The detection itself, on a plain alpha channel so it can be reasoned about
+ * and tested without a canvas.
+ *
+ * It works in up to three passes, each only where the last one failed:
+ *  1. Islands, with small gaps bridged so one prop's loose parts stay whole.
+ *  2. Any suspiciously large result is re-split with no gap bridging, in
+ *     case bridging is what fused neighbours together.
+ *  3. Anything still too large is cut along the sheet's tile grid. Packed
+ *     sheets are designed on that grid, so it is where the props really are.
+ */
+export function detectAssetsInMask(
+  alpha: Uint8Array,
+  w: number,
+  h: number,
+  options: DetectOptions = {},
+): AssetRect[] {
+  const gap = options.gap ?? 2;
+  const minArea = options.minArea ?? 16;
+  const tile = options.tile;
+  if (w === 0 || h === 0) return [];
+
   const solid = new Uint8Array(w * h);
-  for (let i = 0; i < solid.length; i++) solid[i] = pixels[i * 4 + 3] > ALPHA_CUTOFF ? 1 : 0;
+  for (let i = 0; i < solid.length; i++) solid[i] = alpha[i] > ALPHA_CUTOFF ? 1 : 0;
 
-  // Thicken the islands so near-touching parts of one object fuse. Labels are
-  // found on this widened mask, but bounds come from the real pixels below.
-  const grown = gap > 0 ? dilate(solid, w, h, gap) : solid;
+  const full: AssetRect = { x: 0, y: 0, w, h };
+  const islands = findIslands(solid, w, full, gap, minArea);
 
-  const labels = new Int32Array(w * h);
-  const bounds: { x0: number; y0: number; x1: number; y1: number; area: number }[] = [];
+  // The lower median, so a sheet with only a couple of finds still has a
+  // sensible "typical" size rather than an average dragged up by the outlier.
+  const areas = islands.map((r) => r.w * r.h).sort((a, b) => a - b);
+  const typical = areas.length > 0 ? areas[Math.floor((areas.length - 1) / 2)] : 0;
+  const oversized = (r: AssetRect) =>
+    !!tile &&
+    r.w > tile.w * OVERSIZE_TILES &&
+    r.h > tile.h * OVERSIZE_TILES &&
+    r.w * r.h > typical * OUTLIER_FACTOR;
+
+  const result: AssetRect[] = [];
+
+  for (const island of islands) {
+    if (!oversized(island)) {
+      result.push(island);
+      continue;
+    }
+    for (const part of findIslands(solid, w, island, 0, minArea)) {
+      if (oversized(part) && tile) result.push(...splitByGrid(solid, w, part, tile, minArea));
+      else result.push(part);
+    }
+  }
+
+  return readingOrder(result);
+}
+
+/**
+ * Connected regions of opaque pixels inside `region`, 8-connected so diagonal
+ * pixel-art strokes stay in one piece. Labels come from a mask widened by
+ * `gap`, but each rectangle is fitted to the real pixels.
+ */
+function findIslands(solid: Uint8Array, sheetW: number, region: AssetRect, gap: number, minArea: number): AssetRect[] {
+  const { x: rx, y: ry, w, h } = region;
+  const local = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) local[y * w + x] = solid[(ry + y) * sheetW + (rx + x)];
+  }
+
+  // Both neighbours grow toward each other, so growing each by half the gap
+  // bridges exactly `gap` transparent pixels. Growing each by the full gap
+  // would bridge twice that, fusing separate props on a tightly packed sheet.
+  const grown = gap > 0 ? dilate(local, w, h, Math.ceil(gap / 2)) : local;
+  const labels = new Uint8Array(w * h);
+  const rects: AssetRect[] = [];
   const stack: number[] = [];
 
   for (let start = 0; start < grown.length; start++) {
     if (!grown[start] || labels[start]) continue;
-    const label = bounds.length + 1;
-    const box = { x0: w, y0: h, x1: -1, y1: -1, area: 0 };
-    labels[start] = label;
+    let x0 = w;
+    let y0 = h;
+    let x1 = -1;
+    let y1 = -1;
+    let area = 0;
+    labels[start] = 1;
     stack.push(start);
 
     while (stack.length > 0) {
@@ -55,15 +155,14 @@ export function detectAssets(
       const y = (index / w) | 0;
 
       // Only genuinely opaque pixels shape the final rectangle.
-      if (solid[index]) {
-        if (x < box.x0) box.x0 = x;
-        if (y < box.y0) box.y0 = y;
-        if (x > box.x1) box.x1 = x;
-        if (y > box.y1) box.y1 = y;
-        box.area += 1;
+      if (local[index]) {
+        if (x < x0) x0 = x;
+        if (y < y0) y0 = y;
+        if (x > x1) x1 = x;
+        if (y > y1) y1 = y;
+        area += 1;
       }
 
-      // 8-connected, so diagonal pixel art strokes stay in one piece.
       for (let dy = -1; dy <= 1; dy++) {
         const ny = y + dy;
         if (ny < 0 || ny >= h) continue;
@@ -73,19 +172,54 @@ export function detectAssets(
           if (nx < 0 || nx >= w) continue;
           const ni = ny * w + nx;
           if (!grown[ni] || labels[ni]) continue;
-          labels[ni] = label;
+          labels[ni] = 1;
           stack.push(ni);
         }
       }
     }
-    bounds.push(box);
+
+    if (area >= minArea && x1 >= x0) rects.push({ x: rx + x0, y: ry + y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
   }
+  return rects;
+}
 
-  const rects: AssetRect[] = bounds
-    .filter((b) => b.area >= minArea && b.x1 >= b.x0)
-    .map((b) => ({ x: b.x0, y: b.y0, w: b.x1 - b.x0 + 1, h: b.y1 - b.y0 + 1 }));
+/** One asset per grid cell of `region` that holds anything, fitted tight. */
+function splitByGrid(solid: Uint8Array, sheetW: number, region: AssetRect, tile: TileGrid, minArea: number): AssetRect[] {
+  const pitchX = tile.w + tile.spacing;
+  const pitchY = tile.h + tile.spacing;
+  const firstCol = Math.max(0, Math.floor((region.x - tile.margin) / pitchX));
+  const firstRow = Math.max(0, Math.floor((region.y - tile.margin) / pitchY));
+  const lastCol = Math.floor((region.x + region.w - 1 - tile.margin) / pitchX);
+  const lastRow = Math.floor((region.y + region.h - 1 - tile.margin) / pitchY);
+  const rects: AssetRect[] = [];
 
-  return readingOrder(rects);
+  for (let row = firstRow; row <= lastRow; row++) {
+    for (let col = firstCol; col <= lastCol; col++) {
+      // The cell, clipped to the region being split.
+      const cx0 = Math.max(region.x, tile.margin + col * pitchX);
+      const cy0 = Math.max(region.y, tile.margin + row * pitchY);
+      const cx1 = Math.min(region.x + region.w, tile.margin + col * pitchX + tile.w) - 1;
+      const cy1 = Math.min(region.y + region.h, tile.margin + row * pitchY + tile.h) - 1;
+
+      let x0 = Number.POSITIVE_INFINITY;
+      let y0 = Number.POSITIVE_INFINITY;
+      let x1 = -1;
+      let y1 = -1;
+      let area = 0;
+      for (let y = cy0; y <= cy1; y++) {
+        for (let x = cx0; x <= cx1; x++) {
+          if (!solid[y * sheetW + x]) continue;
+          if (x < x0) x0 = x;
+          if (y < y0) y0 = y;
+          if (x > x1) x1 = x;
+          if (y > y1) y1 = y;
+          area += 1;
+        }
+      }
+      if (area >= minArea) rects.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+    }
+  }
+  return rects;
 }
 
 /** Marks every pixel within `radius` of a solid one. */
@@ -159,6 +293,11 @@ export function transparencyRatio(image: HTMLImageElement | HTMLCanvasElement): 
  */
 export function suggestSplitMode(image: HTMLImageElement | HTMLCanvasElement): 'grid' | 'objects' {
   return transparencyRatio(image) > 0.35 ? 'objects' : 'grid';
+}
+
+/** The tile grid a sheet was sliced with, for detection's grid fallback. */
+export function gridOf(tileset: Tileset): TileGrid {
+  return { w: tileset.tileW, h: tileset.tileH, margin: tileset.margin, spacing: tileset.spacing };
 }
 
 /** The assets a sheet offers, whichever way it is split. */

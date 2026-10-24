@@ -25,6 +25,8 @@ export interface PaletteActions {
   dragMove: (clientX: number, clientY: number) => void;
   /** `dropped` is false when the gesture was cancelled by the system. */
   dragEnd: (clientX: number, clientY: number, dropped: boolean) => void;
+  /** Switches a sheet between painted ground tiles and placeable props. */
+  setSplitMode: (tilesetIndex: number, mode: 'grid' | 'objects') => void;
 }
 
 /**
@@ -332,6 +334,16 @@ export class PalettePanel {
         el('span', { text: `${this.assets.length} ${isObjects ? 'assets' : 'tiles'}` }),
         el('span', { class: 'muted', text: total > 1 ? `Sheet ${current + 1} of ${total}` : '' }),
       ]),
+      // Detection guesses from transparency, which a sheet can fool, so the
+      // choice stays one tap away.
+      el('div', { class: 'split-switch', role: 'tablist' }, [
+        this.splitButton('Ground', 'Paint these as tiles on the grid', !isObjects, () =>
+          this.actions.setSplitMode(current, 'grid'),
+        ),
+        this.splitButton('Props', 'Place each thing on the sheet as its own movable object', isObjects, () =>
+          this.actions.setSplitMode(current, 'objects'),
+        ),
+      ]),
       el('div', { class: 'palette-row' }, [
         button('icon-btn', 'Sheet settings', () => this.actions.editTileset(current), [icon('settings', 18)]),
         button('icon-btn', 'Import another sheet', () => this.actions.addTileset(), [icon('plus', 18)]),
@@ -344,6 +356,13 @@ export class PalettePanel {
           : 'Tap a tile to paint ground with the brush, or press and hold to drag one onto the map.',
       }),
     );
+  }
+
+  private splitButton(label: string, hint: string, active: boolean, onPress: () => void): HTMLButtonElement {
+    const node = button(`split-btn${active ? ' active' : ''}`, hint, onPress, [el('span', { text: label })]);
+    node.setAttribute('role', 'tab');
+    node.setAttribute('aria-selected', String(active));
+    return node;
   }
 
   // --- Rendering -----------------------------------------------------------

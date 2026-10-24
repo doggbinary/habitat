@@ -8,7 +8,7 @@ import {
   type AssetRect,
   type Doc,
 } from './core/doc';
-import { assetsOf } from './core/assets';
+import { assetsOf, detectAssets, gridOf, suggestSplitMode } from './core/assets';
 import { dominantColor } from './io/recolor';
 import { cropAsset } from './render/object-draw';
 import { ObjectTools } from './tools/objects';
@@ -76,6 +76,7 @@ export class App {
       dragStart: (tilesetId, rect) => this.dragStart(tilesetId, rect),
       dragMove: (x, y) => this.dragMove(x, y),
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
+      setSplitMode: (sheet, mode) => this.setSplitMode(sheet, mode),
       recolorObject: (anchor) => this.recolorObject(anchor),
       addImageLayer: () => void this.addImageLayer(),
       replaceImage: (index) => void this.replaceImage(index),
@@ -295,11 +296,25 @@ export class App {
       onConfirm: async (spec) => {
         try {
           const tileset = await makeTileset(spec.src, spec.name, spec.tileW, spec.tileH, spec.margin, spec.spacing);
+          // A sheet that is mostly background is separate props, so each
+          // prop becomes one draggable asset instead of the grid squares it
+          // happens to cover. Ground sheets fill their squares and stay a grid.
+          if (tileset.image && suggestSplitMode(tileset.image) === 'objects') {
+            const assets = detectAssets(tileset.image, { tile: gridOf(tileset) });
+            if (assets.length > 0) {
+              tileset.splitMode = 'objects';
+              tileset.assets = assets;
+            }
+          }
           this.editor.addTileset(tileset);
           this.store.activeTileset = this.store.doc.tilesets.length - 1;
           this.selectFirstTile();
           this.shell.openTab('tiles');
-          this.store.toast(`${tileset.name} added — ${tileset.count} tiles`);
+          this.store.toast(
+            tileset.splitMode === 'objects'
+              ? `${tileset.name} added — found ${tileset.assets!.length} props`
+              : `${tileset.name} added — ${tileset.count} tiles`,
+          );
         } catch {
           this.store.toast('That image could not be imported');
         }
@@ -344,6 +359,33 @@ export class App {
    * has not discovered press-and-hold. Ground tiles become the brush instead,
    * because ground is painted, not placed one square at a time.
    */
+  /**
+   * Switches a sheet between painted ground and placeable props. Props are
+   * found the first time they are asked for and kept, so switching back and
+   * forth is instant and undoable.
+   */
+  private setSplitMode(sheetIndex: number, mode: 'grid' | 'objects'): void {
+    const sheet = this.store.doc.tilesets[sheetIndex];
+    if (!sheet || (sheet.splitMode ?? 'grid') === mode) return;
+
+    let assets = sheet.assets;
+    if (mode === 'objects' && !assets?.length) {
+      if (!sheet.image) return;
+      assets = detectAssets(sheet.image, { tile: gridOf(sheet) });
+      if (assets.length === 0) {
+        this.store.toast('No separate props found on this sheet');
+        return;
+      }
+    }
+
+    this.editor.structural(mode === 'objects' ? 'Use as props' : 'Use as ground', () => {
+      sheet.splitMode = mode;
+      if (assets) sheet.assets = assets;
+    });
+    this.store.libraryPick = null;
+    this.store.toast(mode === 'objects' ? `${assets!.length} props` : `${sheet.count} ground tiles`);
+  }
+
   private tapAsset(sheetIndex: number, assetIndex: number): void {
     const sheet = this.store.doc.tilesets[sheetIndex];
     if (!sheet) return;
