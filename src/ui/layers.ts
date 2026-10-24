@@ -1,4 +1,12 @@
-import { fitPlacement, isImageLayer, type ImageLayer, type TileLayer } from '../core/doc';
+import {
+  fitPlacement,
+  isImageLayer,
+  isObjectLayer,
+  type ImageLayer,
+  type Layer,
+  type ObjectLayer,
+  type TileLayer,
+} from '../core/doc';
 import type { Store } from '../core/store';
 import type { Editor } from '../tools/edit';
 import { snapPlacement } from '../tools/image-transform';
@@ -76,7 +84,11 @@ export class LayersPanel {
             [icon(layer.visible ? 'eye' : 'eyeOff', 18)],
           ),
           // A small badge marks reference images so the stack reads at a glance.
-          isImageLayer(layer) ? el('span', { class: 'layer-badge', title: 'Reference image' }, [icon('image', 15)]) : null,
+          isImageLayer(layer)
+            ? el('span', { class: 'layer-badge', title: 'Reference image' }, [icon('image', 15)])
+            : isObjectLayer(layer)
+              ? el('span', { class: 'layer-badge objects', title: 'Placed objects' }, [icon('select', 15)])
+              : null,
           name,
           button(
             `icon-btn flat${layer.locked ? ' active' : ''}`,
@@ -122,11 +134,26 @@ export class LayersPanel {
     this.footer.append(this.opacityField(layer));
 
     if (isImageLayer(layer)) this.buildImageControls(layer, index);
+    else if (isObjectLayer(layer)) this.buildObjectControls(layer);
     else this.buildTileControls(layer, index);
   }
 
-  /** Opacity is the one control both layer kinds share. */
-  private opacityField(layer: TileLayer | ImageLayer): HTMLElement {
+  /** Object layers hold placed props; editing happens on the map itself. */
+  private buildObjectControls(layer: ObjectLayer): void {
+    const count = layer.objects.length;
+    this.footer.append(
+      el('p', {
+        class: 'hint',
+        text:
+          count === 0
+            ? 'No objects yet. Drag a prop from the Tiles panel onto the map to place one here.'
+            : `${count} object${count === 1 ? '' : 's'}. Tap one on the map to move, resize, turn or recolour it. Later objects sit in front.`,
+      }),
+    );
+  }
+
+  /** Opacity is the one control every layer kind shares. */
+  private opacityField(layer: Layer): HTMLElement {
     const slider = el('input', {
       class: 'slider',
       type: 'range',

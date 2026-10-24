@@ -5,8 +5,15 @@ import {
   isImageLayer,
   loadImage,
   makeTileset,
+  type AssetRect,
   type Doc,
 } from './core/doc';
+import { assetsOf } from './core/assets';
+import { dominantColor } from './io/recolor';
+import { cropAsset } from './render/object-draw';
+import { ObjectTools } from './tools/objects';
+import { openColorPopover } from './ui/color-popover';
+import { hexToHsv, hsvToHex } from './ui/color-wheel';
 import { importSpriteSheet } from './character/import';
 import { frameIndex } from './character/model';
 import { Studio } from './character/studio';
@@ -29,7 +36,7 @@ import {
 } from './ui/dialogs';
 import { deserializeCharacters, deserializeProject, isProjectFile, serializeProject } from './io/project';
 import { createAutosave, loadProject } from './io/storage';
-import { fitToView, screenToCell } from './render/camera';
+import { fitToView, screenToCell, screenToWorld } from './render/camera';
 import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
 import { el } from './ui/dom';

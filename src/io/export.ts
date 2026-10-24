@@ -1,5 +1,6 @@
 import { DIRECTIONS, frameIndex, type Character } from '../character/model';
-import type { Doc } from '../core/doc';
+import { objectSize, type Doc } from '../core/doc';
+import { drawObject, isRecolored } from '../render/object-draw';
 import { drawTile } from '../render/tile-draw';
 import { isNative, saveFileNative } from './native';
 import { EMPTY, flagsOf, indexOf, tilesetOf } from '../core/tiles';
@@ -88,6 +89,12 @@ export async function renderPng(doc: Doc, options: PngOptions): Promise<Blob> {
       continue;
     }
 
+    if (layer.kind === 'objects') {
+      // Array order is depth, so drawing in order stacks them correctly.
+      for (const obj of layer.objects) drawObject(ctx, doc, obj, 0, 0, options.scale);
+      continue;
+    }
+
     for (let y = 0; y < doc.height; y++) {
       const row = y * doc.width;
       for (let x = 0; x < doc.width; x++) {
@@ -141,6 +148,11 @@ export function buildMapJson(doc: Doc): string {
     mapHeight: doc.height,
     layers,
   };
+
+  // Placed props live beside the tile layers rather than inside them, so the
+  // `layers` array keeps the exact shape existing importers parse.
+  const objectLayers = buildObjectLayers(doc);
+  if (objectLayers.length > 0) payload.objectLayers = objectLayers;
   if (multiple) {
     payload.tilesets = doc.tilesets.map((t) => ({
       name: t.name,
@@ -151,6 +163,40 @@ export function buildMapJson(doc: Doc): string {
     }));
   }
   return JSON.stringify(payload, null, 2);
+}
+
+/**
+ * Placed objects for engine import. Positions are the object's centre in map
+ * pixels, and `width`/`height` are its footprint after scaling and turning, so
+ * an importer can place it without re-deriving anything.
+ */
+export function buildObjectLayers(doc: Doc): Record<string, unknown>[] {
+  return doc.layers.flatMap((layer) => {
+    if (layer.kind !== 'objects') return [];
+    const objects = layer.objects.map((obj, depth) => {
+      const { w, h } = objectSize(obj);
+      const sheet = doc.tilesets.find((t) => t.id === obj.tilesetId);
+      const entry: Record<string, unknown> = {
+        tileset: sheet?.name ?? obj.tilesetId,
+        source: { ...obj.rect },
+        x: obj.x,
+        y: obj.y,
+        width: w,
+        height: h,
+        // Later entries draw in front; spelled out so order need not be assumed.
+        depth,
+      };
+      if (obj.scale !== 1) entry.scale = obj.scale;
+      if (obj.rotation) entry.rotation = obj.rotation * 90;
+      if (obj.flipX) entry.flipX = true;
+      if (obj.flipY) entry.flipY = true;
+      if (isRecolored(obj)) {
+        entry.color = { hueShift: obj.hueShift, saturation: obj.saturation, brightness: obj.brightness };
+      }
+      return entry;
+    });
+    return [{ name: layer.name, objects }];
+  });
 }
 
 /** Packs the tilesets a project uses into one PNG strip for engine import. */

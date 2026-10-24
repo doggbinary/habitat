@@ -572,6 +572,11 @@ textarea {
   color: #7ee7b8;
 }
 
+.layer-badge.objects {
+  background: rgba(255, 214, 102, 0.14);
+  color: #ffd666;
+}
+
 .layer-name {
   flex: 1;
   min-width: 0;

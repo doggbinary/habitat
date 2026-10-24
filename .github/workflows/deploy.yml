@@ -30,6 +30,10 @@ jobs:
 
       - run: npm ci
 
+      # A failing test stops the deploy, so a regression never reaches the
+      # iPad. Runs before the build because it is faster and fails earlier.
+      - run: npm test
+
       # `npm run build` typechecks first, so a broken build never ships.
       - run: npm run build
 

@@ -41,22 +41,48 @@ export class Editor {
     return this.store.doc;
   }
 
+  /**
+   * The tile layer painting goes to, editable or not.
+   *
+   * Usually that is simply the active layer. But placing an object makes its
+   * object layer active, and objects and reference images sit on top of the
+   * ground, so painting while one is selected means the tile layer beneath
+   * it. Without this, placing a tree would silently disable the brush.
+   */
+  private paintLayer(): TileLayer | null {
+    const doc = this.doc;
+    const active = activeLayerOf(doc);
+    if (isTileLayer(active)) return active;
+
+    const from = active ? doc.activeLayer : doc.layers.length;
+    for (let i = from - 1; i >= 0; i--) {
+      const layer = doc.layers[i];
+      if (isTileLayer(layer)) return layer;
+    }
+    // Nothing underneath: fall back to the topmost tile layer anywhere.
+    for (let i = doc.layers.length - 1; i > from; i--) {
+      const layer = doc.layers[i];
+      if (isTileLayer(layer)) return layer;
+    }
+    return null;
+  }
+
   /** The layer edits land on, or null when it is locked, hidden or missing. */
   targetLayer(): TileLayer | null {
-    const layer = activeLayerOf(this.doc);
+    const layer = this.paintLayer();
     return isEditable(layer) ? layer : null;
   }
 
   beginStroke(label: string): boolean {
     const layer = this.targetLayer();
     if (!layer) {
-      const active = activeLayerOf(this.doc);
+      const target = this.paintLayer();
       this.store.toast(
-        !active
-          ? 'Add a layer first'
-          : active.kind === 'image'
-            ? 'Pick a tile layer to paint on'
-            : 'That layer is locked or hidden',
+        !target
+          ? 'Add a tile layer to paint on'
+          : target.locked
+            ? `${target.name} is locked`
+            : `${target.name} is hidden`,
       );
       return false;
     }

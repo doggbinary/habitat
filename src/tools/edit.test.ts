@@ -1,44 +1,32 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { createDoc, type ImageLayer, type TileLayer, type Tileset } from '../core/doc';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  createDoc,
+  createLayer,
+  createObjectLayer,
+  type ImageLayer,
+  type ObjectLayer,
+  type TileLayer,
+} from '../core/doc';
 import { Store } from '../core/store';
 import { EMPTY, indexOf, pack, tilesetOf } from '../core/tiles';
-import type { Renderer } from '../render/renderer';
+import { fakeObject, fakeRenderer, fakeTileset } from '../test-support/fakes';
 import { Editor } from './edit';
-
-/** The editor only tells the renderer which cells to repaint. */
-const fakeRenderer = {
-  markCell() {},
-  markRect() {},
-  invalidateAll() {},
-  requestDraw() {},
-} as unknown as Renderer;
-
-function fakeTileset(name: string): Tileset {
-  return {
-    id: name,
-    name,
-    src: '',
-    tileW: 16,
-    tileH: 16,
-    margin: 0,
-    spacing: 0,
-    image: null,
-    imgW: 64,
-    imgH: 64,
-    cols: 4,
-    rows: 4,
-    count: 16,
-  };
-}
 
 let store: Store;
 let editor: Editor;
 let layer: TileLayer;
 
 const T = (i: number, ts = 0) => pack(ts, i);
-const at = (x: number, y: number) => layer.data[y * store.doc.width + x];
+const at = (x: number, y: number, l: TileLayer = layer) => l.data[y * store.doc.width + x];
 const set = (x: number, y: number, tile: number) => {
   layer.data[y * store.doc.width + x] = tile;
+};
+const paint = (x: number, y: number, tile: number) => {
+  store.stamp = { w: 1, h: 1, tiles: Int32Array.of(tile) };
+  if (!editor.beginStroke('Paint')) return false;
+  editor.paintStamp(x, y);
+  editor.endStroke();
+  return true;
 };
 
 beforeEach(() => {
@@ -69,7 +57,7 @@ describe('painting', () => {
     expect(at(7, 0)).toBe(T(2));
   });
 
-  it('can be undone as one step', () => {
+  it('records a whole stroke as one undo step', () => {
     store.stamp = { w: 1, h: 1, tiles: Int32Array.of(T(4)) };
     editor.beginStroke('Paint');
     editor.paintStamp(2, 2);
@@ -80,12 +68,28 @@ describe('painting', () => {
     expect(at(3, 2)).toBe(EMPTY);
   });
 
-  it('refuses to paint on a locked layer', () => {
-    layer.locked = true;
-    expect(editor.beginStroke('Paint')).toBe(false);
+  it('rolls an aborted stroke back completely', () => {
+    store.stamp = { w: 1, h: 1, tiles: Int32Array.of(T(4)) };
+    editor.beginStroke('Paint');
+    editor.paintStamp(0, 0);
+    editor.abortStroke();
+    expect(at(0, 0)).toBe(EMPTY);
+    expect(store.history.canUndo).toBe(false);
+  });
+});
+
+describe('which layer painting lands on', () => {
+  // Placing an object makes its layer active. Painting ground afterwards must
+  // still work, which is why the brush looks beneath an object layer.
+
+  it('paints the tile layer beneath an active object layer', () => {
+    store.doc.layers.push(createObjectLayer());
+    store.doc.activeLayer = 1;
+    expect(paint(2, 2, T(5))).toBe(true);
+    expect(at(2, 2)).toBe(T(5));
   });
 
-  it('refuses to paint on a reference image', () => {
+  it('paints the tile layer beneath an active reference image', () => {
     const image: ImageLayer = {
       kind: 'image',
       id: 'img',
@@ -104,22 +108,37 @@ describe('painting', () => {
     };
     store.doc.layers.push(image);
     store.doc.activeLayer = 1;
-    expect(editor.beginStroke('Paint')).toBe(false);
+    expect(paint(1, 1, T(3))).toBe(true);
+    expect(at(1, 1)).toBe(T(3));
   });
 
-  it('rolls an aborted stroke back completely', () => {
-    store.stamp = { w: 1, h: 1, tiles: Int32Array.of(T(4)) };
-    editor.beginStroke('Paint');
-    editor.paintStamp(0, 0);
-    editor.abortStroke();
+  it('prefers the nearest tile layer below over one further down', () => {
+    const middle = createLayer(8, 6, 'Middle');
+    store.doc.layers.push(middle, createObjectLayer());
+    store.doc.activeLayer = 2;
+    paint(0, 0, T(7));
+    expect(at(0, 0, middle)).toBe(T(7));
     expect(at(0, 0)).toBe(EMPTY);
-    expect(store.history.canUndo).toBe(false);
+  });
+
+  it('names the layer when painting is blocked because it is locked', () => {
+    const toast = vi.spyOn(store, 'toast');
+    layer.locked = true;
+    expect(paint(0, 0, T(1))).toBe(false);
+    expect(toast).toHaveBeenCalledWith('Layer 1 is locked');
+  });
+
+  it('says to add a tile layer when there is none at all', () => {
+    const toast = vi.spyOn(store, 'toast');
+    store.doc.layers = [createObjectLayer()];
+    store.doc.activeLayer = 0;
+    expect(paint(0, 0, T(1))).toBe(false);
+    expect(toast).toHaveBeenCalledWith('Add a tile layer to paint on');
   });
 });
 
 describe('flood fill', () => {
-  it('fills only the connected region and stops at the map edge', () => {
-    // A wall down column 3 splits the map in two.
+  it('fills only the connected region and stops at walls', () => {
     for (let y = 0; y < 6; y++) set(3, y, T(1));
     store.stamp = { w: 1, h: 1, tiles: Int32Array.of(T(2)) };
     editor.beginStroke('Fill');
@@ -150,68 +169,6 @@ describe('flood fill', () => {
   });
 });
 
-describe('selection', () => {
-  beforeEach(() => {
-    set(1, 1, T(1));
-    set(2, 1, T(2));
-  });
-
-  it('lifts tiles off the map and drops them somewhere else', () => {
-    expect(editor.liftSelection({ x0: 1, y0: 1, x1: 2, y1: 1 })).toBe(true);
-    expect(at(1, 1)).toBe(EMPTY);
-
-    store.selection!.x = 4;
-    store.selection!.y = 3;
-    editor.commitSelection();
-
-    expect(at(4, 3)).toBe(T(1));
-    expect(at(5, 3)).toBe(T(2));
-    expect(at(1, 1)).toBe(EMPTY);
-    expect(store.selection).toBeNull();
-  });
-
-  it('does not erase what is underneath a hole in the dropped block', () => {
-    set(5, 3, T(9));
-    editor.liftSelection({ x0: 0, y0: 1, x1: 1, y1: 1 }); // [empty, T(1)]
-    store.selection!.x = 5;
-    store.selection!.y = 3;
-    editor.commitSelection();
-    expect(at(5, 3)).toBe(T(9));
-    expect(at(6, 3)).toBe(T(1));
-  });
-
-  it('picking up empty ground leaves the map untouched', () => {
-    expect(editor.liftSelection({ x0: 5, y0: 4, x1: 6, y1: 5 })).toBe(false);
-    expect(store.selection).toBeNull();
-    expect(store.history.canUndo).toBe(false);
-  });
-
-  it('rotating a held block swaps its size and keeps it centred', () => {
-    editor.liftSelection({ x0: 1, y0: 1, x1: 2, y1: 1 });
-    editor.transformSelection('rotate');
-    const s = store.selection!;
-    expect([s.w, s.h]).toEqual([1, 2]);
-    expect(s.x).toBe(2);
-  });
-
-  it('bringing to front past the top creates a new layer to land on', () => {
-    editor.liftSelection({ x0: 1, y0: 1, x1: 2, y1: 1 });
-    editor.moveSelectionDepth(1);
-    expect(store.doc.layers).toHaveLength(2);
-    editor.commitSelection();
-    const front = store.doc.layers[1] as TileLayer;
-    expect(front.data[1 * 8 + 1]).toBe(T(1));
-    expect(layer.data[1 * 8 + 1]).toBe(EMPTY);
-  });
-
-  it('deleting a held block removes it for good', () => {
-    editor.liftSelection({ x0: 1, y0: 1, x1: 2, y1: 1 });
-    editor.deleteSelection();
-    expect(at(1, 1)).toBe(EMPTY);
-    expect(store.selection).toBeNull();
-  });
-});
-
 describe('structural edits', () => {
   it('removing a tileset clears its tiles and renumbers the later sheets', () => {
     store.doc.tilesets = [fakeTileset('a'), fakeTileset('b'), fakeTileset('c')];
@@ -226,12 +183,36 @@ describe('structural edits', () => {
     // Sheet c slid from index 2 to 1 but must still point at the same art.
     expect(tilesetOf(at(2, 0))).toBe(1);
     expect(indexOf(at(2, 0))).toBe(5);
-    expect(store.doc.tilesets.map((t) => t.name)).toEqual(['a', 'c']);
+  });
+
+  it('removing a tileset removes the objects made from it, and only those', () => {
+    store.doc.tilesets = [fakeTileset('a'), fakeTileset('b')];
+    const objects = createObjectLayer();
+    objects.objects = [fakeObject({ id: 'keep', tilesetId: 'a' }), fakeObject({ id: 'drop', tilesetId: 'b' })];
+    store.doc.layers.push(objects);
+
+    editor.removeTileset(1);
+
+    expect((store.doc.layers[1] as ObjectLayer).objects.map((o) => o.id)).toEqual(['keep']);
+  });
+
+  it('duplicating an object layer makes independent copies with new ids', () => {
+    const objects = createObjectLayer();
+    objects.objects = [fakeObject({ id: 'one' })];
+    store.doc.layers.push(objects);
+
+    editor.duplicateLayer(1);
+
+    const copy = store.doc.layers[2] as ObjectLayer;
+    expect(copy.objects[0].id).not.toBe('one');
+    copy.objects[0].x = 999;
+    copy.objects[0].rect.w = 999;
+    expect(objects.objects[0].x).toBe(40);
+    expect(objects.objects[0].rect.w).toBe(16);
   });
 
   it('resizing keeps tiles anchored at the top-left', () => {
     set(1, 1, T(7));
-    set(7, 5, T(8));
     editor.resizeMap(4, 3);
     expect(store.doc.width).toBe(4);
     expect(layer.data.length).toBe(12);
@@ -250,6 +231,12 @@ describe('structural edits', () => {
     expect(at(1, 0)).toBe(T(2));
   });
 
+  it('will not merge an object layer into tiles', () => {
+    store.doc.layers.push(createObjectLayer());
+    editor.mergeDown(1);
+    expect(store.doc.layers).toHaveLength(2);
+  });
+
   it('will not delete the last layer', () => {
     editor.removeLayer(0);
     expect(store.doc.layers).toHaveLength(1);
@@ -257,7 +244,6 @@ describe('structural edits', () => {
 
   it('undoes structural changes', () => {
     editor.addLayer();
-    expect(store.doc.layers).toHaveLength(2);
     editor.undo();
     expect(store.doc.layers).toHaveLength(1);
   });

@@ -1,6 +1,7 @@
 import { DIRECTIONS, frameIndex, type Character } from '../character/model';
 import type { Doc } from '../core/doc';
 import { EMPTY } from '../core/tiles';
+import { drawObject } from '../render/object-draw';
 import { drawTile } from '../render/tile-draw';
 
 /** Tiles crossed per second. Roughly a brisk walk at typical tile sizes. */
@@ -360,6 +361,10 @@ function composeMap(doc: Doc): HTMLCanvasElement {
         ctx.drawImage(layer.image, layer.x, layer.y, layer.w, layer.h);
         ctx.imageSmoothingEnabled = false;
       }
+      continue;
+    }
+    if (layer.kind === 'objects') {
+      for (const obj of layer.objects) drawObject(ctx, doc, obj, 0, 0, 1);
       continue;
     }
     for (let y = 0; y < doc.height; y++) {

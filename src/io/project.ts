@@ -1,6 +1,46 @@
 import { STARTER_PALETTE, type Character } from '../character/model';
-import { loadImage, makeTileset, uid, type Doc, type Layer, type Tileset } from '../core/doc';
+import {
+  loadImage,
+  makeTileset,
+  uid,
+  type AssetRect,
+  type Doc,
+  type Layer,
+  type MapObject,
+  type Tileset,
+} from '../core/doc';
 import { EMPTY } from '../core/tiles';
+
+const finite = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+/**
+ * Rebuilds a placed object, filling anything missing with a neutral value.
+ * A file edited by hand or written by an older build should load with its
+ * objects untransformed rather than fail to load at all.
+ */
+function readObject(raw: Partial<MapObject>): MapObject {
+  const rect = raw.rect ?? { x: 0, y: 0, w: 1, h: 1 };
+  return {
+    id: typeof raw.id === 'string' && raw.id ? raw.id : uid('obj'),
+    tilesetId: typeof raw.tilesetId === 'string' ? raw.tilesetId : '',
+    rect: {
+      x: finite(rect.x, 0),
+      y: finite(rect.y, 0),
+      w: Math.max(1, finite(rect.w, 1)),
+      h: Math.max(1, finite(rect.h, 1)),
+    },
+    x: finite(raw.x, 0),
+    y: finite(raw.y, 0),
+    scale: Math.max(0.01, finite(raw.scale, 1)),
+    rotation: ((Math.round(finite(raw.rotation, 0)) % 4) + 4) % 4,
+    flipX: raw.flipX === true,
+    flipY: raw.flipY === true,
+    hueShift: finite(raw.hueShift, 0),
+    saturation: finite(raw.saturation, 1),
+    brightness: finite(raw.brightness, 1),
+  };
+}
 
 /**
  * On-disk project format. Layer buffers are base64 so a project round-trips
@@ -35,7 +75,13 @@ interface SerializedImageLayer extends SerializedLayerBase {
   h: number;
 }
 
-type SerializedLayer = SerializedTileLayer | SerializedImageLayer;
+interface SerializedObjectLayer extends SerializedLayerBase {
+  kind: 'objects';
+  /** Already plain data, so objects are stored as they are. */
+  objects: MapObject[];
+}
+
+type SerializedLayer = SerializedTileLayer | SerializedImageLayer | SerializedObjectLayer;
 
 interface SerializedTileset {
   id: string;
@@ -48,6 +94,12 @@ interface SerializedTileset {
   /** Present for editor-generated sheets, whose slot count is not derivable. */
   generated?: boolean;
   count?: number;
+  /**
+   * How the sheet is cut into assets. Detection is slow on a large sheet and
+   * the user may have adjusted it, so the result is saved rather than redone.
+   */
+  splitMode?: 'grid' | 'objects';
+  assets?: AssetRect[];
 }
 
 interface SerializedCharacter {
@@ -128,6 +180,8 @@ export function serializeProject(doc: Doc, characters: Character[] = []): Serial
       margin: t.margin,
       spacing: t.spacing,
       ...(t.generated ? { generated: true, count: t.count } : {}),
+      ...(t.splitMode ? { splitMode: t.splitMode } : {}),
+      ...(t.assets ? { assets: t.assets.map((a) => ({ ...a })) } : {}),
     })),
     layers: doc.layers.map((l): SerializedLayer => {
       const base = {
@@ -139,6 +193,9 @@ export function serializeProject(doc: Doc, characters: Character[] = []): Serial
       };
       if (l.kind === 'image') {
         return { ...base, kind: 'image', src: l.src, x: l.x, y: l.y, w: l.w, h: l.h };
+      }
+      if (l.kind === 'objects') {
+        return { ...base, kind: 'objects', objects: l.objects.map((o) => ({ ...o, rect: { ...o.rect } })) };
       }
       return { ...base, kind: 'tiles', collider: l.collider, data: toBase64(l.data.buffer) };
     }),
@@ -198,6 +255,8 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
         tileset.generated = true;
         tileset.count = Math.min(tileset.count, t.count ?? tileset.count);
       }
+      if (t.splitMode) tileset.splitMode = t.splitMode;
+      if (Array.isArray(t.assets)) tileset.assets = t.assets.map((a) => ({ ...a }));
       tilesets.push(tileset);
     } catch {
       // A tileset that fails to decode would otherwise shift every later
@@ -229,6 +288,11 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       locked: l.locked,
       opacity: l.opacity ?? 1,
     };
+
+    if (l.kind === 'objects') {
+      layers.push({ ...base, kind: 'objects', objects: (l.objects ?? []).map(readObject) });
+      continue;
+    }
 
     if (l.kind === 'image') {
       // A reference image that cannot be decoded still keeps its slot and
