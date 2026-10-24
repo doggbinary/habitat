@@ -10,6 +10,7 @@ import {
   type Tileset,
 } from './core/doc';
 import { DETECT_VERSION, assetsOf, deleteAssets, detectSheetAssets, mergeAssets, tileIndexOf } from './core/assets';
+import { isSampleMap, type LibraryEntry } from './library';
 import { dominantColor, recolorToCanvas } from './io/recolor';
 import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
 import { cropAsset } from './render/object-draw';
@@ -182,9 +183,75 @@ export class App {
     this.renderer.resize();
     this.fit();
 
+    const added = await this.loadObjectLibrary();
     // A brand-new project has nothing to paint with, so send the user
     // straight to the import step.
     if (this.store.doc.tilesets.length === 0) this.addTileset();
+    else if (added > 0) this.shell.openTab('tiles');
+  }
+
+  /**
+   * Pulls in the object pages served from this computer: houses, lamps,
+   * furniture. Ground grids and finished scene pictures are left out. Pages
+   * already in the project are not added again.
+   */
+  private async loadObjectLibrary(): Promise<number> {
+    let entries: LibraryEntry[];
+    try {
+      const response = await fetch(new URL('library/manifest.json', document.baseURI));
+      if (!response.ok) return 0;
+      entries = (await response.json()) as LibraryEntry[];
+    } catch {
+      return 0;
+    }
+    if (!Array.isArray(entries) || entries.length === 0) return 0;
+
+    const skipKey = `pf-library-skip-${DETECT_VERSION}`;
+    let skipped = new Set<string>();
+    try {
+      const stored = JSON.parse(localStorage.getItem(skipKey) ?? '[]') as unknown;
+      if (Array.isArray(stored)) skipped = new Set(stored.filter((name) => typeof name === 'string'));
+    } catch {
+      /* a blocked localStorage just means scene pages are checked again */
+    }
+
+    const have = new Set(this.store.doc.tilesets.map((sheet) => sheet.name));
+    const fresh: Tileset[] = [];
+    for (const entry of entries) {
+      if (have.has(entry.name) || skipped.has(entry.name)) continue;
+      this.store.toast(`Loading ${entry.name}`);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      try {
+        const tileset = await makeTileset(new URL(entry.url, document.baseURI).href, entry.name, 48, 48);
+        detectInto(tileset);
+        if (isSampleMap(tileset.imgW, tileset.imgH, tileset.assets ?? [])) {
+          skipped.add(entry.name);
+          continue;
+        }
+        fresh.push(tileset);
+        have.add(entry.name);
+      } catch {
+        /* one unreadable page should not drop the rest */
+      }
+    }
+    try {
+      localStorage.setItem(skipKey, JSON.stringify([...skipped]));
+    } catch {
+      /* the pages still loaded for this visit */
+    }
+    if (fresh.length === 0) return 0;
+
+    const empty = this.store.doc.tilesets.length === 0;
+    this.editor.structural('Add asset library', () => {
+      this.store.doc.tilesets.push(...fresh);
+    });
+    if (empty) {
+      const lamps = this.store.doc.tilesets.findIndex((sheet) => sheet.name === 'Modern Suburb Neighborhood 1');
+      this.store.activeTileset = lamps >= 0 ? lamps : 0;
+      this.selectFirstTile();
+    }
+    this.store.toast(`${fresh.length} asset ${fresh.length === 1 ? 'page' : 'pages'} ready`);
+    return fresh.length;
   }
 
   /** Installs a document and resets everything derived from the old one. */
