@@ -140,6 +140,7 @@ export class Renderer {
 
     this.drawCharacterPreview(doc, originX, originY, zoom);
     this.drawSelection(doc, originX, originY, zoom);
+    this.drawDropPreview(doc, originX, originY, zoom);
 
     // A selected reference image takes over the canvas interaction, so show
     // its handles instead of a brush cursor that would not do anything.
@@ -267,6 +268,27 @@ export class Renderer {
       selection.h * cell,
     );
     ctx.setLineDash([]);
+  }
+
+  /** Where a tile dragged out of the palette will land if released now. */
+  private drawDropPreview(doc: Doc, originX: number, originY: number, zoom: number): void {
+    const drop = this.store.dropPreview;
+    const stamp = this.store.stamp;
+    if (!drop || isEmptyStamp(stamp)) return;
+    const { ctx } = this;
+    const cell = doc.tileSize * zoom;
+
+    ctx.globalAlpha = 0.7;
+    for (let y = 0; y < stamp.h; y++) {
+      for (let x = 0; x < stamp.w; x++) {
+        this.drawPreviewTile(doc, stamp.tiles[y * stamp.w + x], drop.x + x, drop.y + y, originX, originY, cell);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = COLOR_CURSOR;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(originX + drop.x * cell, originY + drop.y * cell, stamp.w * cell, stamp.h * cell);
   }
 
   /** Dashed outline and corner grip for the selected reference image. */

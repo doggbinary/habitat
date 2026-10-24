@@ -24,6 +24,8 @@ type Mode = 'idle' | 'draw' | 'pan' | 'gesture' | 'image' | 'selection-rect' | '
 /** A multi-finger tap only counts as a shortcut if it is quick and still. */
 const TAP_MAX_MS = 320;
 const TAP_MAX_MOVE = 12;
+/** Window for the second tap of a double-tap. */
+const DOUBLE_TAP_MS = 380;
 
 /**
  * Translates pointer events into editing and navigation.
@@ -44,6 +46,17 @@ export class PointerInput {
 
   private penDown = false;
   private spaceHeld = false;
+
+  /** Where the current single-finger touch began, for tap detection. */
+  private tapStart: { clientX: number; clientY: number; x: number; y: number } | null = null;
+  private lastTap: { time: number; cell: { x: number; y: number } } | null = null;
+
+  /**
+   * Called when a placed tile is double-tapped. Fingers do not paint unless
+   * you opt in, so a finger double-tap is free to mean "edit this tile"
+   * without colliding with drawing.
+   */
+  onDoubleTap: ((cell: { x: number; y: number }, clientX: number, clientY: number) => void) | null = null;
 
   /** Captured when a stroke starts so a mid-stroke tool change cannot confuse it. */
   private strokeShape: Shape = 'brush';
@@ -86,6 +99,14 @@ export class PointerInput {
     canvas.addEventListener('pointerleave', this.onLeave);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    // With a mouse, a click paints, so double-click only opens the menu from
+    // tools that do not change the map on click.
+    canvas.addEventListener('dblclick', (e) => {
+      const tool = this.store.tool;
+      if (tool !== 'select' && tool !== 'pan') return;
+      const { x, y } = this.local(e);
+      this.onDoubleTap?.(this.cellAt(x, y), e.clientX, e.clientY);
+    });
 
     // Safari fires these for pinches on the page itself; swallowing them stops
     // the whole app from zooming out from under the editor.
@@ -305,6 +326,7 @@ export class PointerInput {
     if (fingers === 1) {
       this.gestureStart = performance.now();
       this.gestureMoved = false;
+      this.tapStart = { clientX: e.clientX, clientY: e.clientY, x, y };
       const drawsWithFinger =
         this.store.settings.fingerDraws && this.store.tool !== 'pan' && !this.spaceHeld;
       if (drawsWithFinger) this.startDraw(pointer, false);
@@ -594,6 +616,19 @@ export class PointerInput {
     this.renderer.requestDraw();
   }
 
+  /** Two quick taps on the same cell open that tile's menu. */
+  private registerTap(point: { clientX: number; clientY: number; x: number; y: number }): void {
+    const now = performance.now();
+    const cell = this.cellAt(point.x, point.y);
+    const last = this.lastTap;
+    if (last && now - last.time < DOUBLE_TAP_MS && last.cell.x === cell.x && last.cell.y === cell.y) {
+      this.lastTap = null;
+      this.onDoubleTap?.(cell, point.clientX, point.clientY);
+      return;
+    }
+    this.lastTap = { time: now, cell };
+  }
+
   /** Called when the last pointer lifts: resolves multi-finger tap shortcuts. */
   private endInteraction(): void {
     const elapsed = performance.now() - this.gestureStart;
@@ -608,6 +643,10 @@ export class PointerInput {
     this.anchorCell = null;
 
     if (!wasTap) return;
+    if (fingers === 1 && this.tapStart) {
+      this.registerTap(this.tapStart);
+      return;
+    }
     if (fingers === 2) {
       this.editor.undo();
       this.store.toast('Undo');

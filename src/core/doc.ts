@@ -9,13 +9,22 @@ export interface Tileset {
   tileH: number;
   margin: number;
   spacing: number;
-  /** Decoded image. Rebuilt from `src` on load, never serialised. */
-  image: HTMLImageElement | null;
+  /**
+   * Decoded image. Rebuilt from `src` on load, never serialised. A canvas for
+   * generated sheets, which grow as tiles are added to them.
+   */
+  image: HTMLImageElement | HTMLCanvasElement | null;
   imgW: number;
   imgH: number;
   cols: number;
   rows: number;
   count: number;
+  /**
+   * True for sheets the editor creates itself to hold edited tiles, such as a
+   * single recoloured tree. Their slot count is authoritative rather than
+   * derived from the image size, because the image grows ahead of use.
+   */
+  generated?: boolean;
 }
 
 interface LayerBase {

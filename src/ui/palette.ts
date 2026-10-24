@@ -1,6 +1,8 @@
 import type { Tileset } from '../core/doc';
 import { EMPTY_STAMP, singleStamp, stampFromRegion } from '../core/stamp';
 import type { Store } from '../core/store';
+import { EMPTY } from '../core/tiles';
+import { drawTile } from '../render/tile-draw';
 import { button, clear, el } from './dom';
 import { icon } from './icons';
 
@@ -36,7 +38,9 @@ export class PalettePanel {
   private blankTiles = new Uint8Array(0);
   private blankKey = '';
 
-  private mode: 'idle' | 'select' | 'scroll' = 'idle';
+  private mode: 'idle' | 'select' | 'scroll' | 'drag' = 'idle';
+  /** Floating copy of the brush that follows a drag out onto the map. */
+  private ghost: HTMLCanvasElement | null = null;
   private activeId: number | null = null;
   private dragStart: { x: number; y: number } | null = null;
   private lastPoint = { x: 0, y: 0 };
@@ -50,7 +54,10 @@ export class PalettePanel {
       addTileset: () => void;
       editTileset: (index: number) => void;
       removeTileset: (index: number) => void;
-      recolorTileset: (index: number) => void;
+      /** Updates the map's drop preview while a drag is in flight. */
+      dragOver: (clientX: number, clientY: number) => void;
+      /** Places the brush where the drag was released; a miss does nothing. */
+      drop: (clientX: number, clientY: number) => void;
     },
   ) {
     this.canvas = el('canvas', { class: 'palette-canvas' });
@@ -252,6 +259,21 @@ export class PalettePanel {
           return;
         }
 
+        if (this.mode === 'drag') {
+          this.moveGhost(e.clientX, e.clientY);
+          this.actions.dragOver(e.clientX, e.clientY);
+          return;
+        }
+
+        // Carrying a selection out past the palette's edge turns it into a
+        // drag onto the map. Inside the palette it keeps extending the marquee.
+        if (!this.insidePalette(e.clientX, e.clientY)) {
+          this.mode = 'drag';
+          this.showGhost(e.clientX, e.clientY);
+          this.actions.dragOver(e.clientX, e.clientY);
+          return;
+        }
+
         if (!this.dragStart) return;
         const cell = this.tileAt(e.clientX, e.clientY);
         if (cell) this.applySelection(this.dragStart, cell);
@@ -264,12 +286,70 @@ export class PalettePanel {
       if (canvas.hasPointerCapture?.(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
       if (e.pointerId !== this.activeId) return;
       if (this.mode === 'scroll') this.startFling();
+      if (this.mode === 'drag') {
+        // A cancelled pointer is a cancelled drop, not a drop where it died.
+        if (e.type === 'pointerup') this.actions.drop(e.clientX, e.clientY);
+        else this.actions.dragOver(Number.NaN, Number.NaN);
+        this.hideGhost();
+      }
       this.mode = 'idle';
       this.activeId = null;
       this.dragStart = null;
     };
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', end);
+  }
+
+  // --- Drag and drop -------------------------------------------------------
+
+  private insidePalette(clientX: number, clientY: number): boolean {
+    const rect = this.scroller.getBoundingClientRect();
+    return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  }
+
+  /** Renders the current brush into a small canvas that follows the drag. */
+  private showGhost(clientX: number, clientY: number): void {
+    this.hideGhost();
+    const stamp = this.store.stamp;
+    if (stamp.w === 0) return;
+
+    // Big enough to read under a fingertip, small enough not to hide the map.
+    const cell = Math.max(18, Math.min(40, Math.floor(120 / Math.max(stamp.w, stamp.h))));
+    const ghost = el('canvas', { class: 'drag-ghost' });
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    ghost.width = stamp.w * cell * dpr;
+    ghost.height = stamp.h * cell * dpr;
+    ghost.style.width = `${stamp.w * cell}px`;
+    ghost.style.height = `${stamp.h * cell}px`;
+
+    const ctx = ghost.getContext('2d');
+    if (ctx) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      for (let y = 0; y < stamp.h; y++) {
+        for (let x = 0; x < stamp.w; x++) {
+          const tile = stamp.tiles[y * stamp.w + x];
+          if (tile !== EMPTY) drawTile(ctx, this.store.doc, tile, x * cell, y * cell, cell);
+        }
+      }
+    }
+
+    document.body.append(ghost);
+    this.ghost = ghost;
+    this.moveGhost(clientX, clientY);
+  }
+
+  private moveGhost(clientX: number, clientY: number): void {
+    if (!this.ghost) return;
+    // Lift it above the finger so the drop target is not hidden underneath.
+    const w = this.ghost.offsetWidth;
+    const h = this.ghost.offsetHeight;
+    this.ghost.style.transform = `translate(${clientX - w / 2}px, ${clientY - h - 28}px)`;
+  }
+
+  private hideGhost(): void {
+    this.ghost?.remove();
+    this.ghost = null;
   }
 
   // --- Header --------------------------------------------------------------
@@ -323,9 +403,6 @@ export class PalettePanel {
       el('div', { class: 'palette-row' }, [
         button('icon-btn', 'Tileset settings', () => this.actions.editTileset(current), [icon('settings', 18)]),
         button('icon-btn', 'Import another tileset', () => this.actions.addTileset(), [icon('plus', 18)]),
-        button('icon-btn', 'Recolour into a new sheet', () => this.actions.recolorTileset(current), [
-          icon('palette', 18),
-        ]),
         button('icon-btn danger', 'Remove tileset', () => this.actions.removeTileset(current), [icon('trash', 18)]),
         el('div', { class: 'spacer' }),
         this.toggle('dice', 'Scatter: place a random tile from the selection', this.store.settings.randomize, () => {
@@ -335,7 +412,7 @@ export class PalettePanel {
       ]),
       el('p', {
         class: 'hint',
-        text: 'Drag across tiles to select a block. Drag from an empty square, or with two fingers, to scroll.',
+        text: 'Drag across tiles to select, and keep dragging onto the map to place them. Drag from an empty square, or with two fingers, to scroll.',
       }),
     );
   }

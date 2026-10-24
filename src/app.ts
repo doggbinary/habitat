@@ -12,6 +12,8 @@ import { frameIndex } from './character/model';
 import { Studio } from './character/studio';
 import { CharacterView } from './character/view';
 import { EMPTY_STAMP, singleStamp } from './core/stamp';
+import { EMPTY } from './core/tiles';
+import { openAssetMenu } from './ui/asset-menu';
 import { CharacterPanel } from './ui/character-panel';
 import { Store } from './core/store';
 import { bindKeyboard } from './input/keyboard';
@@ -20,7 +22,6 @@ import { PlayMode } from './play/play-mode';
 import {
   openExportDialog,
   openNewMapDialog,
-  openRecolorDialog,
   openSpriteSheetDialog,
   openTilesetDialog,
   pickFile,
@@ -62,7 +63,8 @@ export class App {
       addTileset: () => this.addTileset(),
       editTileset: (index) => this.editTileset(index),
       removeTileset: (index) => this.confirmRemoveTileset(index),
-      recolorTileset: (index) => this.recolorTileset(index),
+      dragOver: (x, y) => this.dragOver(x, y),
+      drop: (x, y) => this.drop(x, y),
       addImageLayer: () => void this.addImageLayer(),
       replaceImage: (index) => void this.replaceImage(index),
       newMap: () => this.newMap(),
@@ -90,6 +92,7 @@ export class App {
       fitToView: () => this.fit(),
     });
 
+    this.input.onDoubleTap = (cell, x, y) => this.openAssetMenuAt(cell, x, y);
     this.renderer.setCharacterSource(() => this.characterFrame());
     this.animatePreview();
 
@@ -312,33 +315,61 @@ export class App {
     });
   }
 
-  /** Adds a hue-shifted copy of a tileset as a new sheet, keeping the original. */
-  private recolorTileset(index: number): void {
-    const tileset = this.store.doc.tilesets[index];
-    if (!tileset?.image) {
-      this.store.toast('Import a tileset first');
+  // --- Drag and drop from the palette --------------------------------------
+
+  /**
+   * Works out where a palette drag would land. The block is centred on the
+   * finger, so what you drop is where you are pointing rather than hanging
+   * off to the bottom-right of it.
+   */
+  private dropCell(clientX: number, clientY: number): { x: number; y: number } | null {
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const inside =
+      clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    if (!inside) return null;
+    const cell = screenToCell(this.store.camera, this.store.doc, clientX - rect.left, clientY - rect.top);
+    const stamp = this.store.stamp;
+    return { x: cell.x - Math.floor((stamp.w - 1) / 2), y: cell.y - Math.floor((stamp.h - 1) / 2) };
+  }
+
+  private dragOver(clientX: number, clientY: number): void {
+    this.store.dropPreview = this.dropCell(clientX, clientY);
+    this.renderer.requestDraw();
+  }
+
+  private drop(clientX: number, clientY: number): void {
+    const at = this.dropCell(clientX, clientY);
+    this.store.dropPreview = null;
+    this.renderer.requestDraw();
+    if (!at) return;
+    if (!this.editor.beginStroke('Place tiles')) return;
+    this.editor.paintStamp(at.x, at.y);
+    this.editor.endStroke();
+  }
+
+  // --- Per-tile menu -------------------------------------------------------
+
+  /**
+   * Opens the menu for whatever tile you can see at a cell. That is the
+   * topmost visible tile layer with something there, not necessarily the
+   * active one, because you double-tapped what you were looking at.
+   */
+  private openAssetMenuAt(cell: { x: number; y: number }, clientX: number, clientY: number): void {
+    const doc = this.store.doc;
+    if (cell.x < 0 || cell.y < 0 || cell.x >= doc.width || cell.y >= doc.height) return;
+
+    for (let i = doc.layers.length - 1; i >= 0; i--) {
+      const layer = doc.layers[i];
+      if (!layer.visible || layer.kind !== 'tiles') continue;
+      if (layer.data[cell.y * doc.width + cell.x] === EMPTY) continue;
+      if (layer.locked) {
+        this.store.toast(`${layer.name} is locked`);
+        return;
+      }
+      openAssetMenu({ store: this.store, renderer: this.renderer, layer, cell, clientX, clientY });
       return;
     }
-    openRecolorDialog({
-      tileset,
-      onConfirm: async (src, name) => {
-        try {
-          const next = await makeTileset(
-            src,
-            name,
-            tileset.tileW,
-            tileset.tileH,
-            tileset.margin,
-            tileset.spacing,
-          );
-          this.editor.addTileset(next);
-          this.shell.palette.showPage(this.store.doc.tilesets.length - 1);
-          this.store.toast(`Added ${name}`);
-        } catch {
-          this.store.toast('That recolour could not be applied');
-        }
-      },
-    });
   }
 
   private confirmRemoveTileset(index: number): void {

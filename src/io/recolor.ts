@@ -1,4 +1,4 @@
-import { hsvToRgb, rgbToHsv } from '../ui/color-wheel';
+import { hsvToRgb, rgbToHsv, type HSV } from '../ui/color-wheel';
 
 /**
  * Recolours a spritesheet by rotating its hues rather than replacing colours.
@@ -16,8 +16,6 @@ export interface RecolorOptions {
   /** Brightness multiplier, 1 leaves it alone. */
   brightness: number;
 }
-
-export const NO_RECOLOR: RecolorOptions = { hueShift: 0, saturation: 1, brightness: 1 };
 
 /**
  * The hue the art is "about", weighted by how colourful each pixel is.
@@ -57,10 +55,32 @@ export function dominantHue(image: HTMLImageElement | HTMLCanvasElement): number
   return angle;
 }
 
-/** Applies the recolour and returns a PNG data URL ready to become a tileset. */
-export function recolorToDataUrl(image: HTMLImageElement, options: RecolorOptions): string {
-  const canvas = recolorToCanvas(image, options);
-  return canvas.toDataURL('image/png');
+/**
+ * The colour a tile reads as: dominant hue plus its average saturation and
+ * brightness. The asset menu starts its wheel here, so the marker sits on the
+ * tile's own colour and dragging it moves the tile from where it already is.
+ */
+export function dominantColor(image: HTMLImageElement | HTMLCanvasElement): HSV {
+  const canvas = document.createElement('canvas');
+  const w = (canvas.width = image instanceof HTMLImageElement ? image.naturalWidth : image.width);
+  const h = (canvas.height = image instanceof HTMLImageElement ? image.naturalHeight : image.height);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx || w === 0 || h === 0) return { h: 0, s: 0, v: 1 };
+  ctx.drawImage(image, 0, 0);
+
+  const { data } = ctx.getImageData(0, 0, w, h);
+  let sTotal = 0;
+  let vTotal = 0;
+  let count = 0;
+  for (let o = 0; o < data.length; o += 4) {
+    if (data[o + 3] < 128) continue;
+    const hsv = rgbToHsv(data[o], data[o + 1], data[o + 2]);
+    sTotal += hsv.s;
+    vTotal += hsv.v;
+    count += 1;
+  }
+  if (count === 0) return { h: 0, s: 0, v: 1 };
+  return { h: dominantHue(image), s: sTotal / count, v: vTotal / count };
 }
 
 export function recolorToCanvas(

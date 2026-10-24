@@ -45,6 +45,9 @@ interface SerializedTileset {
   tileH: number;
   margin: number;
   spacing: number;
+  /** Present for editor-generated sheets, whose slot count is not derivable. */
+  generated?: boolean;
+  count?: number;
 }
 
 interface SerializedCharacter {
@@ -124,6 +127,7 @@ export function serializeProject(doc: Doc, characters: Character[] = []): Serial
       tileH: t.tileH,
       margin: t.margin,
       spacing: t.spacing,
+      ...(t.generated ? { generated: true, count: t.count } : {}),
     })),
     layers: doc.layers.map((l): SerializedLayer => {
       const base = {
@@ -188,6 +192,12 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       const tileset = await makeTileset(t.src, t.name, t.tileW, t.tileH, t.margin, t.spacing);
       // Keep the saved id so nothing else in the project has to be remapped.
       tileset.id = t.id;
+      if (t.generated) {
+        // The image has spare slots past the last real tile; trust the saved
+        // count, or the next edit would land after a run of blanks.
+        tileset.generated = true;
+        tileset.count = Math.min(tileset.count, t.count ?? tileset.count);
+      }
       tilesets.push(tileset);
     } catch {
       // A tileset that fails to decode would otherwise shift every later

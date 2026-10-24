@@ -1,8 +1,6 @@
 import { guessLayout, sheetGeometry, type SheetLayout } from '../character/import';
 import { DIRECTIONS, DIRECTION_LABELS, type Character } from '../character/model';
-import { MAX_MAP_SIZE, MIN_MAP_SIZE, loadImage, sliceCount, type Tileset } from '../core/doc';
-import { NO_RECOLOR, dominantHue, recolorToCanvas, type RecolorOptions } from '../io/recolor';
-import { ColorWheel, hexToHsv, hsvToHex } from './color-wheel';
+import { MAX_MAP_SIZE, MIN_MAP_SIZE, loadImage, sliceCount } from '../core/doc';
 import type { Store } from '../core/store';
 import {
   buildMapJson,
@@ -419,109 +417,6 @@ export function openSpriteSheetDialog(options: {
         },
       },
     ],
-  });
-}
-
-/**
- * Creates a recoloured copy of a tileset as a new sheet.
- *
- * The wheel picks the colour the art should become, and the hue rotation
- * needed to get there is worked out from the sheet's own dominant hue. So
- * dragging to orange turns green grass autumnal without you having to think
- * in degrees.
- */
-export function openRecolorDialog(options: {
-  tileset: Tileset;
-  onConfirm: (src: string, name: string) => void;
-}): void {
-  const { tileset } = options;
-  if (!tileset.image) return;
-
-  const source = tileset.image;
-  const baseHue = dominantHue(source);
-  let settings: RecolorOptions = { ...NO_RECOLOR };
-
-  const name = el('input', { class: 'input', type: 'text', value: `${tileset.name} (recoloured)` });
-  const preview = el('canvas', { class: 'tileset-preview' });
-
-  const saturation = el('input', { class: 'slider', type: 'range', min: 0, max: 200, step: 5, value: 100 });
-  const brightness = el('input', { class: 'slider', type: 'range', min: 20, max: 180, step: 5, value: 100 });
-  const satReadout = el('span', { class: 'slider-value', text: '100%' });
-  const briReadout = el('span', { class: 'slider-value', text: '100%' });
-
-  const redraw = () => {
-    const recoloured = recolorToCanvas(source, settings);
-    const box = 320;
-    const scale = Math.min(box / recoloured.width, box / recoloured.height, 4);
-    const w = Math.max(1, Math.round(recoloured.width * scale));
-    const h = Math.max(1, Math.round(recoloured.height * scale));
-    preview.width = w;
-    preview.height = h;
-    preview.style.width = `${w}px`;
-    preview.style.height = `${h}px`;
-    const ctx = preview.getContext('2d');
-    if (!ctx) return;
-    ctx.imageSmoothingEnabled = scale < 1;
-    ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(recoloured, 0, 0, w, h);
-  };
-
-  const wheel = new ColorWheel(hsvToHex({ h: baseHue, s: 0.75, v: 0.9 }), (hex) => {
-    const target = hexToHsv(hex);
-    // Rotate the whole sheet by the gap between its own hue and the target.
-    settings.hueShift = target.h - baseHue;
-    redraw();
-  });
-
-  saturation.addEventListener('input', () => {
-    settings.saturation = Number(saturation.value) / 100;
-    satReadout.textContent = `${saturation.value}%`;
-    redraw();
-  });
-  brightness.addEventListener('input', () => {
-    settings.brightness = Number(brightness.value) / 100;
-    briReadout.textContent = `${brightness.value}%`;
-    redraw();
-  });
-
-  const body = el('div', { class: 'dialog-body' }, [
-    el('div', { class: 'preview-wrap' }, [preview]),
-    wheel.element,
-    el('label', { class: 'field' }, [
-      el('span', { class: 'field-label', text: 'Saturation' }),
-      el('div', { class: 'slider-row' }, [saturation, satReadout]),
-    ]),
-    el('label', { class: 'field' }, [
-      el('span', { class: 'field-label', text: 'Brightness' }),
-      el('div', { class: 'slider-row' }, [brightness, briReadout]),
-    ]),
-    field('Name', name),
-    el('p', {
-      class: 'hint',
-      text: 'The original sheet is kept. This adds a new one you can page to with the arrows.',
-    }),
-  ]);
-
-  openModal({
-    title: `Recolour ${tileset.name}`,
-    body,
-    actions: [
-      { label: 'Cancel' },
-      {
-        label: 'Add recoloured sheet',
-        variant: 'primary',
-        onSelect: () => {
-          const canvas = recolorToCanvas(source, settings);
-          options.onConfirm(canvas.toDataURL('image/png'), name.value.trim() || `${tileset.name} (recoloured)`);
-        },
-      },
-    ],
-  });
-
-  // The wheel needs a measured width, which only exists once it is mounted.
-  requestAnimationFrame(() => {
-    wheel.layout();
-    redraw();
   });
 }
 

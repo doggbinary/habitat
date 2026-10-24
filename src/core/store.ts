@@ -107,6 +107,8 @@ export class Store {
   preview: { x0: number; y0: number; x1: number; y1: number } | null = null;
   /** Tiles currently picked up with the select tool. */
   selection: MapSelection | null = null;
+  /** Where a tile dragged out of the palette would land, in tiles. */
+  dropPreview: { x: number; y: number } | null = null;
 
   private readonly listeners = new Map<EventName, Set<Listener>>();
 
