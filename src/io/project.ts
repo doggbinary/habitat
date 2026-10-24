@@ -100,6 +100,8 @@ interface SerializedTileset {
    */
   splitMode?: 'grid' | 'objects';
   assets?: AssetRect[];
+  assetsVersion?: number;
+  assetsEdited?: boolean;
 }
 
 interface SerializedCharacter {
@@ -182,6 +184,8 @@ export function serializeProject(doc: Doc, characters: Character[] = []): Serial
       ...(t.generated ? { generated: true, count: t.count } : {}),
       ...(t.splitMode ? { splitMode: t.splitMode } : {}),
       ...(t.assets ? { assets: t.assets.map((a) => ({ ...a })) } : {}),
+      ...(t.assetsVersion ? { assetsVersion: t.assetsVersion } : {}),
+      ...(t.assetsEdited ? { assetsEdited: true } : {}),
     })),
     layers: doc.layers.map((l): SerializedLayer => {
       const base = {
@@ -257,6 +261,8 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       }
       if (t.splitMode) tileset.splitMode = t.splitMode;
       if (Array.isArray(t.assets)) tileset.assets = t.assets.map((a) => ({ ...a }));
+      if (t.assetsVersion) tileset.assetsVersion = t.assetsVersion;
+      if (t.assetsEdited) tileset.assetsEdited = true;
       tilesets.push(tileset);
     } catch {
       // A tileset that fails to decode would otherwise shift every later

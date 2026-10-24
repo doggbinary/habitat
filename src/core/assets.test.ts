@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectAssetsInMask, type TileGrid } from './assets';
+import { detectAssetsInMask, splitAssetByGrid, type TileGrid } from './assets';
 
 /** A sheet built from ASCII art: `#` is opaque, anything else transparent. */
 function sheet(rows: string[]): { alpha: Uint8Array; w: number; h: number } {
@@ -10,7 +10,7 @@ function sheet(rows: string[]): { alpha: Uint8Array; w: number; h: number } {
   return { alpha, w, h };
 }
 
-/** Fills a w x h sheet with solid blocks at the given rects. */
+/** A w x h sheet with solid blocks at the given rects. */
 function blocks(w: number, h: number, rects: [number, number, number, number][]) {
   const alpha = new Uint8Array(w * h);
   for (const [x0, y0, bw, bh] of rects) {
@@ -19,114 +19,104 @@ function blocks(w: number, h: number, rects: [number, number, number, number][])
   return alpha;
 }
 
+const tile: TileGrid = { w: 48, h: 48, margin: 0, spacing: 0 };
+
 describe('finding props on a sheet', () => {
-  it('finds each well-separated prop, fitted to its pixels', () => {
+  it('finds each separate prop whole, fitted to its pixels', () => {
     const s = sheet([
       '..........',
       '.##....##.',
       '.##....##.',
       '..........',
-      '..........',
-      '..........',
       '....###...',
       '....###...',
     ]);
-    const found = detectAssetsInMask(s.alpha, s.w, s.h, { minArea: 1 });
-    expect(found).toEqual([
+    expect(detectAssetsInMask(s.alpha, s.w, s.h, { minArea: 1 })).toEqual([
       { x: 1, y: 1, w: 2, h: 2 },
       { x: 7, y: 1, w: 2, h: 2 },
-      { x: 4, y: 6, w: 3, h: 2 },
+      { x: 4, y: 4, w: 3, h: 2 },
     ]);
   });
 
-  it('bridges a gap of exactly `gap` pixels but not one wider', () => {
-    const bridged = sheet(['##..##']);
-    expect(detectAssetsInMask(bridged.alpha, bridged.w, bridged.h, { minArea: 1, gap: 2 })).toHaveLength(1);
-    const apart = sheet(['##...##']);
-    expect(detectAssetsInMask(apart.alpha, apart.w, apart.h, { minArea: 1, gap: 2 })).toHaveLength(2);
+  it('keeps props a single pixel apart separate', () => {
+    // The regression that fused stacked trees into one tall blob: sheets pack
+    // separate props this close, so nothing may bridge the gap between them.
+    const alpha = blocks(200, 200, [
+      [0, 0, 96, 96],
+      [0, 97, 96, 96],
+    ]);
+    expect(detectAssetsInMask(alpha, 200, 200, { tile })).toEqual([
+      { x: 0, y: 0, w: 96, h: 96 },
+      { x: 0, y: 97, w: 96, h: 96 },
+    ]);
   });
 
-  it('keeps a prop whole when its parts nearly touch', () => {
-    // A canopy over a trunk, one transparent row between them.
-    const s = sheet(['.####.', '.####.', '......', '..##..', '..##..']);
-    expect(detectAssetsInMask(s.alpha, s.w, s.h, { minArea: 1 })).toEqual([{ x: 1, y: 0, w: 4, h: 5 }]);
+  it('never cuts a large prop into grid squares', () => {
+    // One 5x5-tile fountain: big, but a single piece of art.
+    const alpha = blocks(400, 400, [[10, 10, 240, 240], [300, 300, 20, 20]]);
+    expect(detectAssetsInMask(alpha, 400, 400, { tile })).toContainEqual({ x: 10, y: 10, w: 240, h: 240 });
   });
 
-  it('drops scraps too small to be a prop', () => {
-    const s = sheet(['#........', '.........', '.........', '.........', '....####.', '....####.']);
-    expect(detectAssetsInMask(s.alpha, s.w, s.h, { minArea: 4 })).toEqual([{ x: 4, y: 4, w: 4, h: 2 }]);
+  it('drops specks too small to be a prop', () => {
+    const alpha = blocks(200, 200, [[0, 0, 2, 2], [100, 100, 40, 40]]);
+    expect(detectAssetsInMask(alpha, 200, 200, { tile, minArea: 16 })).toEqual([{ x: 100, y: 100, w: 40, h: 40 }]);
   });
 
   it('lists props in reading order, row by row', () => {
-    const s = sheet(['##...##', '##...##', '.......', '.......', '.......', '##.....', '##.....']);
-    const found = detectAssetsInMask(s.alpha, s.w, s.h, { minArea: 1 });
-    expect(found.map((r) => [r.x, r.y])).toEqual([
+    const alpha = blocks(200, 200, [
+      [100, 0, 40, 40],
+      [0, 0, 40, 40],
+      [0, 100, 40, 40],
+    ]);
+    expect(detectAssetsInMask(alpha, 200, 200, { tile }).map((r) => [r.x, r.y])).toEqual([
       [0, 0],
-      [5, 0],
-      [0, 5],
+      [100, 0],
+      [0, 100],
     ]);
   });
 });
 
-describe('densely packed sheets', () => {
-  // RPG Maker style: 16px props packed edge to edge on a 16px grid, so there
-  // is no transparency at all between neighbours. Transparency alone fuses
-  // the whole block into one giant "prop".
-  const tile: TileGrid = { w: 16, h: 16, margin: 0, spacing: 0 };
+describe('rejoining detached scraps', () => {
+  it('folds a tiny scrap hugging a big prop into it', () => {
+    // A swing frame with a small seat shadow 2px below it.
+    const alpha = blocks(200, 200, [[20, 20, 100, 60], [60, 82, 10, 4]]);
+    expect(detectAssetsInMask(alpha, 200, 200, { tile })).toEqual([{ x: 20, y: 20, w: 100, h: 66 }]);
+  });
 
-  it('splits a fused block back into its grid cells instead of one giant prop', () => {
-    const w = 128;
-    const h = 128;
-    // A 6x6 block of touching props in one corner, plus one loose prop.
-    const alpha = blocks(w, h, [
-      [0, 0, 96, 96],
-      [112, 112, 12, 12],
+  it('leaves a chair beside a table as its own prop', () => {
+    // 15x15 is a real prop, not a scrap, even right next to something bigger.
+    const alpha = blocks(200, 200, [[20, 20, 60, 60], [82, 40, 15, 15]]);
+    expect(detectAssetsInMask(alpha, 200, 200, { tile })).toHaveLength(2);
+  });
+
+  it('leaves a scrap alone when nothing big is close enough', () => {
+    const alpha = blocks(200, 200, [[20, 20, 60, 60], [100, 100, 8, 8]]);
+    expect(detectAssetsInMask(alpha, 200, 200, { tile })).toHaveLength(2);
+  });
+
+  it('never lets two small props swallow each other', () => {
+    // Two pebbles side by side: neither is big enough to be the other's parent.
+    const alpha = blocks(200, 200, [[20, 20, 8, 8], [30, 20, 8, 8]]);
+    expect(detectAssetsInMask(alpha, 200, 200, { tile })).toHaveLength(2);
+  });
+});
+
+describe('splitting by hand into tiles', () => {
+  it('cuts a strip of blended art into one asset per tile', () => {
+    // Three tulip beds drawn to tile into each other: a solid 144x48 strip.
+    const alpha = blocks(200, 100, [[0, 0, 144, 48]]);
+    expect(splitAssetByGrid(alpha, 200, { x: 0, y: 0, w: 144, h: 48 }, tile)).toEqual([
+      { x: 0, y: 0, w: 48, h: 48 },
+      { x: 48, y: 0, w: 48, h: 48 },
+      { x: 96, y: 0, w: 48, h: 48 },
     ]);
-    const found = detectAssetsInMask(alpha, w, h, { tile });
-
-    expect(found.every((r) => r.w <= 16 && r.h <= 16)).toBe(true);
-    // 36 cells from the block, plus the loose prop.
-    expect(found).toHaveLength(37);
-    expect(found).toContainEqual({ x: 112, y: 112, w: 12, h: 12 });
   });
 
-  it('leaves a large but genuinely single prop alone when it is not oversized', () => {
-    const w = 256;
-    const h = 256;
-    // A 3x3-tile prop: big, but well under the oversize threshold.
-    const alpha = blocks(w, h, [[10, 10, 48, 48]]);
-    expect(detectAssetsInMask(alpha, w, h, { tile })).toEqual([{ x: 10, y: 10, w: 48, h: 48 }]);
-  });
-
-  it('un-fuses props that only merged because of gap bridging, keeping each whole', () => {
-    const w = 160;
-    const h = 160;
-    // A 6x6 grid of 14px props with 2px gaps. Bridging the gaps fuses them
-    // into one huge blob, but they are separate by transparency, so the
-    // second pass recovers each prop intact rather than cutting cells.
-    const grid: [number, number, number, number][] = [];
-    for (let row = 0; row < 6; row++) for (let col = 0; col < 6; col++) grid.push([col * 16, row * 16, 14, 14]);
-    const alpha = blocks(w, h, [...grid, [130, 130, 12, 12], [130, 100, 12, 12]]);
-
-    const found = detectAssetsInMask(alpha, w, h, { tile, gap: 2 });
-    const props = found.filter((r) => r.x < 128 && r.y < 128);
-    expect(props).toHaveLength(36);
-    expect(props.every((r) => r.w === 14 && r.h === 14)).toBe(true);
-  });
-
-  it('keeps a lone large prop whole even though it spans many tiles', () => {
-    // One big building is the only thing on the sheet: nothing to be an
-    // outlier against, so it must not be chopped into grid cells.
-    const w = 128;
-    const h = 128;
-    const alpha = blocks(w, h, [[0, 0, 96, 96]]);
-    expect(detectAssetsInMask(alpha, w, h, { tile })).toEqual([{ x: 0, y: 0, w: 96, h: 96 }]);
-  });
-
-  it('without a known grid, an oversized block is kept rather than guessed at', () => {
-    const w = 64;
-    const h = 64;
-    const alpha = blocks(w, h, [[0, 0, 48, 48]]);
-    expect(detectAssetsInMask(alpha, w, h)).toEqual([{ x: 0, y: 0, w: 48, h: 48 }]);
+  it('skips empty cells and fits each piece tightly', () => {
+    const alpha = blocks(200, 100, [[4, 4, 20, 20], [100, 10, 30, 30]]);
+    expect(splitAssetByGrid(alpha, 200, { x: 0, y: 0, w: 144, h: 48 }, tile)).toEqual([
+      { x: 4, y: 4, w: 20, h: 20 },
+      { x: 100, y: 10, w: 30, h: 30 },
+    ]);
   });
 });

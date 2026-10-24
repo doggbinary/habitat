@@ -7,8 +7,9 @@ import {
   makeTileset,
   type AssetRect,
   type Doc,
+  type Tileset,
 } from './core/doc';
-import { assetsOf, detectAssets, gridOf, suggestSplitMode } from './core/assets';
+import { DETECT_VERSION, assetsOf, detectAssets, gridOf, suggestSplitMode } from './core/assets';
 import { dominantColor } from './io/recolor';
 import { cropAsset } from './render/object-draw';
 import { ObjectTools } from './tools/objects';
@@ -41,6 +42,19 @@ import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
 import { el } from './ui/dom';
 import { Shell } from './ui/shell';
+
+/** Detects a sheet's props using its own tile grid. */
+function detectProps(sheet: Tileset): AssetRect[] {
+  return sheet.image ? detectAssets(sheet.image, { tile: gridOf(sheet) }) : [];
+}
+
+/**
+ * True when a sheet's props came from an older detector. Hand-edited sheets
+ * are never stale: redetecting would throw away the user's merges and splits.
+ */
+function isStale(sheet: Tileset): boolean {
+  return !sheet.assetsEdited && (sheet.assetsVersion ?? 0) < DETECT_VERSION;
+}
 
 export class App {
   private readonly store = new Store();
@@ -158,6 +172,17 @@ export class App {
 
   /** Installs a document and resets everything derived from the old one. */
   private adoptDoc(doc: Doc): void {
+    // A project saved by an older detector may hold badly split props; redo
+    // those sheets now. Placed objects keep the rectangle they were placed
+    // with, so nothing already on the map changes.
+    for (const sheet of doc.tilesets) {
+      if (sheet.splitMode !== 'objects' || !sheet.image || !isStale(sheet)) continue;
+      const assets = detectProps(sheet);
+      if (assets.length === 0) continue;
+      sheet.assets = assets;
+      sheet.assetsVersion = DETECT_VERSION;
+    }
+
     this.store.doc = doc;
     this.store.history.clear();
     this.store.activeTileset = 0;
@@ -300,10 +325,11 @@ export class App {
           // prop becomes one draggable asset instead of the grid squares it
           // happens to cover. Ground sheets fill their squares and stay a grid.
           if (tileset.image && suggestSplitMode(tileset.image) === 'objects') {
-            const assets = detectAssets(tileset.image, { tile: gridOf(tileset) });
+            const assets = detectProps(tileset);
             if (assets.length > 0) {
               tileset.splitMode = 'objects';
               tileset.assets = assets;
+              tileset.assetsVersion = DETECT_VERSION;
             }
           }
           this.editor.addTileset(tileset);
@@ -369,9 +395,10 @@ export class App {
     if (!sheet || (sheet.splitMode ?? 'grid') === mode) return;
 
     let assets = sheet.assets;
-    if (mode === 'objects' && !assets?.length) {
+    const fresh = mode === 'objects' && (!assets?.length || isStale(sheet));
+    if (fresh) {
       if (!sheet.image) return;
-      assets = detectAssets(sheet.image, { tile: gridOf(sheet) });
+      assets = detectProps(sheet);
       if (assets.length === 0) {
         this.store.toast('No separate props found on this sheet');
         return;
@@ -381,6 +408,7 @@ export class App {
     this.editor.structural(mode === 'objects' ? 'Use as props' : 'Use as ground', () => {
       sheet.splitMode = mode;
       if (assets) sheet.assets = assets;
+      if (fresh) sheet.assetsVersion = DETECT_VERSION;
     });
     this.store.libraryPick = null;
     this.store.toast(mode === 'objects' ? `${assets!.length} props` : `${sheet.count} ground tiles`);

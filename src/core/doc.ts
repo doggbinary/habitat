@@ -34,6 +34,10 @@ export interface Tileset {
   splitMode?: 'grid' | 'objects';
   /** Detected asset rectangles, used when `splitMode` is `objects`. */
   assets?: AssetRect[];
+  /** Which detector produced `assets`, so an improved one can redo them. */
+  assetsVersion?: number;
+  /** Set once the user merges, splits or deletes assets by hand. */
+  assetsEdited?: boolean;
 }
 
 /** A rectangle of a sheet image, in source pixels. */
