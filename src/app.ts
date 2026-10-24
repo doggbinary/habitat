@@ -14,14 +14,16 @@ import {
   alphaChannel,
   assetsOf,
   deleteAssets,
-  detectAssets,
+  detectSheetProps,
   gridOf,
+  groundOf,
   mergeAssets,
   replaceAsset,
   splitAssetByGrid,
   suggestSplitMode,
 } from './core/assets';
-import { dominantColor } from './io/recolor';
+import { dominantColor, recolorToCanvas } from './io/recolor';
+import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
 import { cropAsset } from './render/object-draw';
 import { ObjectTools } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
@@ -30,8 +32,8 @@ import { importSpriteSheet } from './character/import';
 import { frameIndex } from './character/model';
 import { Studio } from './character/studio';
 import { CharacterView } from './character/view';
-import { EMPTY_STAMP, singleStamp, stampFromRegion } from './core/stamp';
-import { EMPTY } from './core/tiles';
+import { EMPTY_STAMP, singleStamp, type Stamp } from './core/stamp';
+import { EMPTY, flagsOf, indexOf, pack, tilesetOf, withFlags, type PackedTile } from './core/tiles';
 import { openAssetMenu } from './ui/asset-menu';
 import { CharacterPanel } from './ui/character-panel';
 import { Store } from './core/store';
@@ -56,7 +58,7 @@ import { Shell } from './ui/shell';
 
 /** Detects a sheet's props using its own tile grid. */
 function detectProps(sheet: Tileset): AssetRect[] {
-  return sheet.image ? detectAssets(sheet.image, { tile: gridOf(sheet) }) : [];
+  return detectSheetProps(sheet);
 }
 
 /**
@@ -103,10 +105,11 @@ export class App {
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
       setSplitMode: (sheet, mode) => this.setSplitMode(sheet, mode),
       editAssets: (sheet, op, indices) => this.editAssets(sheet, op, indices),
-      pickTiles: (sheet, region) => this.pickTiles(sheet, region),
+      pickTiles: (stamp, region) => this.pickTiles(stamp, region),
       tilesDragMove: (x, y) => this.tilesDragMove(x, y),
       tilesDragEnd: (x, y, dropped) => this.tilesDragEnd(x, y, dropped),
       recolorObject: (anchor) => this.recolorObject(anchor),
+      recolorHeldTiles: (anchor) => this.recolorHeldTiles(anchor),
       addImageLayer: () => void this.addImageLayer(),
       replaceImage: (index) => void this.replaceImage(index),
       newMap: () => this.newMap(),
@@ -354,7 +357,7 @@ export class App {
           // A sheet that is mostly background is separate props, so each
           // prop becomes one draggable asset instead of the grid squares it
           // happens to cover. Ground sheets fill their squares and stay a grid.
-          if (tileset.image && suggestSplitMode(tileset.image) === 'objects') {
+          if (tileset.image && suggestSplitMode(tileset.image, tileset.name) === 'objects') {
             const assets = detectProps(tileset);
             if (assets.length > 0) {
               tileset.splitMode = 'objects';
@@ -441,7 +444,12 @@ export class App {
       if (fresh) sheet.assetsVersion = DETECT_VERSION;
     });
     this.store.libraryPick = null;
-    this.store.toast(mode === 'objects' ? `${assets!.length} props` : `${sheet.count} ground tiles`);
+    if (mode === 'objects') {
+      this.store.toast(`${assets!.length} props`);
+    } else {
+      const ground = groundOf(sheet)?.cells.reduce((sum, c) => sum + c, 0) ?? 0;
+      this.store.toast(ground > 0 ? `${ground} ground tiles` : 'No ground tiles on this sheet, only props');
+    }
   }
 
   /**
@@ -491,6 +499,14 @@ export class App {
     this.store.libraryPick = { tilesetId: sheet.id, index: assetIndex };
 
     if (sheet.splitMode === 'objects') {
+      // With an asset selected on the map, a tap swaps it out, the way
+      // replacing an image works in Canva. Done deselects, to add new ones.
+      if (this.objects.selected()) {
+        this.objects.swap(sheet.id, rect);
+        this.shell.palette.draw();
+        this.store.toast('Swapped. Tap Done first to add a new one instead.');
+        return;
+      }
       const centre = screenToWorld(this.store.camera, this.renderer.viewW / 2, this.renderer.viewH / 2);
       this.objects.place(sheet.id, rect, centre.x, centre.y);
       this.shell.palette.draw();
@@ -506,10 +522,7 @@ export class App {
   }
 
   /** A tile or block picked on a ground sheet becomes the brush. */
-  private pickTiles(sheetIndex: number, region: { x: number; y: number; w: number; h: number }): void {
-    const sheet = this.store.doc.tilesets[sheetIndex];
-    if (!sheet) return;
-    const stamp = stampFromRegion(sheetIndex, sheet.cols, region.x, region.y, region.w, region.h, sheet.count);
+  private pickTiles(stamp: Stamp, region: { x: number; y: number; w: number; h: number }): void {
     this.store.libraryPick = null;
     this.store.setStamp(stamp, region);
     if (this.store.tool !== 'brush' && this.store.tool !== 'fill' && this.store.tool !== 'rect') {
@@ -561,6 +574,79 @@ export class App {
     // Released somewhere other than the map: treat it as changing your mind.
     if (!at) return;
     this.objects.place(drag.tilesetId, drag.rect, at.x, at.y);
+  }
+
+  /**
+   * Opens the colour wheel for a block of ground tiles held with the select
+   * tool. Each different tile in the block gets a recoloured copy in the
+   * edited-tiles sheet, so other copies of it on the map stay as they were.
+   * The whole block shifts relative to its own overall colour, the same way
+   * a prop does, so its shades move together. Nothing reaches the map until
+   * the block is set down, so setting it down is the undo step.
+   */
+  private recolorHeldTiles(anchor: HTMLElement): void {
+    const held = this.store.selection;
+    if (!held) return;
+    const doc = this.store.doc;
+    const originals = held.tiles.slice();
+
+    const arts = new Map<PackedTile, HTMLCanvasElement>();
+    for (const tile of originals) {
+      if (tile === EMPTY) continue;
+      const art = withFlags(tile, 0);
+      if (arts.has(art)) continue;
+      const canvas = extractTile(doc, art);
+      if (canvas) arts.set(art, canvas);
+    }
+    if (arts.size === 0) return;
+
+    // One strip of every distinct tile, so the base colour reflects the block.
+    const pieces = [...arts.values()];
+    const strip = document.createElement('canvas');
+    strip.width = pieces.reduce((sum, c) => sum + c.width, 0);
+    strip.height = Math.max(...pieces.map((c) => c.height));
+    const ctx = strip.getContext('2d');
+    let offset = 0;
+    for (const c of pieces) {
+      ctx?.drawImage(c, offset, 0);
+      offset += c.width;
+    }
+    const base = dominantColor(strip);
+
+    const recoloured = new Map<PackedTile, PackedTile>();
+    const touched = new Set<number>();
+    openColorPopover({
+      anchor,
+      initial: hsvToHex(base),
+      onChange: (hex) => {
+        const target = hexToHsv(hex);
+        const shift = {
+          hueShift: target.h - base.h,
+          saturation: base.s > 0.02 ? target.s / base.s : 1,
+          brightness: base.v > 0.02 ? target.v / base.v : 1,
+        };
+        for (const [art, canvas] of arts) {
+          let next = recoloured.get(art);
+          if (next === undefined) {
+            const sheet = ensureGeneratedSheet(doc, canvas.width, canvas.height);
+            next = pack(sheet, doc.tilesets[sheet].count, 0);
+            recoloured.set(art, next);
+          }
+          touched.add(tilesetOf(next));
+          writeGeneratedTile(doc.tilesets[tilesetOf(next)], indexOf(next), recolorToCanvas(canvas, shift));
+        }
+        // The block may have been set down while the wheel was open.
+        if (this.store.selection !== held) return;
+        held.tiles = originals.map((tile) =>
+          tile === EMPTY ? EMPTY : withFlags(recoloured.get(withFlags(tile, 0)) ?? tile, flagsOf(tile)),
+        );
+        this.renderer.requestDraw();
+      },
+      onClose: () => {
+        for (const sheet of touched) persistGeneratedSheet(doc.tilesets[sheet]);
+        if (touched.size > 0) this.store.restructured();
+      },
+    });
   }
 
   /**

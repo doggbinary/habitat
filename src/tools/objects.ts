@@ -211,6 +211,31 @@ export class ObjectTools {
     this.renderer.requestDraw();
   }
 
+  /**
+   * Replaces the selected asset's art with another, keeping where it stands,
+   * which way it faces and its place in front-to-back order. Size carries
+   * over relative to each sheet's tiles, so swapping between sheets drawn at
+   * different scales still matches the map. The colour resets, since a tint
+   * picked for one asset rarely suits another.
+   */
+  swap(tilesetId: string, rect: AssetRect): void {
+    const found = this.selected();
+    if (!found) return;
+    const base = (id: string) => {
+      const sheet = this.doc.tilesets.find((t) => t.id === id);
+      return sheet && sheet.tileW > 0 ? this.doc.tileSize / sheet.tileW : 1;
+    };
+    const scale = found.obj.scale * (base(tilesetId) / base(found.obj.tilesetId));
+    this.apply('Swap asset', (_, obj) => {
+      obj.tilesetId = tilesetId;
+      obj.rect = { ...rect };
+      obj.scale = scale;
+      obj.hueShift = 0;
+      obj.saturation = 1;
+      obj.brightness = 1;
+    });
+  }
+
   rotate(): void {
     this.apply('Rotate', (_, obj) => {
       obj.rotation = (obj.rotation + 1) % 4;

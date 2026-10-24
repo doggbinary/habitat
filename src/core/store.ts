@@ -19,6 +19,8 @@ export interface MapSelection {
   tiles: Int32Array;
   /** Layer the block came from, and will be set down on. */
   layerId: string;
+  /** A duplicate, not lifted off the map, so dropping it loses nothing. */
+  copy?: boolean;
 }
 
 /**

@@ -224,7 +224,7 @@ export class Editor {
       return;
     }
 
-    const stroke = new Stroke(layer.id, 'Move tiles');
+    const stroke = new Stroke(layer.id, selection.copy ? 'Duplicate tiles' : 'Move tiles');
     const lift = liftedJustNow ? this.store.history.takeLastCells(layer.id) : null;
     if (lift) {
       for (let i = 0; i < lift.indices.length; i++) stroke.record(lift.indices[i], lift.before[i], lift.after[i]);
@@ -238,6 +238,17 @@ export class Editor {
     }
     this.store.history.commitStroke(stroke);
     this.store.changed();
+  }
+
+  /** Sets the held block down and holds up a copy beside it, ready to drag. */
+  duplicateSelection(): void {
+    const selection = this.store.selection;
+    if (!selection) return;
+    const { x, y, w, h, tiles, layerId } = selection;
+    this.commitSelection();
+    this.store.selection = { x: x + 1, y: y + 1, w, h, tiles: tiles.slice(), layerId, copy: true };
+    this.store.changed();
+    this.store.toast('Copied. Drag the copy into place.');
   }
 
   /** Throws the held block away. Undo brings it back where it came from. */
@@ -680,6 +691,12 @@ export class Editor {
   }
 
   undo(): void {
+    if (this.store.selection?.copy) {
+      // A held copy was never on the map, so undoing just lets it go.
+      this.store.selection = null;
+      this.store.changed();
+      return;
+    }
     if (this.store.selection) {
       if (this.store.history.version !== this.liftRevision) {
         // Something was recorded since the lift, so undoing it would leave

@@ -27,6 +27,7 @@ export interface ShellActions {
   tilesDragMove: PaletteActions['tilesDragMove'];
   tilesDragEnd: PaletteActions['tilesDragEnd'];
   recolorObject: (anchor: HTMLElement) => void;
+  recolorHeldTiles: (anchor: HTMLElement) => void;
   addImageLayer: () => void;
   replaceImage: (index: number) => void;
   newMap: () => void;
@@ -369,23 +370,33 @@ export class Shell {
 
     // Held tiles own the bar the same way, until they are set down.
     const held = this.mode === 'map' ? store.selection : null;
+    // Laid out like the asset bar, so ground and props are worked the same way.
     if (held) {
       const layer = store.doc.layers.find((l) => l.id === held.layerId);
+      const recolor: HTMLButtonElement = button('chip', 'Recolour', () => this.actions.recolorHeldTiles(recolor), [
+        icon('palette', 17),
+      ]);
+      const order = el('div', { class: 'order-group', role: 'group' }, [
+        this.selectionChip('sendBackward', 'Send behind, onto the layer below', () => this.editor.moveSelectionDepth(-1), 'order-chip', 'Backward'),
+        this.selectionChip('bringForward', 'Bring in front, onto the layer above', () => this.editor.moveSelectionDepth(1), 'order-chip', 'Forward'),
+      ]);
+      order.setAttribute('aria-label', 'Order');
       this.optionsBar.append(
-        el('span', { class: 'chip-label', text: `${held.w} x ${held.h} on ${layer?.name ?? 'layer'}` }),
+        el('span', { class: 'chip-label', text: `${held.w} x ${held.h} · ${layer?.name ?? 'layer'}` }),
         el('div', { class: 'divider vertical' }),
         this.selectionChip('rotate', 'Rotate', () => this.editor.transformSelection('rotate')),
         this.selectionChip('flipH', 'Flip across', () => this.editor.transformSelection('flipH')),
         this.selectionChip('flipV', 'Flip down', () => this.editor.transformSelection('flipV')),
+        recolor,
         el('div', { class: 'divider vertical' }),
-        this.selectionChip('sendBackward', 'Send behind', () => this.editor.moveSelectionDepth(-1)),
-        this.selectionChip('bringForward', 'Bring in front', () => this.editor.moveSelectionDepth(1)),
+        order,
         el('div', { class: 'divider vertical' }),
+        this.selectionChip('copy', 'Duplicate', () => this.editor.duplicateSelection()),
         this.selectionChip('trash', 'Delete', () => this.editor.deleteSelection(), 'danger'),
-        button('chip primary-chip', 'Place', () => {
+        button('chip primary-chip', 'Done', () => {
           this.editor.commitSelection();
           this.refreshChrome();
-        }, [icon('check', 17), el('span', { class: 'chip-text', text: 'Place' })]),
+        }, [icon('check', 17), el('span', { class: 'chip-text', text: 'Done' })]),
       );
       return;
     }

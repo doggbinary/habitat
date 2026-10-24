@@ -7,7 +7,41 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 2;
+export const DETECT_VERSION = 3;
+
+/** A cell this solid reads as floor: ground texture runs edge to edge. */
+const FLOOR_FILL = 0.97;
+/**
+ * A partly filled cell continues a floor when the edge they share is this
+ * solid. A real border or counter front spans the whole edge; a bush pressed
+ * against the end of a floor does not, and must stay a prop.
+ */
+const FLOOR_EDGE = 0.95;
+/**
+ * ...and when this share of what is drawn in it hangs off that edge. Sheets
+ * often let a floor's art spill a pixel past the grid line, so a pot sitting
+ * just below a floor gets a solid top row too; but the pot is not attached to
+ * it, while a border or a counter's legs are.
+ */
+const FLOOR_ATTACHED = 0.8;
+/**
+ * Solid runs this many cells or smaller are probably things (a fridge, a
+ * door), so they stay available as props as well as ground.
+ */
+const SMALL_RUN = 3;
+/**
+ * RPG Maker style packs name their sheets by kind: A1 to A5 are ground and
+ * wall autotiles, B onwards are objects. Most packs follow it, and it is far
+ * more reliable than guessing from pixels: some ground sheets are a third
+ * transparent, and some object sheets are completely solid.
+ */
+export function isGroundSheetName(name: string): boolean {
+  return /(?:^|[^a-z0-9])a[1-5](?:[^0-9]|$)/i.test(name);
+}
+
+function isObjectSheetName(name: string): boolean {
+  return /(?:^|[^a-z0-9])[b-e](?:[^a-z]|$)/i.test(name);
+}
 
 /**
  * A scrap smaller than this share of a tile may belong to a bigger neighbour.
@@ -40,6 +74,23 @@ export interface DetectOptions {
   minArea?: number;
   /** The sheet's tile grid, used to judge what counts as a small scrap. */
   tile?: TileGrid;
+  /** Ground to leave out, so props drawn beside a floor do not fuse with it. */
+  ground?: Ground;
+}
+
+/** A tile grid with its extent, enough to walk every cell. */
+export interface SheetGrid extends TileGrid {
+  cols: number;
+  rows: number;
+}
+
+/** Which cells of a sheet are ground, as opposed to props. */
+export interface Ground {
+  grid: SheetGrid;
+  /** 1 for each cell, by tile index, that is ground. */
+  cells: Uint8Array;
+  /** Small solid runs that are also offered as props. */
+  props: AssetRect[];
 }
 
 type SheetImage = CanvasImageSource & { width: number; height: number };
@@ -124,6 +175,13 @@ export function detectAssetsInMask(
 
   const solid = new Uint8Array(w * h);
   for (let i = 0; i < solid.length; i++) solid[i] = alpha[i] > ALPHA_CUTOFF ? 1 : 0;
+  const ground = options.ground;
+  if (ground) {
+    forEachCell(ground.grid, w, h, (index, x0, y0, cw, ch) => {
+      if (!ground.cells[index]) return;
+      for (let y = y0; y < y0 + ch; y++) solid.fill(0, y * w + x0, y * w + x0 + cw);
+    });
+  }
 
   // Keep even single pixels for now: a scrap too small to stand alone may
   // still be part of the prop beside it, and only absorption can tell.
@@ -131,7 +189,173 @@ export function detectAssetsInMask(
   const tileArea = options.tile ? options.tile.w * options.tile.h : 48 * 48;
   const kept = absorbFragments(islands, tileArea * FRAGMENT_SHARE).filter((r) => r.area >= minArea);
 
-  return readingOrder(kept.map(({ x, y, w: rw, h: rh }) => ({ x, y, w: rw, h: rh })));
+  const rects = kept.map(({ x, y, w: rw, h: rh }) => ({ x, y, w: rw, h: rh }));
+  if (ground) rects.push(...ground.props);
+  return readingOrder(rects);
+}
+
+/** Visits every whole cell of a grid that fits inside the image. */
+function forEachCell(
+  grid: SheetGrid,
+  w: number,
+  h: number,
+  visit: (index: number, x: number, y: number, cw: number, ch: number) => void,
+): void {
+  for (let row = 0; row < grid.rows; row++) {
+    for (let col = 0; col < grid.cols; col++) {
+      const x = grid.margin + col * (grid.w + grid.spacing);
+      const y = grid.margin + row * (grid.h + grid.spacing);
+      if (x + grid.w > w || y + grid.h > h) continue;
+      visit(row * grid.cols + col, x, y, grid.w, grid.h);
+    }
+  }
+}
+
+/** Share of a sheet that is see-through. */
+export function transparentShare(alpha: Uint8Array): number {
+  if (alpha.length === 0) return 0;
+  let clear = 0;
+  for (let i = 0; i < alpha.length; i++) if (alpha[i] <= ALPHA_CUTOFF) clear++;
+  return clear / alpha.length;
+}
+
+/**
+ * Sorts a sheet's cells into ground and the rest.
+ *
+ * On a ground sheet (`wholeSheet`, an autotile sheet) every drawn cell is
+ * ground: its edge pieces are partly transparent by design. Elsewhere,
+ * ground is where texture runs edge to edge across two or more neighbouring
+ * cells (grass, cobbles, floorboards, countertops), plus the partly filled
+ * cells that carry such a run on across a solid edge (a path's border, a
+ * counter's front). A single solid cell is left as a prop.
+ */
+export function findGround(alpha: Uint8Array, w: number, h: number, grid: SheetGrid, wholeSheet = false): Ground {
+  const count = grid.cols * grid.rows;
+  const cells = new Uint8Array(count);
+  const props: AssetRect[] = [];
+  const fill = new Float32Array(count);
+  const solidAt = (x: number, y: number) => alpha[y * w + x] > ALPHA_CUTOFF;
+
+  forEachCell(grid, w, h, (index, x0, y0, cw, ch) => {
+    let solid = 0;
+    for (let y = y0; y < y0 + ch; y++) for (let x = x0; x < x0 + cw; x++) if (solidAt(x, y)) solid++;
+    fill[index] = solid / (cw * ch);
+  });
+
+  if (wholeSheet) {
+    for (let i = 0; i < count; i++) cells[i] = fill[i] > 0 ? 1 : 0;
+    return { grid, cells, props };
+  }
+
+  // Runs of solid cells, joined edge to edge.
+  const run = new Int32Array(count).fill(-1);
+  const runs: number[][] = [];
+  const neighbours = (i: number): number[] => {
+    const col = i % grid.cols;
+    const row = Math.floor(i / grid.cols);
+    const out: number[] = [];
+    if (col > 0) out.push(i - 1);
+    if (col < grid.cols - 1) out.push(i + 1);
+    if (row > 0) out.push(i - grid.cols);
+    if (row < grid.rows - 1) out.push(i + grid.cols);
+    return out;
+  };
+  for (let i = 0; i < count; i++) {
+    if (fill[i] < FLOOR_FILL || run[i] !== -1) continue;
+    const members: number[] = [];
+    const stack = [i];
+    run[i] = runs.length;
+    while (stack.length > 0) {
+      const k = stack.pop()!;
+      members.push(k);
+      for (const j of neighbours(k)) {
+        if (fill[j] >= FLOOR_FILL && run[j] === -1) {
+          run[j] = runs.length;
+          stack.push(j);
+        }
+      }
+    }
+    runs.push(members);
+  }
+  for (const members of runs) {
+    if (members.length < 2) continue;
+    for (const k of members) cells[k] = 1;
+    if (members.length <= SMALL_RUN) props.push(cellsBox(members, grid));
+  }
+
+  // Partly filled cells that continue a run across a solid shared edge. Only
+  // one step out, so a run can never creep across a sheet of props.
+  const edges: number[] = [];
+  for (let i = 0; i < count; i++) {
+    if (cells[i] || fill[i] === 0) continue;
+    if (neighbours(i).some((j) => cells[j] && continuesFloor(i, j, grid, solidAt))) edges.push(i);
+  }
+  for (const i of edges) cells[i] = 1;
+  return { grid, cells, props };
+}
+
+/** Pixel box covering a set of cells. */
+function cellsBox(members: number[], grid: SheetGrid): AssetRect {
+  const cols = members.map((k) => k % grid.cols);
+  const rows = members.map((k) => Math.floor(k / grid.cols));
+  const c0 = Math.min(...cols);
+  const r0 = Math.min(...rows);
+  const c1 = Math.max(...cols);
+  const r1 = Math.max(...rows);
+  return {
+    x: grid.margin + c0 * (grid.w + grid.spacing),
+    y: grid.margin + r0 * (grid.h + grid.spacing),
+    w: (c1 - c0) * (grid.w + grid.spacing) + grid.w,
+    h: (r1 - r0) * (grid.h + grid.spacing) + grid.h,
+  };
+}
+
+/**
+ * Whether cell `i` carries on the floor in neighbour `j`: solid right along
+ * the edge they share, with most of what is drawn in it attached to that edge.
+ */
+function continuesFloor(
+  i: number,
+  j: number,
+  grid: SheetGrid,
+  solidAt: (x: number, y: number) => boolean,
+): boolean {
+  const col = i % grid.cols;
+  const row = Math.floor(i / grid.cols);
+  const x0 = grid.margin + col * (grid.w + grid.spacing);
+  const y0 = grid.margin + row * (grid.h + grid.spacing);
+  const horizontal = Math.abs(i - j) === 1;
+  const length = horizontal ? grid.h : grid.w;
+
+  const edge: [number, number][] = [];
+  for (let t = 0; t < length; t++) {
+    const x = horizontal ? (j > i ? x0 + grid.w - 1 : x0) : x0 + t;
+    const y = horizontal ? y0 + t : j > i ? y0 + grid.h - 1 : y0;
+    if (solidAt(x, y)) edge.push([x, y]);
+  }
+  if (edge.length / length < FLOOR_EDGE) return false;
+
+  // Flood from the edge through solid pixels, staying inside the cell.
+  const seen = new Uint8Array(grid.w * grid.h);
+  const stack = edge.map(([x, y]) => (y - y0) * grid.w + (x - x0));
+  for (const k of stack) seen[k] = 1;
+  let attached = 0;
+  while (stack.length > 0) {
+    const k = stack.pop()!;
+    attached++;
+    const lx = k % grid.w;
+    const ly = Math.floor(k / grid.w);
+    for (const [nx, ny] of [[lx + 1, ly], [lx - 1, ly], [lx, ly + 1], [lx, ly - 1]]) {
+      if (nx < 0 || ny < 0 || nx >= grid.w || ny >= grid.h) continue;
+      const n = ny * grid.w + nx;
+      if (seen[n] || !solidAt(x0 + nx, y0 + ny)) continue;
+      seen[n] = 1;
+      stack.push(n);
+    }
+  }
+  let total = 0;
+  for (let y = y0; y < y0 + grid.h; y++) for (let x = x0; x < x0 + grid.w; x++) if (solidAt(x, y)) total++;
+  return attached / total >= FLOOR_ATTACHED;
 }
 
 interface Island extends AssetRect {
@@ -364,13 +588,39 @@ export function transparencyRatio(image: HTMLImageElement | HTMLCanvasElement): 
  * props; one that is mostly filled is ground tiles that butt up against each
  * other and would otherwise fuse into a single giant "object".
  */
-export function suggestSplitMode(image: HTMLImageElement | HTMLCanvasElement): 'grid' | 'objects' {
+export function suggestSplitMode(image: HTMLImageElement | HTMLCanvasElement, name = ''): 'grid' | 'objects' {
+  if (isGroundSheetName(name)) return 'grid';
+  if (isObjectSheetName(name)) return 'objects';
   return transparencyRatio(image) > 0.35 ? 'objects' : 'grid';
 }
 
 /** The tile grid a sheet was sliced with, for detection's grid fallback. */
 export function gridOf(tileset: Tileset): TileGrid {
   return { w: tileset.tileW, h: tileset.tileH, margin: tileset.margin, spacing: tileset.spacing };
+}
+
+export function sheetGrid(tileset: Tileset): SheetGrid {
+  return { ...gridOf(tileset), cols: tileset.cols, rows: tileset.rows };
+}
+
+/** Which of a sheet's cells are ground. */
+export function groundOf(tileset: Tileset): Ground | null {
+  if (!tileset.image) return null;
+  const { alpha, w, h } = alphaChannel(tileset.image);
+  return findGround(alpha, w, h, sheetGrid(tileset), isGroundSheetName(tileset.name));
+}
+
+/**
+ * A sheet's props, found with its ground left out, so the floor a prop
+ * stands beside never fuses with it into one giant asset.
+ */
+export function detectSheetProps(tileset: Tileset): AssetRect[] {
+  if (!tileset.image) return [];
+  const { alpha, w, h } = alphaChannel(tileset.image);
+  // On a ground sheet every cell is ground, so there would be nothing left
+  // to find; any props there come from the whole image instead.
+  const ground = isGroundSheetName(tileset.name) ? undefined : findGround(alpha, w, h, sheetGrid(tileset));
+  return detectAssetsInMask(alpha, w, h, { tile: gridOf(tileset), ground });
 }
 
 /** The assets a sheet offers, whichever way it is split. */

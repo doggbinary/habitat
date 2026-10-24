@@ -99,6 +99,35 @@ describe('resizing', () => {
   });
 });
 
+describe('swapping', () => {
+  it('replaces the art but keeps position, direction and order', () => {
+    const [a, b] = withObjects(
+      fakeObject({ id: 'a' }),
+      fakeObject({ id: 'b', x: 70, y: 90, rotation: 1, flipX: true, hueShift: 120, scale: 2 }),
+    );
+    void a;
+    tools.swap('a', { x: 48, y: 0, w: 32, h: 16 });
+    expect(b).toMatchObject({ x: 70, y: 90, rotation: 1, flipX: true, scale: 2, hueShift: 0 });
+    expect(b.rect).toEqual({ x: 48, y: 0, w: 32, h: 16 });
+    expect(layer.objects.map((o) => o.id)).toEqual(['a', 'b']);
+  });
+
+  it('keeps the size matched to the map when swapping between sheets of different tile sizes', () => {
+    store.doc.tilesets.push(fakeTileset('big', 32));
+    const [obj] = withObjects(fakeObject({ id: 'a', scale: 1 }));
+    tools.swap('big', { x: 0, y: 0, w: 32, h: 32 });
+    expect(obj.scale).toBe(0.5);
+  });
+
+  it('can be undone', () => {
+    withObjects(fakeObject({ id: 'a' }));
+    tools.swap('a', { x: 48, y: 0, w: 32, h: 16 });
+    store.history.undo();
+    const restored = store.doc.layers.find((l) => l.id === layer.id) as ObjectLayer;
+    expect(restored.objects[0].rect).toEqual({ x: 0, y: 0, w: 16, h: 32 });
+  });
+});
+
 describe('front and back', () => {
   it('bringing forward passes exactly one object', () => {
     const [a, b, c] = withObjects(fakeObject({ id: 'a' }), fakeObject({ id: 'b' }), fakeObject({ id: 'c' }));

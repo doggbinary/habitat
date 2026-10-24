@@ -1,7 +1,8 @@
-import { assetsOf } from '../core/assets';
+import { assetsOf, groundOf } from '../core/assets';
 import type { AssetRect, Tileset } from '../core/doc';
 import type { Store } from '../core/store';
-import { EMPTY, tilesetOf } from '../core/tiles';
+import type { Stamp } from '../core/stamp';
+import { EMPTY, pack, tilesetOf } from '../core/tiles';
 import { drawTile } from '../render/tile-draw';
 import { button, clear, el } from './dom';
 import { icon } from './icons';
@@ -34,8 +35,8 @@ export interface PaletteActions {
   setSplitMode: (tilesetIndex: number, mode: 'grid' | 'objects') => void;
   /** Fixes detection by hand: join pieces, cut blended art into tiles, or drop strays. */
   editAssets: (tilesetIndex: number, op: 'merge' | 'split' | 'delete', indices: number[]) => void;
-  /** Makes a block of ground tiles, in sheet cells, the brush. */
-  pickTiles: (tilesetIndex: number, region: { x: number; y: number; w: number; h: number }) => void;
+  /** Makes a block of ground tiles the brush; `region` is where it was picked in the palette. */
+  pickTiles: (stamp: Stamp, region: { x: number; y: number; w: number; h: number }) => void;
   /** The picked block is being carried over the map. */
   tilesDragMove: (clientX: number, clientY: number) => void;
   tilesDragEnd: (clientX: number, clientY: number, dropped: boolean) => void;
@@ -69,9 +70,11 @@ export class PalettePanel {
    * purpose, and picking a block of them only means something in that layout.
    */
   private ground = false;
-  /** Which ground tiles are fully transparent; those scroll instead of picking. */
-  private blankTiles = new Uint8Array(0);
-  private blankKey = '';
+  /** Which cells of the sheet on show are ground; the rest scroll instead of picking. */
+  private groundCells: Uint8Array = new Uint8Array(0);
+  private groundKey = '';
+  /** Sheet row shown on each palette row; rows with no ground are left out. */
+  private rowMap: number[] = [];
   /** Corner a ground block pick started from. */
   private anchor: { x: number; y: number } | null = null;
 
@@ -316,14 +319,27 @@ export class PalettePanel {
   // scroll, so it picks a block straight away. Either way, carrying the pick
   // past the palette's edge drops it onto the map.
 
+  /** The palette cell under a point, in display rows (rows without ground are skipped). */
   private tileAt(clientX: number, clientY: number): { x: number; y: number } | null {
     const tileset = this.activeTileset();
     if (!tileset) return null;
     const rect = this.canvas.getBoundingClientRect();
     const x = Math.floor((clientX - rect.left) / this.cell);
     const y = Math.floor((clientY - rect.top) / this.cell);
-    if (x < 0 || y < 0 || x >= tileset.cols || y >= tileset.rows) return null;
+    if (x < 0 || y < 0 || x >= tileset.cols || y >= this.rowMap.length) return null;
     return { x, y };
+  }
+
+  /** Tile index on the sheet for a palette cell. */
+  private sheetIndex(cell: { x: number; y: number }): number {
+    const tileset = this.activeTileset();
+    const row = this.rowMap[cell.y];
+    return tileset && row !== undefined ? row * tileset.cols + cell.x : -1;
+  }
+
+  private isGroundAt(cell: { x: number; y: number }): boolean {
+    const index = this.sheetIndex(cell);
+    return index >= 0 && this.groundCells[index] === 1;
   }
 
   private groundDown(e: PointerEvent): void {
@@ -355,8 +371,8 @@ export class PalettePanel {
       }, LONG_PRESS_MS);
       return;
     }
-    // A blank square has nothing to pick, so it is always a scroll handle.
-    if (this.isBlankAt(tileset, cell.x, cell.y)) {
+    // An empty square has nothing to pick, so it is always a scroll handle.
+    if (!this.isGroundAt(cell)) {
       this.mode = 'scroll';
       return;
     }
@@ -405,7 +421,7 @@ export class PalettePanel {
     }
     if (this.mode === 'select') {
       if (!this.insidePalette(e.clientX, e.clientY)) {
-        if (this.pressPick) this.actions.pickTiles(this.store.activeTileset, this.pressPick);
+        if (this.pressPick) this.actions.pickTiles(this.stampFor(this.pressPick), this.pressPick);
         this.beginCarry(e.clientX, e.clientY);
         this.draw();
         return true;
@@ -456,8 +472,23 @@ export class PalettePanel {
     ) {
       return;
     }
-    this.actions.pickTiles(this.store.activeTileset, region);
+    this.actions.pickTiles(this.stampFor(region), region);
     this.draw();
+  }
+
+  /**
+   * The brush for a block of palette cells. Cells that are not ground, such
+   * as a prop beside the floor, come out as holes rather than chopped props.
+   */
+  private stampFor(region: { x: number; y: number; w: number; h: number }): Stamp {
+    const tiles = new Int32Array(region.w * region.h).fill(EMPTY);
+    for (let dy = 0; dy < region.h; dy++) {
+      for (let dx = 0; dx < region.w; dx++) {
+        const cell = { x: region.x + dx, y: region.y + dy };
+        if (this.isGroundAt(cell)) tiles[dy * region.w + dx] = pack(this.store.activeTileset, this.sheetIndex(cell));
+      }
+    }
+    return { w: region.w, h: region.h, tiles };
   }
 
   /** True when the brush was picked from the sheet on show, so its marquee belongs here. */
@@ -473,50 +504,25 @@ export class PalettePanel {
     return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
   }
 
-  /** Finds the fully transparent tiles, which act as scroll handles. */
-  private analyzeBlanks(tileset: Tileset): void {
-    const key = `${tileset.id}:${tileset.tileW}x${tileset.tileH}:${tileset.margin}:${tileset.spacing}:${tileset.count}`;
-    if (this.blankKey === key) return;
-    this.blankKey = key;
-    this.blankTiles = new Uint8Array(tileset.count);
-    if (!tileset.image) return;
-
-    const probe = document.createElement('canvas');
-    probe.width = tileset.tileW;
-    probe.height = tileset.tileH;
-    const ctx = probe.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return;
-    for (let i = 0; i < tileset.count; i++) {
-      const col = i % tileset.cols;
-      const row = Math.floor(i / tileset.cols);
-      ctx.clearRect(0, 0, tileset.tileW, tileset.tileH);
-      ctx.drawImage(
-        tileset.image,
-        tileset.margin + col * (tileset.tileW + tileset.spacing),
-        tileset.margin + row * (tileset.tileH + tileset.spacing),
-        tileset.tileW,
-        tileset.tileH,
-        0,
-        0,
-        tileset.tileW,
-        tileset.tileH,
-      );
-      const { data } = ctx.getImageData(0, 0, tileset.tileW, tileset.tileH);
-      let blank = 1;
-      for (let p = 3; p < data.length; p += 4) {
-        if (data[p] > 8) {
-          blank = 0;
+  /**
+   * Works out which cells are ground, and which sheet rows have any, once
+   * per sheet. Props are left out of the Ground view entirely, and rows with
+   * no ground are skipped so the floor pieces sit together.
+   */
+  private prepareGround(tileset: Tileset): void {
+    const key = `${tileset.id}:${tileset.tileW}x${tileset.tileH}:${tileset.margin}:${tileset.spacing}:${tileset.count}:${tileset.imgW}x${tileset.imgH}`;
+    if (this.groundKey === key) return;
+    this.groundKey = key;
+    this.groundCells = groundOf(tileset)?.cells ?? new Uint8Array(0);
+    this.rowMap = [];
+    for (let row = 0; row < tileset.rows; row++) {
+      for (let col = 0; col < tileset.cols; col++) {
+        if (this.groundCells[row * tileset.cols + col]) {
+          this.rowMap.push(row);
           break;
         }
       }
-      this.blankTiles[i] = blank;
     }
-  }
-
-  private isBlankAt(tileset: Tileset, x: number, y: number): boolean {
-    const index = y * tileset.cols + x;
-    if (index >= tileset.count) return true;
-    return this.blankTiles[index] === 1;
   }
 
   /** Renders the picked block into the floating ghost that follows a carry. */
@@ -627,7 +633,11 @@ export class PalettePanel {
     this.header.append(
       el('div', { class: 'palette-pager' }, [prev, select, next]),
       el('div', { class: 'palette-meta' }, [
-        el('span', { text: `${this.assets.length} ${isObjects ? 'assets' : 'tiles'}` }),
+        el('span', {
+          text: isObjects
+            ? `${this.assets.length} props`
+            : `${this.groundCells.reduce((sum, c) => sum + c, 0)} ground tiles`,
+        }),
         el('span', { class: 'muted', text: total > 1 ? `Sheet ${current + 1} of ${total}` : '' }),
       ]),
       // Detection guesses from transparency, which a sheet can fool, so the
@@ -657,8 +667,10 @@ export class PalettePanel {
         : el('p', {
             class: 'hint',
             text: isObjects
-              ? 'Tap an asset to add it, or press and hold, then drag it onto the map.'
-              : 'Tap a tile to paint with it. To pick a block, drag across tiles with the Pencil, or hold then drag with a finger. Then drag the highlighted block onto the map.',
+              ? 'Tap a prop to add it, or press and hold, then drag it onto the map. With a prop selected on the map, tapping one here swaps it.'
+              : this.rowMap.length === 0
+                ? 'This sheet has no ground tiles, only props. Switch to Props to place them.'
+                : 'Tap a tile to paint with it. To pick a block, drag across tiles with the Pencil, or hold then drag with a finger. Then drag the highlighted block onto the map.',
           }),
     );
   }
@@ -722,7 +734,8 @@ export class PalettePanel {
     for (const i of [...this.selected]) if (i >= this.assets.length) this.selected.delete(i);
     if (tileset?.splitMode !== 'objects') this.editing = false;
     this.ground = !!tileset && tileset.splitMode !== 'objects';
-    const has = this.assets.length > 0;
+    if (tileset && this.ground) this.prepareGround(tileset);
+    const has = this.ground ? this.rowMap.length > 0 : this.assets.length > 0;
     this.empty.style.display = this.store.doc.tilesets.length === 0 ? 'flex' : 'none';
     this.scroller.style.display = has ? 'block' : 'none';
     this.buildHeader();
@@ -749,13 +762,12 @@ export class PalettePanel {
   }
 
   private layoutGround(tileset: Tileset): void {
-    this.analyzeBlanks(tileset);
     const available = Math.max(120, this.scroller.clientWidth - 2);
     this.cell = Math.max(GROUND_MIN_CELL, Math.min(GROUND_MAX_CELL, Math.floor(available / tileset.cols)));
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const width = tileset.cols * this.cell;
-    const height = tileset.rows * this.cell;
+    const height = this.rowMap.length * this.cell;
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
     this.canvas.width = Math.round(width * dpr);
@@ -767,19 +779,19 @@ export class PalettePanel {
   private drawGround(tileset: Tileset & { image: CanvasImageSource }): void {
     const { ctx, cell } = this;
     const width = tileset.cols * cell;
-    const height = tileset.rows * cell;
+    const height = this.rowMap.length * cell;
     ctx.clearRect(0, 0, width, height);
     ctx.imageSmoothingEnabled = cell < tileset.tileW;
 
-    for (let row = 0; row < tileset.rows; row++) {
+    this.rowMap.forEach((row, shown) => {
       for (let col = 0; col < tileset.cols; col++) {
         const index = row * tileset.cols + col;
         if (index >= tileset.count) continue;
-        // Blank squares scroll instead of picking, so mark them faintly to
+        // Empty squares scroll instead of picking, so mark them faintly to
         // make that visible rather than something you discover.
-        if (this.blankTiles[index] === 1) {
+        if (!this.groundCells[index]) {
           ctx.fillStyle = 'rgba(255,255,255,0.025)';
-          ctx.fillRect(col * cell + 2, row * cell + 2, cell - 4, cell - 4);
+          ctx.fillRect(col * cell + 2, shown * cell + 2, cell - 4, cell - 4);
           continue;
         }
         ctx.drawImage(
@@ -789,12 +801,12 @@ export class PalettePanel {
           tileset.tileW,
           tileset.tileH,
           col * cell,
-          row * cell,
+          shown * cell,
           cell,
           cell,
         );
       }
-    }
+    });
 
     ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.lineWidth = 1;
@@ -803,9 +815,21 @@ export class PalettePanel {
       ctx.moveTo(col * cell + 0.5, 0);
       ctx.lineTo(col * cell + 0.5, height);
     }
-    for (let row = 1; row < tileset.rows; row++) {
-      ctx.moveTo(0, row * cell + 0.5);
-      ctx.lineTo(width, row * cell + 0.5);
+    for (let shown = 1; shown < this.rowMap.length; shown++) {
+      ctx.moveTo(0, shown * cell + 0.5);
+      ctx.lineTo(width, shown * cell + 0.5);
+    }
+    ctx.stroke();
+
+    // Where rows were skipped, a firmer line says these pieces were not
+    // drawn next to each other on the sheet.
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let shown = 1; shown < this.rowMap.length; shown++) {
+      if (this.rowMap[shown] === this.rowMap[shown - 1] + 1) continue;
+      ctx.moveTo(0, shown * cell);
+      ctx.lineTo(width, shown * cell);
     }
     ctx.stroke();
 

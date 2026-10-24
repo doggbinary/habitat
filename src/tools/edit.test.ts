@@ -385,6 +385,30 @@ describe('picking up and moving painted tiles', () => {
     expect(at(4, 1)).toBe(EMPTY);
   });
 
+  it('duplicates a held block: the original lands, a copy is held beside it', () => {
+    block();
+    lift();
+    editor.duplicateSelection();
+    expect(at(1, 1)).toBe(T(1));
+    expect(store.selection).toMatchObject({ x: 2, y: 2, copy: true });
+    store.selection!.x = 5;
+    store.selection!.y = 3;
+    editor.commitSelection();
+    expect(at(5, 3)).toBe(T(1));
+    expect(at(1, 1)).toBe(T(1));
+  });
+
+  it('lets go of a held copy on undo, leaving the original alone', () => {
+    block();
+    lift();
+    store.selection!.x = 4;
+    editor.duplicateSelection();
+    editor.undo();
+    expect(store.selection).toBeNull();
+    expect(at(4, 1)).toBe(T(1));
+    expect(at(5, 2)).toBe(EMPTY);
+  });
+
   it('places a picked block once, holes and all', () => {
     set(1, 0, T(9));
     store.stamp = { w: 2, h: 2, tiles: Int32Array.from([T(1), EMPTY, T(3), T(4)]) };
