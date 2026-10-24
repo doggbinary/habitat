@@ -50,6 +50,7 @@ export class PalettePanel {
       addTileset: () => void;
       editTileset: (index: number) => void;
       removeTileset: (index: number) => void;
+      recolorTileset: (index: number) => void;
     },
   ) {
     this.canvas = el('canvas', { class: 'palette-canvas' });
@@ -322,6 +323,9 @@ export class PalettePanel {
       el('div', { class: 'palette-row' }, [
         button('icon-btn', 'Tileset settings', () => this.actions.editTileset(current), [icon('settings', 18)]),
         button('icon-btn', 'Import another tileset', () => this.actions.addTileset(), [icon('plus', 18)]),
+        button('icon-btn', 'Recolour into a new sheet', () => this.actions.recolorTileset(current), [
+          icon('palette', 18),
+        ]),
         button('icon-btn danger', 'Remove tileset', () => this.actions.removeTileset(current), [icon('trash', 18)]),
         el('div', { class: 'spacer' }),
         this.toggle('dice', 'Scatter: place a random tile from the selection', this.store.settings.randomize, () => {

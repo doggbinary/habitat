@@ -9,6 +9,7 @@ import {
 import type { PixelTool, Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
 import type { Store } from '../core/store';
+import { openColorPopover } from './color-popover';
 import { button, clear, el } from './dom';
 import { icon, type IconName } from './icons';
 
@@ -201,23 +202,40 @@ export class CharacterPanel {
       return node;
     });
 
-    const custom = el('input', { class: 'color', type: 'color', value: this.studio.color });
-    custom.addEventListener('input', () => {
-      this.studio.color = custom.value;
-      if (this.studio.tool !== 'pencil') this.studio.tool = 'pencil';
+    // The current colour doubles as the button that opens the wheel, so the
+    // picker stays out of the way until it is wanted.
+    const current = el('button', {
+      class: 'current-color',
+      type: 'button',
+      title: 'Open the colour wheel',
+      style: { background: this.studio.color },
     });
-    custom.addEventListener('change', () => {
-      // Keep a mixed colour around by adding it to the character's palette.
-      if (!character.palette.includes(custom.value)) character.palette.push(custom.value);
-      this.refresh();
+    current.addEventListener('click', () => {
+      openColorPopover({
+        anchor: current,
+        initial: this.studio.color,
+        onChange: (hex) => {
+          this.studio.color = hex;
+          if (this.studio.tool !== 'pencil') this.studio.tool = 'pencil';
+          current.style.background = hex;
+        },
+        onClose: () => {
+          // Mixing a colour you then drew with is worth keeping.
+          if (!character.palette.includes(this.studio.color)) character.palette.push(this.studio.color);
+          this.refresh();
+        },
+      });
     });
 
     return section('Colour', [
-      el('div', { class: 'swatches' }, swatches),
-      el('label', { class: 'field' }, [
-        el('span', { class: 'field-label', text: 'Mix your own' }),
-        custom,
+      el('div', { class: 'color-row' }, [
+        current,
+        el('div', { class: 'color-row-text' }, [
+          el('span', { text: this.studio.color.toUpperCase() }),
+          el('span', { class: 'hint', text: 'Tap to open the wheel' }),
+        ]),
       ]),
+      el('div', { class: 'swatches' }, swatches),
     ]);
   }
 

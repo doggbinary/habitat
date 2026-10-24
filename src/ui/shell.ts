@@ -16,6 +16,7 @@ export interface ShellActions {
   addTileset: () => void;
   editTileset: (index: number) => void;
   removeTileset: (index: number) => void;
+  recolorTileset: (index: number) => void;
   addImageLayer: () => void;
   replaceImage: (index: number) => void;
   newMap: () => void;
@@ -90,6 +91,7 @@ export class Shell {
       addTileset: actions.addTileset,
       editTileset: actions.editTileset,
       removeTileset: actions.removeTileset,
+      recolorTileset: actions.recolorTileset,
     });
     this.layersPanel = new LayersPanel(store, editor, {
       addImageLayer: actions.addImageLayer,

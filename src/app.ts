@@ -20,6 +20,7 @@ import { PlayMode } from './play/play-mode';
 import {
   openExportDialog,
   openNewMapDialog,
+  openRecolorDialog,
   openSpriteSheetDialog,
   openTilesetDialog,
   pickFile,
@@ -61,6 +62,7 @@ export class App {
       addTileset: () => this.addTileset(),
       editTileset: (index) => this.editTileset(index),
       removeTileset: (index) => this.confirmRemoveTileset(index),
+      recolorTileset: (index) => this.recolorTileset(index),
       addImageLayer: () => void this.addImageLayer(),
       replaceImage: (index) => void this.replaceImage(index),
       newMap: () => this.newMap(),
@@ -305,6 +307,35 @@ export class App {
           this.store.toast('Tileset updated');
         } catch {
           this.store.toast('That image could not be read');
+        }
+      },
+    });
+  }
+
+  /** Adds a hue-shifted copy of a tileset as a new sheet, keeping the original. */
+  private recolorTileset(index: number): void {
+    const tileset = this.store.doc.tilesets[index];
+    if (!tileset?.image) {
+      this.store.toast('Import a tileset first');
+      return;
+    }
+    openRecolorDialog({
+      tileset,
+      onConfirm: async (src, name) => {
+        try {
+          const next = await makeTileset(
+            src,
+            name,
+            tileset.tileW,
+            tileset.tileH,
+            tileset.margin,
+            tileset.spacing,
+          );
+          this.editor.addTileset(next);
+          this.shell.palette.showPage(this.store.doc.tilesets.length - 1);
+          this.store.toast(`Added ${name}`);
+        } catch {
+          this.store.toast('That recolour could not be applied');
         }
       },
     });
