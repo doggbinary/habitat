@@ -1,0 +1,536 @@
+import type { PixelTool, Studio } from '../character/studio';
+import type { CharacterView } from '../character/view';
+import type { Shape, Store, ToolId } from '../core/store';
+import { clampZoom, zoomAt } from '../render/camera';
+import type { Renderer } from '../render/renderer';
+import type { Editor } from '../tools/edit';
+import type { CharacterPanel } from './character-panel';
+import { button, clear, el } from './dom';
+import { icon, type IconName } from './icons';
+import { LayersPanel } from './layers';
+import { MapPanel } from './map-panel';
+import { PalettePanel } from './palette';
+
+export interface ShellActions {
+  addTileset: () => void;
+  editTileset: (index: number) => void;
+  removeTileset: (index: number) => void;
+  addImageLayer: () => void;
+  replaceImage: (index: number) => void;
+  newMap: () => void;
+  openProject: () => void;
+  exportMap: () => void;
+  fitToView: () => void;
+}
+
+type TabId = 'tiles' | 'layers' | 'map';
+export type Mode = 'map' | 'character';
+
+/** Pixel tools, shown in the rail while the character studio is open. */
+const PIXEL_TOOLS: { id: PixelTool; icon: IconName; label: string; key: string }[] = [
+  { id: 'pencil', icon: 'brush', label: 'Draw', key: 'B' },
+  { id: 'eraser', icon: 'eraser', label: 'Erase', key: 'E' },
+  { id: 'fill', icon: 'fill', label: 'Fill', key: 'G' },
+  { id: 'picker', icon: 'picker', label: 'Pick', key: 'I' },
+];
+
+const TOOLS: { id: ToolId; icon: IconName; label: string; key: string }[] = [
+  { id: 'brush', icon: 'brush', label: 'Brush', key: 'B' },
+  { id: 'eraser', icon: 'eraser', label: 'Eraser', key: 'E' },
+  { id: 'fill', icon: 'fill', label: 'Fill', key: 'G' },
+  { id: 'rect', icon: 'rect', label: 'Rectangle', key: 'R' },
+  { id: 'line', icon: 'line', label: 'Line', key: 'L' },
+  { id: 'picker', icon: 'picker', label: 'Pick tile', key: 'I' },
+  { id: 'pan', icon: 'pan', label: 'Pan', key: 'H' },
+];
+
+const ERASER_SHAPES: { id: Shape; icon: IconName; label: string }[] = [
+  { id: 'brush', icon: 'brush', label: 'Freehand' },
+  { id: 'rect', icon: 'rect', label: 'Rectangle' },
+  { id: 'line', icon: 'line', label: 'Line' },
+  { id: 'fill', icon: 'fill', label: 'Connected area' },
+];
+
+export class Shell {
+  readonly palette: PalettePanel;
+  private readonly layersPanel: LayersPanel;
+  private readonly mapPanel: MapPanel;
+
+  private readonly toolRail: HTMLElement;
+  private readonly topActions: HTMLElement;
+  private readonly optionsBar: HTMLElement;
+  private readonly status: HTMLElement;
+  private readonly dock: HTMLElement;
+  private readonly dockBody: HTMLElement;
+  private readonly tabBar: HTMLElement;
+  private readonly title: HTMLElement;
+  private readonly toastNode: HTMLElement;
+
+  private tab: TabId = 'tiles';
+  private dockOpen = true;
+  private toastTimer: number | undefined;
+  private mode: Mode = 'map';
+  private readonly modeBar: HTMLElement;
+
+  constructor(
+    root: HTMLElement,
+    canvas: HTMLCanvasElement,
+    private readonly store: Store,
+    private readonly editor: Editor,
+    private readonly renderer: Renderer,
+    private readonly actions: ShellActions,
+    private readonly studio: Studio,
+    private readonly characterView: CharacterView,
+    private readonly characterPanel: CharacterPanel,
+  ) {
+    this.palette = new PalettePanel(store, {
+      addTileset: actions.addTileset,
+      editTileset: actions.editTileset,
+      removeTileset: actions.removeTileset,
+    });
+    this.layersPanel = new LayersPanel(store, editor, {
+      addImageLayer: actions.addImageLayer,
+      replaceImage: actions.replaceImage,
+    });
+    this.mapPanel = new MapPanel(store, editor, actions);
+
+    this.toolRail = el('nav', { class: 'tool-rail', aria: { label: 'Tools' } });
+    this.topActions = el('div', { class: 'top-actions' });
+    this.optionsBar = el('div', { class: 'options-bar' });
+    this.status = el('div', { class: 'status-bar' });
+    this.dockBody = el('div', { class: 'dock-body' });
+    this.tabBar = el('div', { class: 'dock-tabs', role: 'tablist' });
+    this.title = el('button', { class: 'map-title', type: 'button' });
+    this.toastNode = el('div', { class: 'toast' });
+
+    this.dock = el('aside', { class: 'dock' }, [this.tabBar, this.dockBody]);
+
+    this.modeBar = el('div', { class: 'mode-bar', role: 'tablist' });
+
+    const canvasArea = el('div', { class: 'canvas-area' }, [
+      canvas,
+      characterView.canvas,
+      this.optionsBar,
+      this.status,
+    ]);
+
+    root.append(
+      el('div', { class: 'app' }, [
+        el('header', { class: 'topbar' }, [
+          el('div', { class: 'brand' }, [icon('pencilTip', 20), el('span', { text: 'Pixel Fusion' })]),
+          this.modeBar,
+          this.title,
+          this.topActions,
+        ]),
+        el('div', { class: 'workspace' }, [this.toolRail, canvasArea, this.dock]),
+        this.toastNode,
+      ]),
+    );
+
+    this.title.addEventListener('click', () => this.openTab('map'));
+
+    this.buildModeBar();
+    this.buildTabs();
+    this.openTab('tiles');
+    this.setMode('map');
+    this.refreshChrome();
+
+    store.on('ui', () => this.refreshChrome());
+    store.on('view', () => this.refreshStatus());
+    store.on('structure', () => this.refreshPanels());
+    store.on('toast', (message) => this.toast(String(message)));
+    // The studio owns its own state, so mirror its changes into the chrome.
+    studio.on(() => {
+      if (this.mode !== 'character') return;
+      this.buildToolRail();
+      this.buildTopActions();
+    });
+  }
+
+  // --- Chrome --------------------------------------------------------------
+
+  private buildModeBar(): void {
+    clear(this.modeBar);
+    const modes: { id: Mode; label: string; icon: IconName }[] = [
+      { id: 'map', label: 'Map', icon: 'grid' },
+      { id: 'character', label: 'Character', icon: 'pencilTip' },
+    ];
+    for (const mode of modes) {
+      const active = this.mode === mode.id;
+      const node = button(`mode-btn${active ? ' active' : ''}`, mode.label, () => this.setMode(mode.id), [
+        icon(mode.icon, 17),
+        el('span', { text: mode.label }),
+      ]);
+      node.setAttribute('role', 'tab');
+      node.setAttribute('aria-selected', String(active));
+      this.modeBar.append(node);
+    }
+  }
+
+  get currentMode(): Mode {
+    return this.mode;
+  }
+
+  /**
+   * Routes a tool shortcut to whichever toolset is on screen, so B always
+   * means "draw" whether you are painting tiles or pixels.
+   */
+  selectToolByKey(key: string): boolean {
+    if (this.mode === 'character') {
+      const tool = PIXEL_TOOLS.find((t) => t.key.toLowerCase() === key);
+      if (!tool) return false;
+      this.studio.tool = tool.id;
+      this.studio.emit();
+      this.refreshPanels();
+      return true;
+    }
+    const tool = TOOLS.find((t) => t.key.toLowerCase() === key);
+    if (!tool) return false;
+    this.store.setTool(tool.id);
+    return true;
+  }
+
+  setMode(mode: Mode): void {
+    this.mode = mode;
+    const character = mode === 'character';
+    this.renderer.canvas.classList.toggle('inactive', character);
+    this.characterView.canvas.classList.toggle('inactive', !character);
+
+    this.buildModeBar();
+    this.buildTabs();
+    this.refreshPanelBody();
+    this.refreshChrome();
+
+    // Both canvases are laid out by CSS, so whichever just appeared needs to
+    // measure itself before its first paint.
+    requestAnimationFrame(() => {
+      if (character) {
+        this.characterView.resize();
+        if (this.studio.characters.length > 0) this.characterView.fit();
+      } else {
+        this.renderer.resize();
+      }
+    });
+  }
+
+  private buildToolRail(): void {
+    clear(this.toolRail);
+
+    if (this.mode === 'character') {
+      for (const tool of PIXEL_TOOLS) {
+        const active = this.studio.tool === tool.id;
+        const node = button(
+          `tool-btn${active ? ' active' : ''}`,
+          `${tool.label} (${tool.key})`,
+          () => {
+            this.studio.tool = tool.id;
+            this.studio.emit();
+            this.refreshPanels();
+          },
+          [icon(tool.icon, 23), el('span', { class: 'tool-label', text: tool.label })],
+        );
+        node.setAttribute('aria-pressed', String(active));
+        this.toolRail.append(node);
+      }
+      return;
+    }
+
+    for (const tool of TOOLS) {
+      const active = this.store.tool === tool.id;
+      const node = button(
+        `tool-btn${active ? ' active' : ''}`,
+        `${tool.label} (${tool.key})`,
+        () => this.store.setTool(tool.id),
+        [icon(tool.icon, 23), el('span', { class: 'tool-label', text: tool.label })],
+      );
+      node.setAttribute('aria-pressed', String(active));
+      this.toolRail.append(node);
+    }
+  }
+
+  private buildTopActions(): void {
+    clear(this.topActions);
+    const character = this.mode === 'character';
+
+    const canUndo = character ? this.studio.canUndo : this.store.history.canUndo;
+    const canRedo = character ? this.studio.canRedo : this.store.history.canRedo;
+
+    const undo = button('icon-btn', 'Undo', () => this.undo(), [icon('undo', 20)]);
+    undo.disabled = !canUndo;
+    const redo = button('icon-btn', 'Redo', () => this.redo(), [icon('redo', 20)]);
+    redo.disabled = !canRedo;
+
+    if (!character) {
+      const { undoLabel, redoLabel } = this.store.history;
+      if (undoLabel) undo.title = `Undo ${undoLabel.toLowerCase()}`;
+      if (redoLabel) redo.title = `Redo ${redoLabel.toLowerCase()}`;
+    }
+
+    this.topActions.append(
+      undo,
+      redo,
+      el('div', { class: 'divider' }),
+      button('icon-btn', 'Zoom out', () => this.nudgeZoom(1 / 1.4), [icon('zoomOut', 20)]),
+      button('icon-btn', 'Zoom in', () => this.nudgeZoom(1.4), [icon('zoomIn', 20)]),
+      button('icon-btn', character ? 'Fit sprite to screen' : 'Fit map to screen', () => {
+        if (character) this.characterView.fit();
+        else this.actions.fitToView();
+      }, [icon('fit', 20)]),
+      el('div', { class: 'divider' }),
+      button('icon-btn', 'Export', () => this.actions.exportMap(), [icon('download', 20)]),
+      button('icon-btn dock-toggle', 'Show or hide the side panel', () => this.toggleDock(), [
+        icon('layers', 20),
+      ]),
+    );
+  }
+
+  undo(): void {
+    if (this.mode === 'character') {
+      this.studio.undo();
+      this.characterView.requestDraw();
+      this.refreshPanels();
+    } else {
+      this.editor.undo();
+    }
+  }
+
+  redo(): void {
+    if (this.mode === 'character') {
+      this.studio.redo();
+      this.characterView.requestDraw();
+      this.refreshPanels();
+    } else {
+      this.editor.redo();
+    }
+  }
+
+  private buildOptionsBar(): void {
+    clear(this.optionsBar);
+    const store = this.store;
+    const chips: HTMLElement[] = [];
+
+    if (this.mode === 'character') {
+      chips.push(
+        el('span', { class: 'chip-label', text: this.studio.character ? 'Pencil draws · fingers pan' : 'No character yet' }),
+        el('div', { class: 'divider vertical' }),
+        this.chipToggle('flipH', 'Symmetry', this.studio.mirrorX, () => {
+          this.studio.mirrorX = !this.studio.mirrorX;
+          this.characterView.requestDraw();
+          this.refreshPanels();
+        }),
+        this.chipToggle('layers', 'Onion skin', this.studio.onionSkin, () => {
+          this.studio.onionSkin = !this.studio.onionSkin;
+          this.characterView.requestDraw();
+          this.refreshPanels();
+        }),
+      );
+      this.optionsBar.append(...chips);
+      return;
+    }
+
+    if (store.tool === 'eraser') {
+      chips.push(el('span', { class: 'chip-label', text: 'Erase' }));
+      for (const shape of ERASER_SHAPES) {
+        const active = store.eraserShape === shape.id;
+        chips.push(
+          button(`chip${active ? ' active' : ''}`, shape.label, () => {
+            store.eraserShape = shape.id;
+            store.emit('ui');
+          }, [icon(shape.icon, 17)]),
+        );
+      }
+    } else {
+      const stamp = store.stamp;
+      const text =
+        stamp.w === 0
+          ? 'No tile selected'
+          : stamp.w === 1 && stamp.h === 1
+            ? '1 tile'
+            : `${stamp.w} x ${stamp.h} tiles`;
+      chips.push(el('span', { class: 'chip-label', text }));
+    }
+
+    // Only offer the scale preview once there is a character to show.
+    if (this.studio.character) {
+      const preview = store.characterPreview;
+      chips.push(
+        el('div', { class: 'divider vertical' }),
+        this.chipToggle('pencilTip', 'Character', preview.enabled, () => {
+          preview.enabled = !preview.enabled;
+          if (!preview.enabled) preview.placing = false;
+          this.refreshChrome();
+          this.renderer.requestDraw();
+        }),
+      );
+      if (preview.enabled) {
+        chips.push(
+          this.chipToggle('pan', 'Move it', preview.placing, () => {
+            preview.placing = !preview.placing;
+            this.refreshChrome();
+            this.renderer.requestDraw();
+          }),
+        );
+      }
+    }
+
+    chips.push(el('div', { class: 'divider vertical' }));
+    chips.push(
+      this.chipToggle('grid', 'Grid', store.settings.showGrid, () => {
+        store.settings.showGrid = !store.settings.showGrid;
+        store.emit('ui');
+        store.emit('doc');
+      }),
+      this.chipToggle('pencilTip', 'Finger draws', store.settings.fingerDraws, () => {
+        store.settings.fingerDraws = !store.settings.fingerDraws;
+        store.emit('ui');
+      }),
+    );
+
+    this.optionsBar.append(...chips);
+  }
+
+  private chipToggle(name: IconName, label: string, active: boolean, onPress: () => void): HTMLElement {
+    const node = button(`chip${active ? ' active' : ''}`, label, onPress, [
+      icon(name, 17),
+      el('span', { class: 'chip-text', text: label }),
+    ]);
+    node.setAttribute('aria-pressed', String(active));
+    return node;
+  }
+
+  private nudgeZoom(factor: number): void {
+    if (this.mode === 'character') {
+      const rect = this.characterView.canvas.getBoundingClientRect();
+      this.characterView.zoom = Math.max(1, Math.min(64, this.characterView.zoom * factor));
+      // Re-centre rather than anchoring, since the buttons have no cursor.
+      const character = this.studio.character;
+      if (character) {
+        this.characterView.offsetX = Math.round((rect.width - character.w * this.characterView.zoom) / 2);
+        this.characterView.offsetY = Math.round((rect.height - character.h * this.characterView.zoom) / 2);
+      }
+      this.characterView.requestDraw();
+      return;
+    }
+    const camera = this.store.camera;
+    zoomAt(camera, this.renderer.viewW / 2, this.renderer.viewH / 2, clampZoom(camera.zoom * factor));
+    this.store.emit('view');
+    this.renderer.requestDraw();
+  }
+
+  // --- Dock ----------------------------------------------------------------
+
+  private buildTabs(): void {
+    clear(this.tabBar);
+    // The studio is a single panel, so it needs no tab strip.
+    this.tabBar.style.display = this.mode === 'character' ? 'none' : '';
+    if (this.mode === 'character') return;
+
+    const tabs: { id: TabId; label: string; icon: IconName }[] = [
+      { id: 'tiles', label: 'Tiles', icon: 'tiles' },
+      { id: 'layers', label: 'Layers', icon: 'layers' },
+      { id: 'map', label: 'Map', icon: 'settings' },
+    ];
+    for (const tab of tabs) {
+      const active = this.tab === tab.id;
+      const node = button(`dock-tab${active ? ' active' : ''}`, tab.label, () => this.openTab(tab.id), [
+        icon(tab.icon, 18),
+        el('span', { text: tab.label }),
+      ]);
+      node.setAttribute('role', 'tab');
+      node.setAttribute('aria-selected', String(active));
+      this.tabBar.append(node);
+    }
+  }
+
+  openTab(tab: TabId): void {
+    this.tab = tab;
+    if (this.mode !== 'map') this.setMode('map');
+    if (!this.dockOpen) this.toggleDock(true);
+    this.refreshPanelBody();
+    this.buildTabs();
+  }
+
+  /** Fills the dock with whatever the current mode and tab call for. */
+  private refreshPanelBody(): void {
+    clear(this.dockBody);
+
+    if (this.mode === 'character') {
+      this.dockBody.append(this.characterPanel.element);
+      this.characterPanel.refresh();
+      return;
+    }
+
+    if (this.tab === 'tiles') {
+      this.dockBody.append(this.palette.element);
+      // The palette sizes itself to the panel, which only has a width once
+      // it is in the document.
+      requestAnimationFrame(() => this.palette.layout());
+    } else if (this.tab === 'layers') {
+      this.dockBody.append(this.layersPanel.element);
+      this.layersPanel.refresh();
+    } else {
+      this.dockBody.append(this.mapPanel.element);
+      this.mapPanel.refresh();
+    }
+  }
+
+  toggleDock(force?: boolean): void {
+    this.dockOpen = force ?? !this.dockOpen;
+    this.dock.classList.toggle('collapsed', !this.dockOpen);
+    // The canvas changed size, so the renderer needs new dimensions.
+    requestAnimationFrame(() => {
+      this.renderer.resize();
+      if (this.tab === 'tiles') this.palette.layout();
+    });
+  }
+
+  // --- Refresh -------------------------------------------------------------
+
+  refreshChrome(): void {
+    this.buildToolRail();
+    this.buildTopActions();
+    this.buildOptionsBar();
+    this.title.textContent =
+      this.mode === 'character' ? (this.studio.character?.name ?? 'Character studio') : this.store.doc.name;
+    this.refreshStatus();
+  }
+
+  refreshPanels(): void {
+    if (this.mode === 'character') {
+      this.characterPanel.refresh();
+      this.refreshChrome();
+      return;
+    }
+    if (this.tab === 'layers') this.layersPanel.refresh();
+    else if (this.tab === 'map') this.mapPanel.refresh();
+    else this.palette.layout();
+    this.refreshChrome();
+  }
+
+  refreshStatus(): void {
+    clear(this.status);
+    if (this.mode === 'character') {
+      const character = this.studio.character;
+      if (!character) return;
+      this.status.append(
+        el('span', { text: `${character.w} x ${character.h} px` }),
+        el('span', { class: 'divider vertical' }),
+        el('span', { text: `${character.tilesW} x ${character.tilesH} tiles` }),
+      );
+      return;
+    }
+    const { hover, camera, doc } = this.store;
+    this.status.append(
+      el('span', { text: hover ? `${hover.x}, ${hover.y}` : `${doc.width} x ${doc.height}` }),
+      el('span', { class: 'divider vertical' }),
+      el('span', { text: `${Math.round(camera.zoom * 100)}%` }),
+    );
+  }
+
+  toast(message: string): void {
+    this.toastNode.textContent = message;
+    this.toastNode.classList.add('visible');
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => this.toastNode.classList.remove('visible'), 1700);
+  }
+}

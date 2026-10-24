@@ -1,0 +1,17 @@
+{
+  "name": "pixel-fusion",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Touch-first tilemap editor for iPad and Apple Pencil",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}

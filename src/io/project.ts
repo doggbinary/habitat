@@ -1,0 +1,268 @@
+import { STARTER_PALETTE, type Character } from '../character/model';
+import { loadImage, makeTileset, uid, type Doc, type Layer, type Tileset } from '../core/doc';
+import { EMPTY } from '../core/tiles';
+
+/**
+ * On-disk project format. Layer buffers are base64 so a project round-trips
+ * through plain JSON, which keeps a saved file openable on any device and
+ * small enough to sit in IndexedDB without extra encoding.
+ */
+
+/** 2 added image layers and characters. Version 1 files still load. */
+export const PROJECT_VERSION = 2;
+
+interface SerializedLayerBase {
+  id: string;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
+}
+
+interface SerializedTileLayer extends SerializedLayerBase {
+  /** Absent in version 1 files, which only had tile layers. */
+  kind?: 'tiles';
+  collider: boolean;
+  data: string;
+}
+
+interface SerializedImageLayer extends SerializedLayerBase {
+  kind: 'image';
+  src: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+type SerializedLayer = SerializedTileLayer | SerializedImageLayer;
+
+interface SerializedTileset {
+  id: string;
+  name: string;
+  src: string;
+  tileW: number;
+  tileH: number;
+  margin: number;
+  spacing: number;
+}
+
+interface SerializedCharacter {
+  id: string;
+  name: string;
+  tilesW: number;
+  tilesH: number;
+  w: number;
+  h: number;
+  frameCount: number;
+  frameMs: number;
+  palette: string[];
+  /** Base64 RGBA buffers, direction-major like `Character.frames`. */
+  frames: string[];
+}
+
+export interface SerializedProject {
+  format: 'pixel-fusion-project';
+  version: number;
+  name: string;
+  width: number;
+  height: number;
+  tileSize: number;
+  background: string;
+  activeLayer: number;
+  tilesets: SerializedTileset[];
+  layers: SerializedLayer[];
+  /** Absent in version 1 files. */
+  characters?: SerializedCharacter[];
+}
+
+function toBase64(buffer: ArrayBufferLike): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  // Chunked so a large map does not blow the argument limit of fromCharCode.
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+function fromBase64(value: string): ArrayBuffer {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+export function serializeProject(doc: Doc, characters: Character[] = []): SerializedProject {
+  return {
+    characters: characters.map((c) => ({
+      id: c.id,
+      name: c.name,
+      tilesW: c.tilesW,
+      tilesH: c.tilesH,
+      w: c.w,
+      h: c.h,
+      frameCount: c.frameCount,
+      frameMs: c.frameMs,
+      palette: [...c.palette],
+      frames: c.frames.map((f) => toBase64(f.data.buffer)),
+    })),
+    format: 'pixel-fusion-project',
+    version: PROJECT_VERSION,
+    name: doc.name,
+    width: doc.width,
+    height: doc.height,
+    tileSize: doc.tileSize,
+    background: doc.background,
+    activeLayer: doc.activeLayer,
+    tilesets: doc.tilesets.map((t) => ({
+      id: t.id,
+      name: t.name,
+      src: t.src,
+      tileW: t.tileW,
+      tileH: t.tileH,
+      margin: t.margin,
+      spacing: t.spacing,
+    })),
+    layers: doc.layers.map((l): SerializedLayer => {
+      const base = {
+        id: l.id,
+        name: l.name,
+        visible: l.visible,
+        locked: l.locked,
+        opacity: l.opacity,
+      };
+      if (l.kind === 'image') {
+        return { ...base, kind: 'image', src: l.src, x: l.x, y: l.y, w: l.w, h: l.h };
+      }
+      return { ...base, kind: 'tiles', collider: l.collider, data: toBase64(l.data.buffer) };
+    }),
+  };
+}
+
+export function isProjectFile(value: unknown): value is SerializedProject {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    (value as SerializedProject).format === 'pixel-fusion-project' &&
+    Array.isArray((value as SerializedProject).layers)
+  );
+}
+
+/** Rebuilds the characters saved alongside a map. */
+export function deserializeCharacters(data: SerializedProject): Character[] {
+  if (!data.characters) return [];
+  return data.characters.map((c) => {
+    const expected = c.w * c.h * 4;
+    const frames = c.frames.map((encoded) => {
+      const decoded = new Uint8ClampedArray(fromBase64(encoded));
+      if (decoded.length === expected) return { id: uid('frame'), data: decoded };
+      // Tolerate a frame whose size disagrees with the header rather than
+      // losing the whole character.
+      const fixed = new Uint8ClampedArray(expected);
+      fixed.set(decoded.subarray(0, Math.min(decoded.length, expected)));
+      return { id: uid('frame'), data: fixed };
+    });
+    return {
+      id: c.id || uid('char'),
+      name: c.name,
+      tilesW: c.tilesW,
+      tilesH: c.tilesH,
+      w: c.w,
+      h: c.h,
+      frameCount: c.frameCount,
+      frameMs: c.frameMs ?? 140,
+      palette: c.palette?.length ? [...c.palette] : [...STARTER_PALETTE],
+      frames,
+    };
+  });
+}
+
+export async function deserializeProject(data: SerializedProject): Promise<Doc> {
+  const expected = data.width * data.height;
+
+  const tilesets: Tileset[] = [];
+  for (const t of data.tilesets) {
+    try {
+      const tileset = await makeTileset(t.src, t.name, t.tileW, t.tileH, t.margin, t.spacing);
+      // Keep the saved id so nothing else in the project has to be remapped.
+      tileset.id = t.id;
+      tilesets.push(tileset);
+    } catch {
+      // A tileset that fails to decode would otherwise shift every later
+      // tileset index and silently corrupt the map, so insert a placeholder.
+      tilesets.push({
+        id: t.id,
+        name: `${t.name} (missing)`,
+        src: t.src,
+        tileW: t.tileW,
+        tileH: t.tileH,
+        margin: t.margin,
+        spacing: t.spacing,
+        image: null,
+        imgW: 0,
+        imgH: 0,
+        cols: 0,
+        rows: 0,
+        count: 0,
+      });
+    }
+  }
+
+  const layers: Layer[] = [];
+  for (const l of data.layers) {
+    const base = {
+      id: l.id || uid('layer'),
+      name: l.name,
+      visible: l.visible,
+      locked: l.locked,
+      opacity: l.opacity ?? 1,
+    };
+
+    if (l.kind === 'image') {
+      // A reference image that cannot be decoded still keeps its slot and
+      // placement, so the layer stack and the project file stay consistent.
+      let image: HTMLImageElement | null = null;
+      try {
+        image = await loadImage(l.src);
+      } catch {
+        image = null;
+      }
+      layers.push({
+        ...base,
+        kind: 'image',
+        src: l.src,
+        image,
+        x: l.x,
+        y: l.y,
+        w: l.w,
+        h: l.h,
+        naturalW: image?.naturalWidth ?? l.w,
+        naturalH: image?.naturalHeight ?? l.h,
+      });
+      continue;
+    }
+
+    const decoded = new Int32Array(fromBase64(l.data));
+    let cells = decoded;
+    // Guard against a file whose dimensions disagree with its buffers.
+    if (decoded.length !== expected) {
+      cells = new Int32Array(expected);
+      cells.fill(EMPTY);
+      cells.set(decoded.subarray(0, Math.min(decoded.length, expected)));
+    }
+    layers.push({ ...base, kind: 'tiles', collider: l.collider ?? false, data: cells });
+  }
+
+  return {
+    name: data.name,
+    width: data.width,
+    height: data.height,
+    tileSize: data.tileSize,
+    background: data.background ?? '#1b1d24',
+    tilesets,
+    layers,
+    activeLayer: Math.min(Math.max(0, data.activeLayer ?? 0), Math.max(0, layers.length - 1)),
+  };
+}
