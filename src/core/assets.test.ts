@@ -5,6 +5,7 @@ import {
   assetsInImage,
   findGround,
   isGroundSheetName,
+  sheetIsAllTiles,
   mergeAssets,
   type SheetGrid,
   type TileGrid,
@@ -200,16 +201,23 @@ describe('telling ground from props', () => {
     return rgba;
   };
 
-  it('keeps one floor patch whole as a single sticker', () => {
+  it('splits a connected road into one square each, so the pieces can be placed apart', () => {
     const rgba = painted([[0, 0, 90], [1, 0, 90], [0, 1, 90], [1, 1, 90]]);
-    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([{ x: 0, y: 0, w: 20, h: 20 }]);
+    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([
+      { x: 0, y: 0, w: 10, h: 10 },
+      { x: 10, y: 0, w: 10, h: 10 },
+      { x: 0, y: 10, w: 10, h: 10 },
+      { x: 10, y: 10, w: 10, h: 10 },
+    ]);
   });
 
-  it('separates two different floors drawn touching, at the seam between them', () => {
+  it('keeps touching squares of different ground as their own tiles', () => {
     const rgba = painted([[0, 0, 60], [1, 0, 60], [2, 0, 200], [3, 0, 200]]);
     expect(assetsInImage(rgba, W, H, grid, false)).toEqual([
-      { x: 0, y: 0, w: 20, h: 10 },
-      { x: 20, y: 0, w: 20, h: 10 },
+      { x: 0, y: 0, w: 10, h: 10 },
+      { x: 10, y: 0, w: 10, h: 10 },
+      { x: 20, y: 0, w: 10, h: 10 },
+      { x: 30, y: 0, w: 10, h: 10 },
     ]);
   });
 
@@ -219,5 +227,7 @@ describe('telling ground from props', () => {
     expect(isGroundSheetName('tile-B-01')).toBe(false);
     expect(isGroundSheetName('1')).toBe(false);
     expect(isGroundSheetName('Area 51')).toBe(false);
+    expect(sheetIsAllTiles('Paths 1')).toBe(true);
+    expect(sheetIsAllTiles('Nature Park 1')).toBe(false);
   });
 });

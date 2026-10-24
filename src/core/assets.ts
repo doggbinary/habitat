@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 6;
+export const DETECT_VERSION = 7;
 
 /** A cell this solid reads as floor: ground texture runs edge to edge. */
 const FLOOR_FILL = 0.97;
@@ -37,6 +37,11 @@ const SMALL_RUN = 3;
  */
 export function isGroundSheetName(name: string): boolean {
   return /(?:^|[^a-z0-9])a[1-5](?:[^0-9]|$)/i.test(name);
+}
+
+/** Paths pages are a grid of road and ground squares, one asset per square. */
+export function sheetIsAllTiles(name: string): boolean {
+  return isGroundSheetName(name) || /^paths \d+$/i.test(name);
 }
 
 /**
@@ -538,21 +543,14 @@ export function detectSheetAssets(tileset: Tileset): AssetRect[] {
   if (!ctx) return [];
   ctx.drawImage(tileset.image, 0, 0);
   const rgba = ctx.getImageData(0, 0, w, h).data;
-  return assetsInImage(rgba, w, h, sheetGrid(tileset), isGroundSheetName(tileset.name));
+  return assetsInImage(rgba, w, h, sheetGrid(tileset), sheetIsAllTiles(tileset.name));
 }
 
 /**
- * A seam this many times sharper than the texture on either side marks
- * where one floor patch ends and the next begins: grass meeting brick.
- * Within one floor the picture changes no more across a square's edge than
- * it does inside the square.
- */
-const SEAM_RATIO = 1.5;
-
-/**
- * Every asset on a sheet as a sticker: each prop whole, found with the floor
- * left out so a bench never fuses with the grass beside it, then each floor
- * patch whole, cut from its neighbours only where the picture has a seam.
+ * Every asset on a sheet: each prop whole, found with the floor left out so
+ * a bench never fuses with the grass beside it, then each floor square on
+ * its own. A run of road or grass is a path, and the squares have to come
+ * apart so a corner can be placed by itself.
  */
 export function assetsInImage(rgba: Uint8ClampedArray, w: number, h: number, grid: SheetGrid, groundSheet: boolean): AssetRect[] {
   const alpha = new Uint8Array(w * h);
@@ -560,24 +558,9 @@ export function assetsInImage(rgba: Uint8ClampedArray, w: number, h: number, gri
   const ground = findGround(alpha, w, h, grid, groundSheet);
   const props = groundSheet ? [] : detectAssetsInMask(alpha, w, h, { tile: grid, ground: { ...ground, props: [] } });
 
+  const floor: AssetRect[] = [];
   const count = grid.cols * grid.rows;
-  const parent = Array.from({ length: count }, (_, i) => i);
-  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  for (let i = 0; i < count; i++) {
-    if (!ground.cells[i]) continue;
-    const right = i % grid.cols < grid.cols - 1 ? i + 1 : -1;
-    const below = i + grid.cols < count ? i + grid.cols : -1;
-    for (const j of [right, below]) {
-      if (j !== -1 && ground.cells[j] && seamRatio(rgba, w, grid, i, j) < SEAM_RATIO) parent[find(i)] = find(j);
-    }
-  }
-  const pieces = new Map<number, number[]>();
-  for (let i = 0; i < count; i++) {
-    if (!ground.cells[i]) continue;
-    const root = find(i);
-    pieces.set(root, [...(pieces.get(root) ?? []), i]);
-  }
-  const floor = [...pieces.values()].map((members) => cellsBox(members, grid));
+  for (let i = 0; i < count; i++) if (ground.cells[i]) floor.push(cellsBox([i], grid));
   return readingOrder([...withoutInnerPieces(props), ...floor]);
 }
 
@@ -587,48 +570,6 @@ function withoutInnerPieces(rects: AssetRect[]): AssetRect[] {
     a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
   // Of two identical boxes, the first is kept.
   return rects.filter((r, i) => !rects.some((other, j) => j !== i && inside(r, other) && (!inside(other, r) || j < i)));
-}
-
-/** How much sharper the change across the edge between cells `a` and `b` is than inside them. */
-function seamRatio(rgba: Uint8ClampedArray, w: number, grid: SheetGrid, a: number, b: number): number {
-  const horizontal = b === a + 1;
-  const origin = (i: number) => ({
-    x: grid.margin + (i % grid.cols) * (grid.w + grid.spacing),
-    y: grid.margin + Math.floor(i / grid.cols) * (grid.h + grid.spacing),
-  });
-  const diff = (x1: number, y1: number, x2: number, y2: number): number | null => {
-    const p = (y1 * w + x1) * 4;
-    const q = (y2 * w + x2) * 4;
-    if (rgba[p + 3] <= ALPHA_CUTOFF || rgba[q + 3] <= ALPHA_CUTOFF) return null;
-    return (Math.abs(rgba[p] - rgba[q]) + Math.abs(rgba[p + 1] - rgba[q + 1]) + Math.abs(rgba[p + 2] - rgba[q + 2])) / 3;
-  };
-  const average = (pairs: (number | null)[]) => {
-    const values = pairs.filter((v): v is number => v !== null);
-    return values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
-  };
-  const oa = origin(a);
-  const ob = origin(b);
-  const length = horizontal ? grid.h : grid.w;
-  const across: (number | null)[] = [];
-  for (let t = 0; t < length; t++) {
-    across.push(
-      horizontal
-        ? diff(oa.x + grid.w - 1, oa.y + t, ob.x, ob.y + t)
-        : diff(oa.x + t, oa.y + grid.h - 1, ob.x + t, ob.y),
-    );
-  }
-  /** Change between neighbouring pixel lines inside a cell, in the same direction. */
-  const inside = (o: { x: number; y: number }) => {
-    const pairs: (number | null)[] = [];
-    const depth = horizontal ? grid.w : grid.h;
-    for (let k = 0; k < depth - 1; k++) {
-      for (let t = 0; t < length; t += 2) {
-        pairs.push(horizontal ? diff(o.x + k, o.y + t, o.x + k + 1, o.y + t) : diff(o.x + t, o.y + k, o.x + t, o.y + k + 1));
-      }
-    }
-    return average(pairs);
-  };
-  return average(across) / (Math.max(inside(oa), inside(ob)) + 4);
 }
 
 function gridCells(tileset: Tileset): AssetRect[] {

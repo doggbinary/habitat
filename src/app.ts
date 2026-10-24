@@ -242,12 +242,18 @@ export class App {
     if (fresh.length === 0) return 0;
 
     const empty = this.store.doc.tilesets.length === 0;
+    const paths = fresh.filter((sheet) => /^paths \d+$/i.test(sheet.name));
+    const others = fresh.filter((sheet) => !/^paths \d+$/i.test(sheet.name));
     this.editor.structural('Add asset library', () => {
-      this.store.doc.tilesets.push(...fresh);
+      // Path pages sit at the front of the list. Shift the selection with
+      // them so the page someone was already on stays open.
+      this.store.doc.tilesets.unshift(...paths);
+      this.store.activeTileset += paths.length;
+      this.store.doc.tilesets.push(...others);
     });
     if (empty) {
-      const lamps = this.store.doc.tilesets.findIndex((sheet) => sheet.name === 'Modern Suburb Neighborhood 1');
-      this.store.activeTileset = lamps >= 0 ? lamps : 0;
+      const firstPaths = this.store.doc.tilesets.findIndex((sheet) => sheet.name === 'Paths 1');
+      this.store.activeTileset = firstPaths >= 0 ? firstPaths : 0;
       this.selectFirstTile();
     }
     this.store.toast(`${fresh.length} asset ${fresh.length === 1 ? 'page' : 'pages'} ready`);

@@ -8,6 +8,41 @@ export function isLibrarySheet(folders: string[], file: string): boolean {
   return /^tile-b-\d+\.png$/i.test(file) || /^\d+\.png$/i.test(file);
 }
 
+/** Ground pages (RPG Maker A2) are the road, grass, gravel and brick squares. */
+export function isPathSheet(folders: string[], file: string): boolean {
+  if (folders.some((folder) => /\(\d+\)$/.test(folder))) return false;
+  return /(?:^|[^a-z0-9])a2(?:[^0-9]|$)/i.test(file);
+}
+
+export function libraryUrl(folders: string[], file: string): string {
+  return `library/${[...folders, file].map((part) => encodeURIComponent(part)).join('/')}`;
+}
+
+export interface LibraryFile {
+  folders: string[];
+  file: string;
+}
+
+/**
+ * Object pages keep their pack names. Every ground page becomes Paths 1,
+ * Paths 2, and so on, listed first so the corners are easy to find.
+ */
+export function buildLibraryEntries(files: LibraryFile[]): LibraryEntry[] {
+  const objects: LibraryEntry[] = [];
+  const paths: LibraryEntry[] = [];
+  for (const item of files) {
+    const url = libraryUrl(item.folders, item.file);
+    if (isLibrarySheet(item.folders, item.file)) objects.push({ name: librarySheetName(item.folders, item.file), url });
+    else if (isPathSheet(item.folders, item.file)) paths.push({ name: url, url });
+  }
+  objects.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  paths.sort((a, b) => a.url.localeCompare(b.url, undefined, { numeric: true }));
+  paths.forEach((entry, index) => {
+    entry.name = `Paths ${index + 1}`;
+  });
+  return [...paths, ...objects];
+}
+
 /** "Nature Park" + "tile-B-01.png" becomes "Nature Park 1". */
 export function librarySheetName(folders: string[], file: string): string {
   const base = file.replace(/\.png$/i, '');

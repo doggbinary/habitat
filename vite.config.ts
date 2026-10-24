@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
-import { isLibrarySheet, librarySheetName, type LibraryEntry } from './src/library.ts';
+import { buildLibraryEntries, isLibrarySheet, isPathSheet, libraryUrl, type LibraryFile } from './src/library.ts';
 
 /**
  * Serves the object pages from the tileset folders next to this project.
@@ -13,7 +13,8 @@ import { isLibrarySheet, librarySheetName, type LibraryEntry } from './src/libra
 function assetLibrary(): Plugin {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../tilesets');
   const routes = new Map<string, string>();
-  const entries: LibraryEntry[] = [];
+  const found: LibraryFile[] = [];
+  const located = new Map<string, string>();
 
   const walk = (dir: string, folders: string[]) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -21,10 +22,9 @@ function assetLibrary(): Plugin {
         walk(path.join(dir, entry.name), [...folders, entry.name]);
         continue;
       }
-      if (!isLibrarySheet(folders, entry.name)) continue;
-      const url = `library/${[...folders, entry.name].map(encodeURIComponent).join('/')}`;
-      routes.set(`/${decodeURIComponent(url)}`, path.join(dir, entry.name));
-      entries.push({ name: librarySheetName(folders, entry.name), url });
+      if (!isLibrarySheet(folders, entry.name) && !isPathSheet(folders, entry.name)) continue;
+      found.push({ folders, file: entry.name });
+      located.set(libraryUrl(folders, entry.name), path.join(dir, entry.name));
     }
   };
 
@@ -33,7 +33,11 @@ function assetLibrary(): Plugin {
       if (entry.isDirectory()) walk(path.join(root, entry.name), [entry.name]);
     }
   }
-  entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  const entries = buildLibraryEntries(found);
+  for (const entry of entries) {
+    const file = located.get(entry.url);
+    if (file) routes.set(`/${decodeURIComponent(entry.url)}`, file);
+  }
   const manifest = JSON.stringify(entries);
 
   return {
