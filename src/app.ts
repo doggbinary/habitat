@@ -9,7 +9,18 @@ import {
   type Doc,
   type Tileset,
 } from './core/doc';
-import { DETECT_VERSION, assetsOf, detectAssets, gridOf, suggestSplitMode } from './core/assets';
+import {
+  DETECT_VERSION,
+  alphaChannel,
+  assetsOf,
+  deleteAssets,
+  detectAssets,
+  gridOf,
+  mergeAssets,
+  replaceAsset,
+  splitAssetByGrid,
+  suggestSplitMode,
+} from './core/assets';
 import { dominantColor } from './io/recolor';
 import { cropAsset } from './render/object-draw';
 import { ObjectTools } from './tools/objects';
@@ -91,6 +102,7 @@ export class App {
       dragMove: (x, y) => this.dragMove(x, y),
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
       setSplitMode: (sheet, mode) => this.setSplitMode(sheet, mode),
+      editAssets: (sheet, op, indices) => this.editAssets(sheet, op, indices),
       recolorObject: (anchor) => this.recolorObject(anchor),
       addImageLayer: () => void this.addImageLayer(),
       replaceImage: (index) => void this.replaceImage(index),
@@ -412,6 +424,45 @@ export class App {
     });
     this.store.libraryPick = null;
     this.store.toast(mode === 'objects' ? `${assets!.length} props` : `${sheet.count} ground tiles`);
+  }
+
+  /**
+   * Applies a hand correction to a sheet's props. The sheet is then marked as
+   * edited, so a future detector never redoes it over the user's changes.
+   */
+  private editAssets(sheetIndex: number, op: 'merge' | 'split' | 'delete', indices: number[]): void {
+    const sheet = this.store.doc.tilesets[sheetIndex];
+    const current = sheet?.assets;
+    if (!sheet || !current || indices.length === 0) return;
+
+    let next = current;
+    let label = 'Edit props';
+    if (op === 'merge') {
+      next = mergeAssets(current, indices);
+      label = 'Merge props';
+    } else if (op === 'delete') {
+      next = deleteAssets(current, indices);
+      label = 'Delete props';
+    } else {
+      const target = current[indices[0]];
+      if (!target || !sheet.image) return;
+      const { alpha, w } = alphaChannel(sheet.image);
+      const pieces = splitAssetByGrid(alpha, w, target, gridOf(sheet));
+      if (pieces.length < 2) {
+        this.store.toast('That prop already fits in one tile');
+        return;
+      }
+      next = replaceAsset(current, indices[0], pieces);
+      label = 'Split into tiles';
+    }
+    if (next === current) return;
+
+    this.editor.structural(label, () => {
+      sheet.assets = next;
+      sheet.assetsEdited = true;
+    });
+    this.store.libraryPick = null;
+    this.store.toast(`${label}: ${next.length} props`);
   }
 
   private tapAsset(sheetIndex: number, assetIndex: number): void {

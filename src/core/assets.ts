@@ -42,30 +42,65 @@ export interface DetectOptions {
   tile?: TileGrid;
 }
 
-/**
- * Splits a sheet into separate assets by finding the islands of opaque pixels
- * on its transparent background: one asset per separate thing on the sheet,
- * kept whole, never cut along the grid.
- */
-export function detectAssets(
-  image: CanvasImageSource & { width: number; height: number },
-  options: DetectOptions = {},
-): AssetRect[] {
+type SheetImage = CanvasImageSource & { width: number; height: number };
+
+/** A sheet's alpha channel, one byte per pixel, with its dimensions. */
+export function alphaChannel(image: SheetImage): { alpha: Uint8Array; w: number; h: number } {
   const w = 'naturalWidth' in image ? (image as HTMLImageElement).naturalWidth : image.width;
   const h = 'naturalHeight' in image ? (image as HTMLImageElement).naturalHeight : image.height;
-  if (w === 0 || h === 0) return [];
+  const alpha = new Uint8Array(w * h);
+  if (w === 0 || h === 0) return { alpha, w, h };
 
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return [];
+  if (!ctx) return { alpha, w, h };
   ctx.drawImage(image, 0, 0);
   const pixels = ctx.getImageData(0, 0, w, h).data;
-
-  const alpha = new Uint8Array(w * h);
   for (let i = 0; i < alpha.length; i++) alpha[i] = pixels[i * 4 + 3];
+  return { alpha, w, h };
+}
+
+/**
+ * Splits a sheet into separate assets by finding the islands of opaque pixels
+ * on its transparent background: one asset per separate thing on the sheet,
+ * kept whole, never cut along the grid.
+ */
+export function detectAssets(image: SheetImage, options: DetectOptions = {}): AssetRect[] {
+  const { alpha, w, h } = alphaChannel(image);
   return detectAssetsInMask(alpha, w, h, options);
+}
+
+// --- Fixing detection by hand ----------------------------------------------
+
+/**
+ * Joins several assets into one covering all of them, for a prop that came
+ * out in pieces. The result takes the place of the first one picked, so the
+ * palette does not jump around.
+ */
+export function mergeAssets(assets: AssetRect[], indices: number[]): AssetRect[] {
+  const picked = [...new Set(indices)].filter((i) => assets[i]).sort((a, b) => a - b);
+  if (picked.length < 2) return assets;
+  const rects = picked.map((i) => assets[i]);
+  const x0 = Math.min(...rects.map((r) => r.x));
+  const y0 = Math.min(...rects.map((r) => r.y));
+  const x1 = Math.max(...rects.map((r) => r.x + r.w));
+  const y1 = Math.max(...rects.map((r) => r.y + r.h));
+  const merged: AssetRect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  const drop = new Set(picked.slice(1));
+  return assets.flatMap((r, i) => (drop.has(i) ? [] : i === picked[0] ? [merged] : [r]));
+}
+
+export function deleteAssets(assets: AssetRect[], indices: number[]): AssetRect[] {
+  const drop = new Set(indices);
+  return assets.filter((_, i) => !drop.has(i));
+}
+
+/** Replaces one asset with the pieces it was split into, in its place. */
+export function replaceAsset(assets: AssetRect[], index: number, pieces: AssetRect[]): AssetRect[] {
+  if (!assets[index]) return assets;
+  return [...assets.slice(0, index), ...pieces, ...assets.slice(index + 1)];
 }
 
 /**

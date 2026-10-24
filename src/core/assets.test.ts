@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { detectAssetsInMask, splitAssetByGrid, type TileGrid } from './assets';
+import {
+  deleteAssets,
+  detectAssetsInMask,
+  mergeAssets,
+  replaceAsset,
+  splitAssetByGrid,
+  type TileGrid,
+} from './assets';
 
 /** A sheet built from ASCII art: `#` is opaque, anything else transparent. */
 function sheet(rows: string[]): { alpha: Uint8Array; w: number; h: number } {
@@ -98,6 +105,32 @@ describe('rejoining detached scraps', () => {
     // Two pebbles side by side: neither is big enough to be the other's parent.
     const alpha = blocks(200, 200, [[20, 20, 8, 8], [30, 20, 8, 8]]);
     expect(detectAssetsInMask(alpha, 200, 200, { tile })).toHaveLength(2);
+  });
+});
+
+describe('fixing detection by hand', () => {
+  const a = { x: 0, y: 0, w: 10, h: 10 };
+  const b = { x: 20, y: 5, w: 10, h: 20 };
+  const c = { x: 50, y: 50, w: 5, h: 5 };
+
+  it('merging covers every picked asset and takes the first one’s place', () => {
+    expect(mergeAssets([a, b, c], [2, 0])).toEqual([{ x: 0, y: 0, w: 55, h: 55 }, b]);
+  });
+
+  it('merging needs at least two assets', () => {
+    expect(mergeAssets([a, b], [1])).toEqual([a, b]);
+  });
+
+  it('deleting removes only the picked assets', () => {
+    expect(deleteAssets([a, b, c], [1])).toEqual([a, c]);
+  });
+
+  it('splitting puts the pieces where the original was', () => {
+    const pieces = [
+      { x: 20, y: 5, w: 10, h: 10 },
+      { x: 20, y: 15, w: 10, h: 10 },
+    ];
+    expect(replaceAsset([a, b, c], 1, pieces)).toEqual([a, ...pieces, c]);
   });
 });
 

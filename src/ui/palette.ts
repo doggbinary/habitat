@@ -27,6 +27,8 @@ export interface PaletteActions {
   dragEnd: (clientX: number, clientY: number, dropped: boolean) => void;
   /** Switches a sheet between painted ground tiles and placeable props. */
   setSplitMode: (tilesetIndex: number, mode: 'grid' | 'objects') => void;
+  /** Fixes detection by hand: join pieces, cut blended art into tiles, or drop strays. */
+  editAssets: (tilesetIndex: number, op: 'merge' | 'split' | 'delete', indices: number[]) => void;
 }
 
 /**
@@ -62,6 +64,14 @@ export class PalettePanel {
   private readonly pointers = new Map<number, string>();
 
   private ghost: HTMLCanvasElement | null = null;
+
+  /**
+   * Edit mode: taps select thumbnails instead of placing them, so detection
+   * can be corrected. Off by default and reset on every sheet change, so it
+   * never lingers and turns an ordinary tap into something unexpected.
+   */
+  private editing = false;
+  private readonly selected = new Set<number>();
 
   constructor(
     private readonly store: Store,
@@ -181,7 +191,8 @@ export class PalettePanel {
         }
 
         this.mode = 'pending';
-        if (e.pointerType === 'touch') {
+        // Nothing gets picked up while editing; a press is only ever a select.
+        if (e.pointerType === 'touch' && !this.editing) {
           const { clientX, clientY } = e;
           this.longPressTimer = window.setTimeout(() => {
             if (this.mode === 'pending') this.beginDrag(clientX, clientY);
@@ -206,8 +217,12 @@ export class PalettePanel {
               this.mode = 'scroll';
             }
           } else if (moved > PEN_SLOP) {
-            this.beginDrag(e.clientX, e.clientY);
-            return;
+            if (this.editing) {
+              this.mode = 'scroll';
+            } else {
+              this.beginDrag(e.clientX, e.clientY);
+              return;
+            }
           }
         }
 
@@ -237,7 +252,12 @@ export class PalettePanel {
       this.clearLongPress();
 
       const cancelled = e.type === 'pointercancel';
-      if (this.mode === 'pending' && !cancelled) {
+      if (this.mode === 'pending' && !cancelled && this.editing) {
+        if (this.selected.has(this.pressAsset)) this.selected.delete(this.pressAsset);
+        else this.selected.add(this.pressAsset);
+        this.buildHeader();
+        this.draw();
+      } else if (this.mode === 'pending' && !cancelled) {
         this.actions.tapAsset(this.store.activeTileset, this.pressAsset);
       } else if (this.mode === 'scroll') {
         this.startFling();
@@ -300,6 +320,9 @@ export class PalettePanel {
   showPage(index: number): void {
     const count = this.store.doc.tilesets.length;
     if (count === 0) return;
+    // Editing belongs to one sheet; never carry it onto the next.
+    this.editing = false;
+    this.selected.clear();
     this.store.activeTileset = ((index % count) + count) % count;
     this.layout();
     this.scroller.scrollTop = 0;
@@ -348,14 +371,66 @@ export class PalettePanel {
         button('icon-btn', 'Sheet settings', () => this.actions.editTileset(current), [icon('settings', 18)]),
         button('icon-btn', 'Import another sheet', () => this.actions.addTileset(), [icon('plus', 18)]),
         button('icon-btn danger', 'Remove sheet', () => this.actions.removeTileset(current), [icon('trash', 18)]),
+        el('div', { class: 'spacer' }),
+        // Fixing detection only makes sense for props; ground is a plain grid.
+        isObjects
+          ? button(`chip${this.editing ? ' active' : ''}`, 'Fix how this sheet is split into props', () =>
+              this.setEditing(!this.editing),
+            [icon('select', 16), el('span', { text: this.editing ? 'Editing' : 'Edit' })])
+          : null,
       ]),
+      this.editing && isObjects
+        ? this.editBar(current)
+        : el('p', {
+            class: 'hint',
+            text: isObjects
+              ? 'Tap an asset to add it, or press and hold, then drag it onto the map.'
+              : 'Tap a tile to paint ground with the brush, or press and hold to drag one onto the map.',
+          }),
+    );
+  }
+
+  private setEditing(on: boolean): void {
+    this.editing = on;
+    this.selected.clear();
+    this.buildHeader();
+    this.draw();
+  }
+
+  /**
+   * The edit actions, each enabled only when it means something for the
+   * current selection, so there is never a button that does nothing.
+   */
+  private editBar(sheetIndex: number): HTMLElement {
+    const picked = [...this.selected].sort((a, b) => a - b);
+    const run = (op: 'merge' | 'split' | 'delete') => {
+      this.selected.clear();
+      this.actions.editAssets(sheetIndex, op, picked);
+    };
+
+    const merge = button('chip', 'Join the selected pieces into one prop', () => run('merge'), [
+      el('span', { text: 'Merge' }),
+    ]);
+    merge.disabled = picked.length < 2;
+    const split = button('chip', 'Cut the selected prop into one per tile', () => run('split'), [
+      el('span', { text: 'Split into tiles' }),
+    ]);
+    split.disabled = picked.length !== 1;
+    const remove = button('chip danger', 'Remove the selected props from this sheet', () => run('delete'), [
+      el('span', { text: 'Delete' }),
+    ]);
+    remove.disabled = picked.length === 0;
+
+    return el('div', { class: 'edit-bar' }, [
       el('p', {
         class: 'hint',
-        text: isObjects
-          ? 'Tap an asset to add it, or press and hold, then drag it onto the map.'
-          : 'Tap a tile to paint ground with the brush, or press and hold to drag one onto the map.',
+        text:
+          picked.length === 0
+            ? 'Tap props to select them. Merge pieces that belong together, or split one that should be several.'
+            : `${picked.length} selected`,
       }),
-    );
+      el('div', { class: 'chip-row' }, [merge, split, remove]),
+    ]);
   }
 
   private splitButton(label: string, hint: string, active: boolean, onPress: () => void): HTMLButtonElement {
@@ -370,6 +445,9 @@ export class PalettePanel {
   layout(): void {
     const tileset = this.activeTileset();
     this.assets = tileset ? assetsOf(tileset) : [];
+    // Indices are only meaningful against the list they were picked from.
+    for (const i of [...this.selected]) if (i >= this.assets.length) this.selected.delete(i);
+    if (tileset?.splitMode !== 'objects') this.editing = false;
     const has = this.assets.length > 0;
     this.empty.style.display = this.store.doc.tilesets.length === 0 ? 'flex' : 'none';
     this.scroller.style.display = has ? 'block' : 'none';
@@ -410,12 +488,19 @@ export class PalettePanel {
       const x = col * cell;
       const y = row * cell;
 
-      const picked = pick?.tilesetId === tileset.id && pick.index === i;
-      ctx.fillStyle = picked ? 'rgba(126,160,255,0.18)' : 'rgba(255,255,255,0.035)';
+      // Editing shows its own selection in amber, so it is never confused
+      // with the brush's blue "this is what you will place" highlight.
+      const chosen = this.editing && this.selected.has(i);
+      const picked = !this.editing && pick?.tilesetId === tileset.id && pick.index === i;
+      ctx.fillStyle = chosen
+        ? 'rgba(255,214,102,0.2)'
+        : picked
+          ? 'rgba(126,160,255,0.18)'
+          : 'rgba(255,255,255,0.035)';
       roundRect(ctx, x + 3, y + 3, cell - 6, cell - 6, 8);
       ctx.fill();
-      if (picked) {
-        ctx.strokeStyle = '#7ea0ff';
+      if (chosen || picked) {
+        ctx.strokeStyle = chosen ? '#ffd666' : '#7ea0ff';
         ctx.lineWidth = 2;
         roundRect(ctx, x + 3, y + 3, cell - 6, cell - 6, 8);
         ctx.stroke();

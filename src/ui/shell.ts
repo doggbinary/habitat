@@ -22,6 +22,7 @@ export interface ShellActions {
   dragMove: PaletteActions['dragMove'];
   dragEnd: PaletteActions['dragEnd'];
   setSplitMode: PaletteActions['setSplitMode'];
+  editAssets: PaletteActions['editAssets'];
   recolorObject: (anchor: HTMLElement) => void;
   addImageLayer: () => void;
   replaceImage: (index: number) => void;
@@ -102,6 +103,7 @@ export class Shell {
       dragMove: actions.dragMove,
       dragEnd: actions.dragEnd,
       setSplitMode: actions.setSplitMode,
+      editAssets: actions.editAssets,
     });
     this.layersPanel = new LayersPanel(store, editor, {
       addImageLayer: actions.addImageLayer,

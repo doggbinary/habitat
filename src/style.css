@@ -514,6 +514,21 @@ textarea {
   font-weight: 600;
 }
 
+.edit-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(255, 214, 102, 0.07);
+  border: 1px solid rgba(255, 214, 102, 0.25);
+  border-radius: var(--radius);
+}
+
+.chip:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .palette-meta {
   display: flex;
   justify-content: space-between;
