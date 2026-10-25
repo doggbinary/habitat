@@ -25,6 +25,7 @@ import {
   type AssetEdit,
 } from './core/assets';
 import { floorIndexFromPath, floorTiles, isRawFloorSheet } from './core/autotile';
+import { clearWhiteBackdrop } from './core/background';
 import { applyTilesetMerge, pathMergePlan } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
 import { dominantColor, recolorToCanvas } from './io/recolor';
@@ -81,12 +82,30 @@ function detectInto(sheet: Tileset): void {
     buildFloors(sheet);
     return;
   }
+  // The detector reads a white backdrop itself, so it sees the picture first.
   const split = detectSheetSplit(sheet);
   sheet.assets = split.assets;
   sheet.groundAssets = split.ground;
   sheet.groundBlocks = split.patches;
   sheet.assetsVersion = DETECT_VERSION;
   sheet.splitMode = 'objects';
+  clearSheetBackdrop(sheet);
+}
+
+/** Makes a sheet's painted-on white backdrop transparent, so objects sit on the map. */
+function clearSheetBackdrop(sheet: Tileset): void {
+  const image = sheet.image;
+  if (!image || sheet.generated) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = sheet.imgW;
+  canvas.height = sheet.imgH;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return;
+  ctx.drawImage(image, 0, 0);
+  const pixels = ctx.getImageData(0, 0, sheet.imgW, sheet.imgH);
+  if (!clearWhiteBackdrop(pixels.data, sheet.imgW, sheet.imgH)) return;
+  ctx.putImageData(pixels, 0, 0);
+  sheet.image = canvas;
 }
 
 function isFloorPage(sheet: Tileset): boolean {
@@ -451,6 +470,7 @@ export class App {
     // assets keep the rectangle they were placed with, so the map is unchanged.
     collapseDuplicatePaths(doc);
     doc.tilesets.forEach((sheet, index) => {
+      clearSheetBackdrop(sheet);
       // Floor pages are built every load: the saved file keeps the pack's
       // original picture. Object pages that need a newer detector are redone
       // after the first paint, not here.

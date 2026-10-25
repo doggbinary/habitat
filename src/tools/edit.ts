@@ -25,7 +25,6 @@ import {
   type Stamp,
 } from '../core/stamp';
 import type { Store } from '../core/store';
-import { patchTileAt } from '../core/assets';
 import { EMPTY, flagsOf, indexOf, pack, tilesetOf, type PackedTile } from '../core/tiles';
 import type { Renderer } from '../render/renderer';
 import { normalizeRect, type Cell, type Rect } from './geometry';
@@ -129,16 +128,7 @@ export class Editor {
   }
 
   private write(layer: TileLayer, x: number, y: number, tile: PackedTile): void {
-    this.put(layer, x, y, this.continuePatch(tile, x, y), this.stroke);
-  }
-
-  /** A square of a ground patch becomes the patch square that falls at this cell. */
-  private continuePatch(tile: PackedTile, x: number, y: number): PackedTile {
-    if (tile === EMPTY) return tile;
-    const sheet = this.doc.tilesets[tilesetOf(tile)];
-    if (!sheet?.groundBlocks?.length) return tile;
-    const index = patchTileAt(sheet, indexOf(tile), x, y);
-    return index === indexOf(tile) ? tile : pack(tilesetOf(tile), index, flagsOf(tile));
+    this.put(layer, x, y, tile, this.stroke);
   }
 
   private put(layer: TileLayer, x: number, y: number, tile: PackedTile, stroke: Stroke | null): void {

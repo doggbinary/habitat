@@ -91,7 +91,7 @@ describe('ground patches', () => {
     expect(merged.ground.map((i) => merged.assets[i])).toEqual([sheet.assets[1], sheet.assets[3]]);
   });
 
-  it('reproduces the patch when a 3 by 3 area is painted with one square', () => {
+  it('paints exactly the picked square, never its neighbours in the patch', () => {
     const store = new Store();
     store.doc = createDoc(6, 6, 16);
     const sheet = fakeTileset('floor', 16);
@@ -107,6 +107,6 @@ describe('ground patches', () => {
     editor.endStroke();
     const layer = store.doc.layers[0] as TileLayer;
     const painted = [0, 1, 2].flatMap((y) => [0, 1, 2].map((x) => indexOf(layer.data[y * 6 + x])));
-    expect(painted).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(painted).toEqual([4, 4, 4, 4, 4, 4, 4, 4, 4]);
   });
 });
