@@ -326,10 +326,19 @@ export class App {
       this.characterView.resize();
     };
     if (typeof ResizeObserver !== 'undefined') {
-      new ResizeObserver(update).observe(this.canvas);
+      const observer = new ResizeObserver(update);
+      observer.observe(this.canvas);
+      // The sprite canvas is locked to fit its space, so it must re-fit whenever
+      // that space changes, including the panel opening while it is on screen.
+      observer.observe(this.characterView.canvas);
     }
     window.addEventListener('resize', update);
     window.addEventListener('orientationchange', () => setTimeout(update, 150));
+    // iPad browsers ignore user-scalable=no. Without this, a pinch on a canvas
+    // that does not zoom itself zooms the whole page and strands the editor.
+    for (const name of ['gesturestart', 'gesturechange', 'gestureend']) {
+      document.addEventListener(name, (e) => e.preventDefault(), { passive: false });
+    }
   }
 
   async start(): Promise<void> {
