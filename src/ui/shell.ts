@@ -391,6 +391,7 @@ export class Shell {
         el('div', { class: 'divider vertical' }),
         guard(this.selectionChip('copy', 'Duplicate', () => this.objects.duplicate())),
       );
+      this.appendPlay();
       return;
     }
 
@@ -424,6 +425,7 @@ export class Shell {
           this.refreshChrome();
         }, [icon('check', 17), el('span', { class: 'chip-text', text: 'Done' })]),
       );
+      this.appendPlay();
       return;
     }
 
@@ -434,6 +436,7 @@ export class Shell {
           text: 'Pencil: box tiles to pick them up · Finger: tap an asset, then drag it',
         }),
       );
+      this.appendPlay();
       return;
     }
 
@@ -571,6 +574,18 @@ export class Shell {
       this.refreshChrome();
       this.renderer.requestDraw();
     }, text ? [icon(name, 17), el('span', { class: 'chip-text', text })] : [icon(name, 17)]);
+  }
+
+  /** Play stays available while a character exists, whichever tool is in use. */
+  private appendPlay(): void {
+    if (this.mode !== 'map' || !this.studio.character) return;
+    this.optionsBar.append(
+      el('div', { class: 'divider vertical' }),
+      button('chip play-chip', 'Walk around your map full screen', () => this.actions.playTest(), [
+        icon('play', 17),
+        el('span', { class: 'chip-text', text: 'Play' }),
+      ]),
+    );
   }
 
   /** Smaller and bigger, for the brush and the eraser. */
