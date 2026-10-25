@@ -1,3 +1,4 @@
+import { CANVAS_PRESETS } from '../character/model';
 import type { PixelTool, Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
 import { flipStampH, flipStampV, rotateStampCW, type Stamp } from '../core/stamp';
@@ -303,16 +304,20 @@ export class Shell {
       if (redoLabel) redo.title = `Redo ${redoLabel.toLowerCase()}`;
     }
 
+    // The sprite canvas is locked to fit the screen, so it has no zoom controls.
+    const zoom = character
+      ? []
+      : [
+          el('div', { class: 'divider' }),
+          button('icon-btn', 'Zoom out', () => this.nudgeZoom(1 / 1.4), [icon('zoomOut', 20)]),
+          button('icon-btn', 'Zoom in', () => this.nudgeZoom(1.4), [icon('zoomIn', 20)]),
+          button('icon-btn', 'Fit map to screen', () => this.actions.fitToView(), [icon('fit', 20)]),
+        ];
+
     this.topActions.append(
       undo,
       redo,
-      el('div', { class: 'divider' }),
-      button('icon-btn', 'Zoom out', () => this.nudgeZoom(1 / 1.4), [icon('zoomOut', 20)]),
-      button('icon-btn', 'Zoom in', () => this.nudgeZoom(1.4), [icon('zoomIn', 20)]),
-      button('icon-btn', character ? 'Fit sprite to screen' : 'Fit map to screen', () => {
-        if (character) this.characterView.fit();
-        else this.actions.fitToView();
-      }, [icon('fit', 20)]),
+      ...zoom,
       el('div', { class: 'divider' }),
       button('icon-btn', 'Export', () => this.actions.exportMap(), [icon('download', 20)]),
       button('icon-btn dock-toggle', 'Show or hide the side panel', () => this.toggleDock(), [
@@ -454,8 +459,8 @@ export class Shell {
           text: !this.studio.character
             ? 'No character yet'
             : store.settings.fingerDraws
-              ? 'Pencil or one finger draws · two fingers pan'
-              : 'Pencil draws · fingers pan',
+              ? 'Pencil or finger draws'
+              : 'Pencil draws',
         }),
         el('div', { class: 'divider vertical' }),
         this.chipToggle('flipH', 'Symmetry', this.studio.mirrorX, () => {
@@ -638,18 +643,7 @@ export class Shell {
   }
 
   private nudgeZoom(factor: number): void {
-    if (this.mode === 'character') {
-      const rect = this.characterView.canvas.getBoundingClientRect();
-      this.characterView.zoom = Math.max(1, Math.min(64, this.characterView.zoom * factor));
-      // Re-centre rather than anchoring, since the buttons have no cursor.
-      const character = this.studio.character;
-      if (character) {
-        this.characterView.offsetX = Math.round((rect.width - character.w * this.characterView.zoom) / 2);
-        this.characterView.offsetY = Math.round((rect.height - character.h * this.characterView.zoom) / 2);
-      }
-      this.characterView.requestDraw();
-      return;
-    }
+    if (this.mode === 'character') return;
     const camera = this.store.camera;
     zoomAt(camera, this.renderer.viewW / 2, this.renderer.viewH / 2, stepZoom(camera.zoom, factor > 1 ? 1 : -1));
     this.store.emit('view');
@@ -751,11 +745,13 @@ export class Shell {
     if (this.mode === 'character') {
       const character = this.studio.character;
       if (!character) return;
-      this.status.append(
+      const size: HTMLButtonElement = button('status-size', 'Change the canvas size', () => this.openSizeMenu(size), [
         el('span', { text: `${character.w} x ${character.h} px` }),
         el('span', { class: 'divider vertical' }),
         el('span', { text: `${character.tilesW} x ${character.tilesH} tiles` }),
-      );
+        icon('chevronUp', 14),
+      ]);
+      this.status.append(size);
       return;
     }
     const { hover, camera, doc } = this.store;
@@ -764,6 +760,62 @@ export class Shell {
       el('span', { class: 'divider vertical' }),
       el('span', { text: `${Math.round(camera.zoom * 100)}%` }),
     );
+  }
+
+  /** Preset canvas sizes, plus the size last drawn at when it is not one of them. */
+  private openSizeMenu(anchor: HTMLElement): void {
+    document.querySelector('.size-menu')?.remove();
+    const character = this.studio.character;
+    if (!character) return;
+    const tile = this.store.doc.tileSize;
+    const last = this.studio.lastSize;
+    const options: { tilesW: number; tilesH: number; label?: string }[] = CANVAS_PRESETS.map((p) => ({ ...p }));
+    if (last && !CANVAS_PRESETS.some((p) => p.tilesW === last.tilesW && p.tilesH === last.tilesH)) {
+      options.push({ ...last, label: 'Last used' });
+    }
+
+    const menu = el('div', { class: 'size-menu', role: 'menu' });
+    const close = () => {
+      menu.remove();
+      document.removeEventListener('pointerdown', outside, true);
+      document.removeEventListener('keydown', escape, true);
+    };
+    const outside = (e: Event) => {
+      if (!menu.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+
+    menu.append(el('div', { class: 'size-menu-title', text: 'Canvas size' }));
+    for (const option of options) {
+      const current = option.tilesW === character.tilesW && option.tilesH === character.tilesH;
+      const isLast = !!last && option.tilesW === last.tilesW && option.tilesH === last.tilesH;
+      const note = option.label ?? (isLast ? 'Last used' : '');
+      const item = button(`size-menu-item${current ? ' active' : ''}`, `${option.tilesW} by ${option.tilesH} tiles`, () => {
+        close();
+        if (current) return;
+        this.studio.resizeCanvas(tile, option.tilesW, option.tilesH);
+        this.characterView.fit();
+        this.refreshPanels();
+      }, [
+        el('span', { class: 'size-menu-tiles', text: `${option.tilesW} x ${option.tilesH} tiles` }),
+        el('span', { class: 'size-menu-px', text: `${option.tilesW * tile} x ${option.tilesH * tile} px` }),
+        note ? el('span', { class: 'size-menu-note', text: note }) : null,
+      ]);
+      item.setAttribute('role', 'menuitem');
+      menu.append(item);
+    }
+    menu.append(
+      el('p', { class: 'size-menu-hint', text: 'Your drawing stays centred and standing on the bottom edge.' }),
+    );
+
+    document.body.append(menu);
+    const rect = anchor.getBoundingClientRect();
+    menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    menu.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 8)}px`;
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', escape, true);
   }
 
   toast(message: string): void {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDoc, createObjectLayer, objectSize, type MapObject, type ObjectLayer } from '../core/doc';
 import { Store } from '../core/store';
 import { fakeObject, fakeRenderer, fakeTileset } from '../test-support/fakes';
-import { MAX_SCALE, MIN_SCALE, ObjectTools, onWholePixels, scaleFromCorner } from './objects';
+import { MAX_SCALE, MIN_SCALE, ObjectTools, clampInsideMap, onWholePixels, scaleFromCorner } from './objects';
 
 let store: Store;
 let tools: ObjectTools;
@@ -109,6 +109,46 @@ describe('resizing', () => {
     const { w, h } = objectSize(obj);
     expect(Number.isInteger(obj.x - w / 2)).toBe(true);
     expect(Number.isInteger(obj.y - h / 2)).toBe(true);
+  });
+
+  it('stops a drag at the map edge', () => {
+    const [obj] = withObjects(fakeObject());
+    const { w, h } = objectSize(obj);
+    obj.x = 1000;
+    obj.y = 1000;
+    clampInsideMap(obj, 160, 160);
+    expect(obj.x + w / 2).toBe(160);
+    expect(obj.y + h / 2).toBe(160);
+    obj.x = 0;
+    obj.y = 0;
+    clampInsideMap(obj, 160, 160);
+    expect(obj.x - w / 2).toBe(0);
+    expect(obj.y - h / 2).toBe(0);
+  });
+
+  it('cannot drag an object off the map', () => {
+    const [obj] = withObjects(fakeObject());
+    tools.moveSelected(obj, 5000, -5000);
+    const { w, h } = objectSize(obj);
+    expect(obj.x + w / 2).toBeLessThanOrEqual(160);
+    expect(obj.y - h / 2).toBeGreaterThanOrEqual(0);
+  });
+
+  it('steps one square bigger and smaller', () => {
+    const [obj] = withObjects(fakeObject());
+    tools.stepSize(obj, 1);
+    expect(objectSize(obj).h).toBe(48);
+    tools.stepSize(obj, -1);
+    expect(objectSize(obj).h).toBe(32);
+  });
+
+  it('centres a box that is bigger than the map', () => {
+    const [obj] = withObjects(fakeObject({ scale: 20 }));
+    clampInsideMap(obj, 160, 160);
+    const { w, h } = objectSize(obj);
+    expect(obj.x).toBeCloseTo(160 / 2);
+    expect(obj.y).toBeCloseTo((160 - h) / 2 + h / 2);
+    expect(w).toBeGreaterThan(160);
   });
 
   it('still asks for the larger size after the centre jumps to the grid', () => {

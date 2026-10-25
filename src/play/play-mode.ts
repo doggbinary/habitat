@@ -1,5 +1,5 @@
 import { DIRECTIONS, frameIndex, framePixels, type Character, type Frame } from '../character/model';
-import { createLayer, objectSize, type Doc, type TileLayer } from '../core/doc';
+import { createLayer, objectSize, type Doc, type MapObject, type TileLayer } from '../core/doc';
 import type { Store } from '../core/store';
 import { EMPTY, pack } from '../core/tiles';
 import { drawObject } from '../render/object-draw';
@@ -10,10 +10,17 @@ import { scaleFromCorner, type ObjectTools } from '../tools/objects';
 const SPEED_TILES = 4.2;
 /** How far a joystick must move before it counts as a direction. */
 const STICK_DEAD_ZONE = 0.18;
-const STICK_RADIUS = 52;
+/** Furthest the knob travels from the centre of the pad, in CSS pixels. */
+const STICK_RADIUS = 38;
 /** The character's feet occupy this fraction of a tile when colliding. */
 const FOOT_W = 0.6;
 const FOOT_H = 0.35;
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 8;
+/** Movement under this many pixels is still a tap. */
+const TAP_SLOP = 6;
+
+type Gesture = 'idle' | 'move' | 'size' | 'pinch';
 
 /**
  * A full-screen play test.
@@ -23,8 +30,8 @@ const FOOT_H = 0.35;
  * you get through that gap. It borrows just enough of a game loop to be
  * honest about scale and movement, and deliberately nothing more.
  *
- * Layers marked as colliders become solid. If the map has none, you walk
- * freely, which is the right default for checking sizing alone.
+ * The stick in the corner walks. Everything else on screen is the map: tap an
+ * object to move it, size it, or make it block the character, and pinch to zoom.
  */
 export class PlayMode {
   private readonly root: HTMLElement;
@@ -36,20 +43,19 @@ export class PlayMode {
   private readonly spriteCanvas: HTMLCanvasElement;
   private readonly solid: Uint8Array;
 
-  /** Walk, resize an object, or paint squares the character cannot enter. */
-  private tool: 'walk' | 'size' | 'block' = 'walk';
-  private editId: number | null = null;
-  private sizing = false;
-  private dragging = false;
+  private readonly pointers = new Map<number, { x: number; y: number; startX: number; startY: number }>();
+  private gesture: Gesture = 'idle';
+  private activeId: number | null = null;
+  private moved = false;
   private grabDx = 0;
   private grabDy = 0;
-  private dragStart = { x: 0, y: 0 };
   private scaleStart = 1;
   private scaleAnchor = { x: 0, y: 0 };
   private scaleStartSize = { w: 1, h: 1 };
-  private blockClearing = false;
-  private blockLayer: TileLayer | null = null;
-  private blockBefore: Int32Array | null = null;
+  private pinchDistance = 1;
+  private pinchZoom = 1;
+  /** The corner grip only shows once Size is chosen for the tapped object. */
+  private sizeOpen = false;
 
   private x = 0;
   private y = 0;
@@ -69,11 +75,15 @@ export class PlayMode {
   /** Normalised joystick vector, -1..1 on each axis. */
   private stick = { x: 0, y: 0 };
   private stickId: number | null = null;
-  private stickOrigin = { x: 0, y: 0 };
   private readonly stickBase: HTMLElement;
   private readonly stickKnob: HTMLElement;
-  private undoButton!: HTMLButtonElement;
-  private redoButton!: HTMLButtonElement;
+  private readonly menu: HTMLElement;
+  private readonly sizeButton: HTMLButtonElement;
+  private readonly blockButton: HTMLButtonElement;
+  private readonly smallerButton: HTMLButtonElement;
+  private readonly biggerButton: HTMLButtonElement;
+  private readonly undoButton: HTMLButtonElement;
+  private readonly redoButton: HTMLButtonElement;
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -95,6 +105,7 @@ export class PlayMode {
     this.doc = store.doc;
     this.mapCanvas = composeMap(this.doc);
     this.solid = buildCollision(this.doc);
+    this.objects.deselect();
 
     // Start standing on the middle of the requested tile.
     this.x = (startTile.x + 0.5) * this.doc.tileSize;
@@ -113,60 +124,41 @@ export class PlayMode {
     this.stickKnob = element('div', 'play-stick-knob');
     this.stickBase = element('div', 'play-stick', [this.stickKnob]);
 
-    const exit = element('button', 'play-exit');
-    exit.textContent = 'Done';
-    exit.addEventListener('click', () => this.close());
+    const exit = button('play-exit', 'Done', () => this.close());
+    this.undoButton = button('play-history', 'Undo', () => this.stepHistory(false));
+    this.redoButton = button('play-history', 'Redo', () => this.stepHistory(true));
+    const zoomOut = button('play-zoom', '−', () => this.nudgeZoom(-1));
+    const zoomIn = button('play-zoom', '+', () => this.nudgeZoom(1));
 
-    const undo = element('button', 'play-history') as HTMLButtonElement;
-    undo.type = 'button';
-    undo.textContent = 'Undo';
-    undo.addEventListener('click', () => this.stepHistory(false));
-    const redo = element('button', 'play-history') as HTMLButtonElement;
-    redo.type = 'button';
-    redo.textContent = 'Redo';
-    redo.addEventListener('click', () => this.stepHistory(true));
-    this.undoButton = undo;
-    this.redoButton = redo;
-
-    const zoomOut = element('button', 'play-zoom');
-    zoomOut.textContent = '−';
-    zoomOut.addEventListener('click', () => this.nudgeZoom(-1));
-    const zoomIn = element('button', 'play-zoom');
-    zoomIn.textContent = '+';
-    zoomIn.addEventListener('click', () => this.nudgeZoom(1));
+    this.sizeButton = button('play-menu-btn', 'Size', () => {
+      this.sizeOpen = !this.sizeOpen;
+    });
+    this.smallerButton = button('play-menu-btn play-menu-step', '−', () => this.stepSize(-1));
+    this.biggerButton = button('play-menu-btn play-menu-step', '+', () => this.stepSize(1));
+    this.blockButton = button('play-menu-btn', 'Block', () => this.toggleBlock());
+    this.menu = element('div', 'play-object-menu', [
+      this.sizeButton,
+      this.smallerButton,
+      this.biggerButton,
+      this.blockButton,
+    ]);
+    // A press on the menu must not reach the map underneath and deselect.
+    this.menu.addEventListener('pointerdown', (e) => e.stopPropagation());
 
     const hint = element('div', 'play-hint');
-    hint.textContent = 'Drag to walk. In Size, drag an object to move it and its corner to resize. Block paints squares you cannot enter.';
-
-    const tools = element('div', 'play-tools');
-    for (const [id, label] of [
-      ['walk', 'Walk'],
-      ['size', 'Size'],
-      ['block', 'Block'],
-    ] as const) {
-      const button = element('button', `play-tool${id === 'walk' ? ' active' : ''}`) as HTMLButtonElement;
-      button.type = 'button';
-      button.textContent = label;
-      button.addEventListener('click', () => {
-        this.tool = id;
-        this.sizing = false;
-        this.dragging = false;
-        if (id !== 'size') this.objects.deselect();
-        for (const child of tools.children) child.classList.toggle('active', child === button);
-      });
-      tools.append(button);
-    }
+    hint.textContent = 'Walk with the stick. Tap an object to move it, size it, or make it block. Pinch to zoom.';
 
     this.root = element('div', 'play-root', [
       this.canvas,
       hint,
+      this.menu,
       this.stickBase,
-      tools,
-      element('div', 'play-controls', [undo, redo, zoomOut, zoomIn, exit]),
+      element('div', 'play-controls', [this.undoButton, this.redoButton, zoomOut, zoomIn, exit]),
     ]);
 
     document.body.append(this.root);
-    this.bindInput();
+    this.bindStick();
+    this.bindMap();
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('resize', this.onResize);
@@ -182,11 +174,11 @@ export class PlayMode {
   /** Picks a zoom that frames roughly 22 tiles across, then rounds to integer. */
   private fitZoom(): void {
     const target = this.viewW / (22 * this.doc.tileSize);
-    this.zoom = Math.max(1, Math.min(8, Math.round(target) || 2));
+    this.zoom = clamp(Math.round(target) || 2, MIN_ZOOM, MAX_ZOOM);
   }
 
   private nudgeZoom(delta: number): void {
-    this.zoom = Math.max(1, Math.min(8, this.zoom + delta));
+    this.zoom = clamp(Math.round(this.zoom) + delta, MIN_ZOOM, MAX_ZOOM);
   }
 
   private resize(): void {
@@ -198,173 +190,229 @@ export class PlayMode {
     this.canvas.height = Math.round(this.viewH * dpr);
   }
 
-  private bindInput(): void {
-    // The whole canvas is the joystick while walking. Size and Block use the
-    // same surface to change the map, and the character feels it at once.
-    this.canvas.addEventListener(
+  // --- Walking stick -------------------------------------------------------
+
+  /** The pad stays in the corner. The knob follows the finger but never leaves the pad. */
+  private bindStick(): void {
+    const base = this.stickBase;
+    const aim = (e: PointerEvent) => {
+      const rect = base.getBoundingClientRect();
+      const dx = e.clientX - (rect.left + rect.width / 2);
+      const dy = e.clientY - (rect.top + rect.height / 2);
+      const distance = Math.hypot(dx, dy) || 1;
+      const reach = Math.min(distance, STICK_RADIUS);
+      const kx = (dx / distance) * reach;
+      const ky = (dy / distance) * reach;
+      this.stick = { x: kx / STICK_RADIUS, y: ky / STICK_RADIUS };
+      this.stickKnob.style.transform = `translate(${kx}px, ${ky}px)`;
+    };
+    base.addEventListener(
       'pointerdown',
       (e) => {
         e.preventDefault();
-        if (this.tool !== 'walk') {
-          this.onEditDown(e);
-          return;
-        }
         if (this.stickId !== null) return;
         this.stickId = e.pointerId;
-        this.stickOrigin = { x: e.clientX, y: e.clientY };
-        this.canvas.setPointerCapture?.(e.pointerId);
-        this.showStick(e.clientX, e.clientY, 0, 0);
+        base.setPointerCapture?.(e.pointerId);
+        base.classList.add('active');
+        aim(e);
       },
       { passive: false },
     );
-
-    this.canvas.addEventListener(
+    base.addEventListener(
       'pointermove',
       (e) => {
-        if (this.tool !== 'walk') {
-          this.onEditMove(e);
-          return;
-        }
         if (e.pointerId !== this.stickId) return;
         e.preventDefault();
-        const dx = e.clientX - this.stickOrigin.x;
-        const dy = e.clientY - this.stickOrigin.y;
-        const distance = Math.hypot(dx, dy) || 1;
-        const clamped = Math.min(distance, STICK_RADIUS);
-        this.stick = { x: (dx / distance) * (clamped / STICK_RADIUS), y: (dy / distance) * (clamped / STICK_RADIUS) };
-        this.showStick(this.stickOrigin.x, this.stickOrigin.y, (dx / distance) * clamped, (dy / distance) * clamped);
+        aim(e);
       },
       { passive: false },
     );
-
     const release = (e: PointerEvent) => {
-      if (this.tool !== 'walk') {
-        this.onEditUp(e);
-        return;
-      }
       if (e.pointerId !== this.stickId) return;
       this.stickId = null;
       this.stick = { x: 0, y: 0 };
-      this.stickBase.style.opacity = '0';
+      this.stickKnob.style.transform = '';
+      base.classList.remove('active');
     };
-    this.canvas.addEventListener('pointerup', release);
-    this.canvas.addEventListener('pointercancel', release);
+    base.addEventListener('pointerup', release);
+    base.addEventListener('pointercancel', release);
   }
 
-  private showStick(cx: number, cy: number, dx: number, dy: number): void {
-    this.stickBase.style.opacity = '1';
-    this.stickBase.style.left = `${cx}px`;
-    this.stickBase.style.top = `${cy}px`;
-    this.stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
-  }
+  // --- The map: objects and zoom -------------------------------------------
 
-  // --- Editing while the character is in the scene ------------------------
-
-  private onEditDown(e: PointerEvent): void {
-    if (this.editId !== null) return;
-    this.editId = e.pointerId;
-    this.canvas.setPointerCapture?.(e.pointerId);
-    const local = this.local(e);
-    if (this.tool === 'size') {
-      const found = this.objects.selected();
-      if (found && this.onHandle(local.x, local.y)) {
-        this.sizing = true;
-        const world = this.worldAt(local.x, local.y);
-        const size = objectSize(found.obj);
-        const anchor = { x: found.obj.x - size.w / 2, y: found.obj.y - size.h / 2 };
-        this.scaleStart = found.obj.scale;
-        this.scaleAnchor = anchor;
-        // The grab is the unit of scale, so touching the handle does not jump
-        // the size. Later samples stay measured from this corner, not the centre.
-        this.scaleStartSize = {
-          w: Math.max(1, world.x - anchor.x),
-          h: Math.max(1, world.y - anchor.y),
-        };
-        this.objects.beginGesture();
+  private bindMap(): void {
+    const canvas = this.canvas;
+    canvas.addEventListener(
+      'pointerdown',
+      (e) => {
+        e.preventDefault();
+        const local = this.local(e);
+        this.pointers.set(e.pointerId, { ...local, startX: local.x, startY: local.y });
+        canvas.setPointerCapture?.(e.pointerId);
+        if (this.pointers.size >= 2) {
+          this.startPinch();
+          return;
+        }
+        this.pressMap(e.pointerId, local.x, local.y);
+      },
+      { passive: false },
+    );
+    canvas.addEventListener(
+      'pointermove',
+      (e) => {
+        const tracked = this.pointers.get(e.pointerId);
+        if (!tracked) return;
+        e.preventDefault();
+        const local = this.local(e);
+        tracked.x = local.x;
+        tracked.y = local.y;
+        if (this.gesture === 'pinch') {
+          this.updatePinch();
+          return;
+        }
+        if (e.pointerId !== this.activeId) return;
+        if (!this.moved && Math.hypot(local.x - tracked.startX, local.y - tracked.startY) <= TAP_SLOP) return;
+        this.moved = true;
+        this.dragTo(local.x, local.y);
+      },
+      { passive: false },
+    );
+    const release = (e: PointerEvent) => {
+      if (!this.pointers.delete(e.pointerId)) return;
+      if (this.gesture === 'pinch') {
+        if (this.pointers.size === 0) this.gesture = 'idle';
         return;
       }
-      const world = this.worldAt(local.x, local.y);
-      const hit = this.objects.hitTest(world.x, world.y);
-      if (hit) {
-        this.objects.select(hit.layer, hit.obj);
-        if (!hit.obj.locked) {
-          this.dragging = true;
-          this.grabDx = world.x - hit.obj.x;
-          this.grabDy = world.y - hit.obj.y;
-          this.dragStart = { x: hit.obj.x, y: hit.obj.y };
-          this.objects.beginGesture();
-        }
-      } else {
-        this.objects.deselect();
-      }
+      if (e.pointerId !== this.activeId) return;
+      this.finishGesture();
+    };
+    canvas.addEventListener('pointerup', release);
+    canvas.addEventListener('pointercancel', release);
+  }
+
+  private pressMap(id: number, sx: number, sy: number): void {
+    const world = this.worldAt(sx, sy);
+    const found = this.objects.selected();
+    if (found && this.sizeOpen && !found.obj.locked && this.onHandle(sx, sy)) {
+      const size = objectSize(found.obj);
+      const anchor = { x: found.obj.x - size.w / 2, y: found.obj.y - size.h / 2 };
+      this.scaleStart = found.obj.scale;
+      this.scaleAnchor = anchor;
+      // The grab is the unit of scale, so touching the grip does not jump the
+      // size. Later samples stay measured from this corner, not the centre.
+      this.scaleStartSize = { w: Math.max(1, world.x - anchor.x), h: Math.max(1, world.y - anchor.y) };
+      this.begin('size', id);
       return;
     }
-    this.blockLayer = ensureCollisionLayer(this.doc);
-    this.blockBefore = this.blockLayer.data.slice();
-    this.blockClearing = this.cellSolid(this.cellAt(local.x, local.y));
-    this.paintBlock(local.x, local.y);
-  }
-
-  private onEditMove(e: PointerEvent): void {
-    if (e.pointerId !== this.editId) return;
-    const local = this.local(e);
-    if (this.tool === 'size' && (this.sizing || this.dragging)) {
-      const found = this.objects.selected();
-      if (!found) return;
-      const world = this.worldAt(local.x, local.y);
-      if (this.sizing) {
-        this.objects.scaleTo(
-          found.obj,
-          scaleFromCorner(
-            this.scaleStart,
-            this.scaleStartSize.w,
-            this.scaleStartSize.h,
-            this.scaleAnchor.x,
-            this.scaleAnchor.y,
-            world.x,
-            world.y,
-          ),
-        );
-      } else {
-        this.objects.moveSelected(found.obj, world.x - this.grabDx, world.y - this.grabDy);
-      }
+    const hit = this.objects.hitTest(world.x, world.y);
+    if (!hit) {
+      this.objects.deselect();
+      this.sizeOpen = false;
       return;
     }
-    if (this.tool === 'block') this.paintBlock(local.x, local.y);
+    if (!found || found.obj.id !== hit.obj.id) this.sizeOpen = false;
+    this.objects.select(hit.layer, hit.obj);
+    if (hit.obj.locked) return;
+    this.grabDx = world.x - hit.obj.x;
+    this.grabDy = world.y - hit.obj.y;
+    this.begin('move', id);
   }
 
-  private onEditUp(e: PointerEvent): void {
-    if (e.pointerId !== this.editId) return;
-    if (this.sizing) this.objects.endGesture('Resize');
-    if (this.dragging) {
-      const found = this.objects.selected();
-      if (found && found.obj.x === this.dragStart.x && found.obj.y === this.dragStart.y) this.objects.cancelGesture();
-      else this.objects.endGesture('Move');
+  private begin(gesture: Gesture, id: number): void {
+    this.gesture = gesture;
+    this.activeId = id;
+    this.moved = false;
+    this.objects.beginGesture();
+  }
+
+  private dragTo(sx: number, sy: number): void {
+    const found = this.objects.selected();
+    if (!found) return;
+    const world = this.worldAt(sx, sy);
+    if (this.gesture === 'size') {
+      this.objects.scaleTo(
+        found.obj,
+        scaleFromCorner(
+          this.scaleStart,
+          this.scaleStartSize.w,
+          this.scaleStartSize.h,
+          this.scaleAnchor.x,
+          this.scaleAnchor.y,
+          world.x,
+          world.y,
+        ),
+      );
+    } else if (this.gesture === 'move') {
+      this.objects.moveSelected(found.obj, world.x - this.grabDx, world.y - this.grabDy);
     }
-    this.commitBlock();
-    this.sizing = false;
-    this.dragging = false;
-    this.editId = null;
   }
 
-  /** One undo step for a whole Block stroke. The squares already block the character. */
-  private commitBlock(): void {
-    const layer = this.blockLayer;
-    const before = this.blockBefore;
-    this.blockLayer = null;
-    this.blockBefore = null;
-    if (!layer || !before) return;
-    const after = layer.data.slice();
-    let changed = false;
-    for (let i = 0; i < after.length; i++) if (after[i] !== before[i]) changed = true;
-    if (!changed) return;
-    layer.data.set(before);
-    this.store.history.transact('Collision', () => {
-      layer.data.set(after);
+  private finishGesture(): void {
+    if (this.gesture === 'move' || this.gesture === 'size') {
+      if (this.moved) this.objects.endGesture(this.gesture === 'size' ? 'Resize' : 'Move');
+      else this.objects.cancelGesture();
+    }
+    this.gesture = 'idle';
+    this.activeId = null;
+    this.moved = false;
+  }
+
+  /** A second finger turns the gesture into a zoom and puts back anything the first finger dragged. */
+  private startPinch(): void {
+    if (this.gesture === 'move' || this.gesture === 'size') this.objects.revertGesture();
+    const [a, b] = [...this.pointers.values()];
+    this.pinchDistance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    this.pinchZoom = this.zoom;
+    this.gesture = 'pinch';
+    this.activeId = null;
+    this.moved = false;
+  }
+
+  private updatePinch(): void {
+    const [a, b] = [...this.pointers.values()];
+    if (!a || !b) return;
+    const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    this.zoom = clamp(this.pinchZoom * (distance / this.pinchDistance), MIN_ZOOM, MAX_ZOOM);
+  }
+
+  private stepSize(squares: number): void {
+    const found = this.objects.selected();
+    if (!found || found.obj.locked) return;
+    this.objects.beginGesture();
+    this.objects.stepSize(found.obj, squares);
+    this.objects.endGesture('Resize');
+  }
+
+  /** Makes the squares under the object stop the character, or frees them again. */
+  private toggleBlock(): void {
+    const found = this.objects.selected();
+    if (!found) return;
+    const cells = objectCells(this.doc, found.obj);
+    if (cells.length === 0) return;
+    const blocked = this.isBlocked(found.obj);
+    const marker = this.markerTile();
+    this.store.history.transact(blocked ? 'Unblock' : 'Block', () => {
+      const layer = ensureCollisionLayer(this.doc);
+      for (const index of cells) layer.data[index] = blocked ? EMPTY : marker;
     });
+    this.refreshSolid();
   }
 
-  /** Grows from the centre, so the first sample matches the size the object already is. */
+  private isBlocked(obj: MapObject): boolean {
+    const cells = objectCells(this.doc, obj);
+    return cells.length > 0 && cells.every((index) => this.solid[index] === 1);
+  }
+
+  private markerTile(): number {
+    for (const tile of this.store.stamp.tiles) if (tile !== EMPTY) return tile;
+    return this.doc.tilesets.length > 0 ? pack(0, 0) : EMPTY;
+  }
+
+  private refreshSolid(): void {
+    const next = buildCollision(this.doc);
+    this.solid.set(next.subarray(0, this.solid.length));
+  }
+
   private onHandle(sx: number, sy: number): boolean {
     const found = this.objects.selected();
     if (!found) return false;
@@ -375,40 +423,9 @@ export class PlayMode {
     return Math.hypot(sx - hx, sy - hy) <= 28;
   }
 
-  private paintBlock(sx: number, sy: number): void {
-    const cell = this.cellAt(sx, sy);
-    if (!cell) return;
-    const layer = this.blockLayer;
-    if (!layer) return;
-    const index = cell.y * this.doc.width + cell.x;
-    const tile = this.blockClearing ? EMPTY : this.markerTile();
-    if (layer.data[index] === tile) return;
-    layer.data[index] = tile;
-    this.solid[index] = tile === EMPTY ? 0 : 1;
-  }
-
-  private markerTile(): number {
-    for (const tile of this.store.stamp.tiles) if (tile !== EMPTY) return tile;
-    return this.doc.tilesets.length > 0 ? pack(0, 0) : EMPTY;
-  }
-
-  private cellSolid(cell: { x: number; y: number } | null): boolean {
-    if (!cell) return false;
-    return this.solid[cell.y * this.doc.width + cell.x] === 1;
-  }
-
   private local(e: PointerEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  }
-
-  private cellAt(sx: number, sy: number): { x: number; y: number } | null {
-    const world = this.worldAt(sx, sy);
-    const size = this.doc.tileSize;
-    const x = Math.floor(world.x / size);
-    const y = Math.floor(world.y / size);
-    if (x < 0 || y < 0 || x >= this.doc.width || y >= this.doc.height) return null;
-    return { x, y };
   }
 
   private worldAt(sx: number, sy: number): { x: number; y: number } {
@@ -575,37 +592,51 @@ export class PlayMode {
       }
     }
 
-    // After the character, so a sprite standing on the object cannot hide the grip.
-    if (this.tool === 'size') {
-      const found = this.objects.selected();
-      if (found) {
-        const { w, h } = objectSize(found.obj);
-        const x = (found.obj.x - w / 2 - camX) * zoom;
-        const y = (found.obj.y - h / 2 - camY) * zoom;
-        ctx.strokeStyle = '#ffd666';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, w * zoom, h * zoom);
+    // After the character, so a sprite standing on the object cannot hide it.
+    const found = this.objects.selected();
+    if (found) {
+      const { w, h } = objectSize(found.obj);
+      const x = (found.obj.x - w / 2 - camX) * zoom;
+      const y = (found.obj.y - h / 2 - camY) * zoom;
+      ctx.strokeStyle = '#ffd666';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, w * zoom, h * zoom);
+      if (this.sizeOpen) {
         ctx.fillStyle = '#ffd666';
         ctx.beginPath();
         ctx.arc(x + w * zoom, y + h * zoom, 9, 0, Math.PI * 2);
         ctx.fill();
       }
+      this.placeMenu(found.obj, x, y, w * zoom);
+    } else {
+      this.menu.classList.remove('visible');
+      this.sizeOpen = false;
     }
     this.refreshHistory();
   }
 
-  /** Undo and redo cover moves, resizes and collision painted in this session. */
+  /** Keeps the object's menu just above it, and on screen. */
+  private placeMenu(obj: MapObject, x: number, y: number, w: number): void {
+    const menu = this.menu;
+    menu.classList.add('visible');
+    this.sizeButton.classList.toggle('active', this.sizeOpen);
+    this.smallerButton.hidden = !this.sizeOpen;
+    this.biggerButton.hidden = !this.sizeOpen;
+    this.blockButton.classList.toggle('active', this.isBlocked(obj));
+    const mw = menu.offsetWidth;
+    const mh = menu.offsetHeight;
+    const left = clamp(x + w / 2 - mw / 2, 8, this.viewW - mw - 8);
+    const above = y - mh - 10;
+    const top = above >= 8 ? above : Math.min(this.viewH - mh - 8, y + 10);
+    menu.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+  }
+
+  /** Undo and redo cover moves, resizes and blocking done in this session. */
   private stepHistory(redo: boolean): void {
-    if (this.sizing || this.dragging) {
-      this.objects.endGesture(this.sizing ? 'Resize' : 'Move');
-      this.sizing = false;
-      this.dragging = false;
-      this.editId = null;
-    }
+    if (this.gesture === 'move' || this.gesture === 'size') this.finishGesture();
     if (redo) this.store.history.redo();
     else this.store.history.undo();
-    const next = buildCollision(this.doc);
-    this.solid.set(next.subarray(0, this.solid.length));
+    this.refreshSolid();
     this.refreshHistory();
   }
 
@@ -638,6 +669,27 @@ function element(tag: string, className: string, children: HTMLElement[] = []): 
   return node;
 }
 
+function button(className: string, label: string, onPress: () => void): HTMLButtonElement {
+  const node = element('button', className) as HTMLButtonElement;
+  node.type = 'button';
+  node.textContent = label;
+  node.addEventListener('click', onPress);
+  return node;
+}
+
+/** Map squares an object's box covers, as indices into a layer. */
+export function objectCells(doc: Doc, obj: MapObject): number[] {
+  const { w, h } = objectSize(obj);
+  const size = doc.tileSize;
+  const x0 = Math.max(0, Math.floor((obj.x - w / 2) / size + 1e-6));
+  const y0 = Math.max(0, Math.floor((obj.y - h / 2) / size + 1e-6));
+  const x1 = Math.min(doc.width, Math.ceil((obj.x + w / 2) / size - 1e-6));
+  const y1 = Math.min(doc.height, Math.ceil((obj.y + h / 2) / size - 1e-6));
+  const cells: number[] = [];
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) cells.push(y * doc.width + x);
+  return cells;
+}
+
 /** Flattens every visible tile layer into one canvas, drawn once per session. */
 function composeMap(doc: Doc): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
@@ -662,6 +714,8 @@ function composeMap(doc: Doc): HTMLCanvasElement {
       continue;
     }
     if (layer.kind === 'objects') continue;
+    // Solid squares are shown by the red overlay, which follows Block live.
+    if (layer.collider) continue;
     for (let y = 0; y < doc.height; y++) {
       const row = y * doc.width;
       for (let x = 0; x < doc.width; x++) {
@@ -675,7 +729,7 @@ function composeMap(doc: Doc): HTMLCanvasElement {
   return canvas;
 }
 
-/** The layer whose squares block the character, created the first time one is painted. */
+/** The layer whose squares block the character, created the first time one is needed. */
 export function ensureCollisionLayer(doc: Doc): TileLayer {
   for (const layer of doc.layers) {
     if (layer.kind === 'tiles' && layer.collider) return layer;

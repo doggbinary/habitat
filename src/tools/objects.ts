@@ -75,6 +75,18 @@ export function scaleFromCorner(
   return startScale * Math.max(sx, sy, 0);
 }
 
+/**
+ * Pulls a box back inside the map. A box bigger than the map is centred,
+ * because it cannot sit fully inside.
+ */
+export function clampInsideMap(obj: MapObject, mapW: number, mapH: number): void {
+  const { w, h } = objectSize(obj);
+  const left = w >= mapW ? (mapW - w) / 2 : Math.max(0, Math.min(mapW - w, obj.x - w / 2));
+  const top = h >= mapH ? (mapH - h) / 2 : Math.max(0, Math.min(mapH - h, obj.y - h / 2));
+  obj.x = left + w / 2;
+  obj.y = top + h / 2;
+}
+
 /** Centre of a box whose top-left corner sits on a grid line. */
 export function snapToGrid(w: number, h: number, x: number, y: number, tile: number): { x: number; y: number } {
   if (tile <= 0) return { x, y };
@@ -252,10 +264,11 @@ export class ObjectTools {
     const beforeY = anchor.y;
     const { w, h } = objectSize(anchor);
     const next = this.aligned(w, h, wx, wy, anchor.id);
-    const dx = next.x - beforeX;
-    const dy = next.y - beforeY;
     anchor.x = next.x;
     anchor.y = next.y;
+    this.keepOnMap(anchor);
+    const dx = anchor.x - beforeX;
+    const dy = anchor.y - beforeY;
     for (const { obj } of this.selectedMany()) {
       if (obj === anchor || obj.locked) continue;
       obj.x += dx;
@@ -336,6 +349,7 @@ export class ObjectTools {
       saturation: 1,
       brightness: 1,
     };
+    this.keepOnMap(obj);
     layer.objects.push(obj);
     this.doc.activeLayer = this.doc.layers.indexOf(layer);
     this.store.history.commitSnapshot('Place asset', before);
@@ -363,6 +377,21 @@ export class ObjectTools {
   cancelGesture(): void {
     this.gestureBefore = null;
     this.store.alignLines = null;
+  }
+
+  /** Puts objects back where the gesture started and drops the undo step. */
+  revertGesture(): void {
+    const before = this.gestureBefore;
+    this.gestureBefore = null;
+    this.store.alignLines = null;
+    if (!before) return;
+    for (const layer of this.doc.layers) {
+      if (!isObjectLayer(layer)) continue;
+      const saved = before.layers.find((item) => item.id === layer.id);
+      if (!saved || saved.kind !== 'objects') continue;
+      layer.objects = saved.objects.map((obj) => ({ ...obj, rect: { ...obj.rect } }));
+    }
+    this.renderer.requestDraw();
   }
 
   toggleLock(): void {
@@ -408,8 +437,21 @@ export class ObjectTools {
     obj.scale = next;
     obj.x = at.x;
     obj.y = at.y;
+    this.keepOnMap(obj);
     this.renderer.requestDraw();
     this.store.emit('ui');
+  }
+
+  /** One map square bigger or smaller, measured on the longer side. */
+  stepSize(obj: MapObject, squares: number): void {
+    const tile = this.doc.tileSize;
+    const wide = Math.max(obj.rect.w, obj.rect.h, 1);
+    const now = gridSquares(wide * obj.scale, tile);
+    this.scaleTo(obj, (Math.max(1, now + squares) * tile) / wide);
+  }
+
+  private keepOnMap(obj: MapObject): void {
+    clampInsideMap(obj, this.doc.width * this.doc.tileSize, this.doc.height * this.doc.tileSize);
   }
 
   /** Every unlocked asset in the selection, or just the selected one. */

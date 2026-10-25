@@ -403,6 +403,92 @@ textarea {
   white-space: nowrap;
 }
 
+.status-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: -7px -12px;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  /* The bar ignores pointers so it never blocks the canvas; this button opts back in. */
+  pointer-events: auto;
+}
+
+.status-size:hover {
+  color: var(--text);
+}
+
+.size-menu {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 220px;
+  padding: 6px;
+  background: rgba(28, 31, 40, 0.98);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.size-menu-title {
+  padding: 6px 10px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.size-menu-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.size-menu-item:hover {
+  background: var(--panel-2);
+}
+
+.size-menu-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.size-menu-px {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.size-menu-note {
+  grid-column: 1 / -1;
+  color: #7ee7b8;
+  font-size: 11px;
+}
+
+.size-menu-hint {
+  margin: 4px 10px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .status-bar {
   position: absolute;
   z-index: 4;
@@ -1328,60 +1414,84 @@ textarea {
   display: block;
   width: 100%;
   height: 100%;
-  /* The whole surface is the joystick, so the browser gets no gestures. */
+  /* Objects and pinch zoom own every gesture on the map. */
   touch-action: none;
 }
 
-/* The stick is drawn wherever the finger lands rather than at a fixed spot,
-   so you never have to look away from the character to find it. */
+/* The pad stays in the corner; the knob cannot leave it. Knob travel is
+   (pad - knob) / 2, which must match STICK_RADIUS. */
 .play-stick {
   position: fixed;
-  width: 104px;
-  height: 104px;
-  margin: -52px 0 0 -52px;
+  right: calc(28px + var(--sa-right));
+  bottom: calc(28px + var(--sa-bottom));
+  width: 132px;
+  height: 132px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  opacity: 0;
-  transition: opacity 120ms ease;
-  pointer-events: none;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  touch-action: none;
+  cursor: grab;
+}
+
+.play-stick.active {
+  background: rgba(255, 255, 255, 0.13);
 }
 
 .play-stick-knob {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 44px;
-  height: 44px;
-  margin: -22px 0 0 -22px;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  pointer-events: none;
 }
 
-.play-tools {
+.play-object-menu {
   position: fixed;
-  left: calc(14px + var(--sa-left));
-  bottom: calc(14px + var(--sa-bottom));
-  display: flex;
-  gap: 8px;
+  left: 0;
+  top: 0;
+  display: none;
+  gap: 6px;
+  padding: 5px;
+  background: rgba(22, 24, 31, 0.94);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
 }
 
-.play-tool {
-  min-height: 44px;
-  padding: 0 16px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: rgba(22, 24, 31, 0.92);
-  color: var(--muted);
+.play-object-menu.visible {
+  display: flex;
+}
+
+.play-menu-btn {
+  min-height: 40px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
   font: inherit;
   font-size: 15px;
   cursor: pointer;
 }
 
-.play-tool.active {
-  color: var(--text);
+.play-menu-btn.active {
   background: rgba(126, 160, 255, 0.28);
+  color: var(--accent);
+}
+
+.play-menu-step {
+  min-width: 40px;
+  padding: 0;
+  font-size: 20px;
+}
+
+.play-menu-btn[hidden] {
+  display: none;
 }
 
 .play-controls {

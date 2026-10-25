@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { createDoc, createLayer, type TileLayer } from '../core/doc';
 import { EMPTY, pack } from '../core/tiles';
-import { buildCollision, ensureCollisionLayer } from './play-mode';
+import { fakeObject } from '../test-support/fakes';
+import { buildCollision, ensureCollisionLayer, objectCells } from './play-mode';
+
+describe('blocking under an object', () => {
+  it('covers exactly the squares under the box', () => {
+    const doc = createDoc(10, 10, 16);
+    // 16 x 32 box with its top-left on (32, 32): squares (2,2) and (2,3).
+    const cells = objectCells(doc, fakeObject({ x: 40, y: 48 }));
+    expect(cells).toEqual([2 * 10 + 2, 3 * 10 + 2]);
+  });
+
+  it('ignores the part of a box that hangs off the map', () => {
+    const doc = createDoc(4, 4, 16);
+    const cells = objectCells(doc, fakeObject({ x: 64, y: 64 }));
+    expect(cells).toEqual([3 * 4 + 3]);
+  });
+});
 
 describe('collision tiles', () => {
   it('creates a collision layer and blocks that square', () => {

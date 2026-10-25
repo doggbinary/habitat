@@ -1,5 +1,5 @@
 import type { Settings } from '../core/store';
-import { framePixels, type Character, type Frame } from './model';
+import { framePixels, referenceImage, referencePlacement, type Character, type Frame } from './model';
 import type { Studio } from './studio';
 
 const BACKDROP = '#0e0f13';
@@ -32,14 +32,11 @@ export class CharacterView {
   private frameHandle = 0;
 
   private hover: { x: number; y: number } | null = null;
-  private readonly pointers = new Map<number, { type: string; x: number; y: number; lastX: number; lastY: number }>();
-  private mode: 'idle' | 'draw' | 'pan' | 'pinch' = 'idle';
+  private readonly pointers = new Map<number, { type: string }>();
+  private mode: 'idle' | 'draw' | 'blocked' = 'idle';
   private activeId: number | null = null;
   private penDown = false;
   private last: { x: number; y: number } | null = null;
-  private pinchDistance = 1;
-  private pinchZoom = 1;
-  private pinchMid = { x: 0, y: 0 };
 
   /** Scratch canvas a frame is written into before being scaled up. */
   private readonly scratch = document.createElement('canvas');
@@ -84,16 +81,7 @@ export class CharacterView {
     this.requestDraw();
   }
 
-  private zoomAt(sx: number, sy: number, nextZoom: number): void {
-    const zoom = Math.max(1, Math.min(64, nextZoom));
-    // Keep the sprite pixel under the gesture anchored while scaling.
-    const px = (sx - this.offsetX) / this.zoom;
-    const py = (sy - this.offsetY) / this.zoom;
-    this.zoom = zoom;
-    this.offsetX = sx - px * zoom;
-    this.offsetY = sy - py * zoom;
-  }
-
+  /** The canvas is locked: it always fills the space it has, centred. */
   resize(): void {
     const rect = this.canvas.getBoundingClientRect();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -106,6 +94,7 @@ export class CharacterView {
       this.canvas.width = w;
       this.canvas.height = h;
     }
+    this.fit();
     this.draw();
   }
 
@@ -146,6 +135,17 @@ export class CharacterView {
     const y = this.offsetY;
 
     this.drawCheckerboard(x, y, w, h);
+
+    // The traced picture sits behind everything you draw.
+    const reference = character.reference;
+    const picture = reference?.visible ? referenceImage(reference, () => this.requestDraw()) : null;
+    if (reference && picture) {
+      const at = referencePlacement(picture.naturalWidth, picture.naturalHeight, character.w, character.h);
+      ctx.globalAlpha = reference.opacity;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(picture, x + at.x * this.zoom, y + at.y * this.zoom, at.w * this.zoom, at.h * this.zoom);
+      ctx.globalAlpha = 1;
+    }
     ctx.imageSmoothingEnabled = false;
 
     // Onion skin first, faint, so the previous pose guides the current one.
@@ -273,7 +273,7 @@ export class CharacterView {
         if (e.pointerType === 'touch' && this.penDown) return;
         e.preventDefault();
         const { x, y } = this.local(e);
-        this.pointers.set(e.pointerId, { type: e.pointerType, x, y, lastX: x, lastY: y });
+        this.pointers.set(e.pointerId, { type: e.pointerType });
         canvas.setPointerCapture?.(e.pointerId);
 
         if (e.pointerType === 'pen') {
@@ -284,26 +284,21 @@ export class CharacterView {
         }
         if (e.pointerType === 'mouse') {
           if (e.button === 0) this.startDraw(e.pointerId, x, y);
-          else {
-            this.mode = 'pan';
-            this.activeId = e.pointerId;
-          }
           return;
         }
 
-        if (this.touchCount() === 1) {
-          if (this.settings.fingerDraws) this.startDraw(e.pointerId, x, y);
-          else {
-            this.mode = 'pan';
-            this.activeId = e.pointerId;
-          }
-        } else {
-          // A pinch is navigation, so undo whatever the first finger drew.
+        // The canvas is locked, so fingers never pan or zoom it. A second
+        // finger is a palm or a slip: take back what the first one drew.
+        if (this.touchCount() === 1 && this.settings.fingerDraws) {
+          this.startDraw(e.pointerId, x, y);
+        } else if (this.touchCount() > 1) {
           if (this.mode === 'draw') {
             this.studio.endStroke();
             this.studio.undo();
           }
-          this.startPinch();
+          this.mode = 'blocked';
+          this.activeId = null;
+          this.last = null;
         }
       },
       { passive: false },
@@ -321,24 +316,6 @@ export class CharacterView {
           return;
         }
         e.preventDefault();
-        tracked.x = x;
-        tracked.y = y;
-
-        if (this.mode === 'pinch') {
-          this.updatePinch();
-          return;
-        }
-        if (this.mode === 'pan' && e.pointerId === this.activeId) {
-          this.offsetX += x - tracked.lastX;
-          this.offsetY += y - tracked.lastY;
-          tracked.lastX = x;
-          tracked.lastY = y;
-          this.requestDraw();
-          return;
-        }
-        tracked.lastX = x;
-        tracked.lastY = y;
-
         if (this.mode === 'draw' && e.pointerId === this.activeId) {
           this.continueDraw(e, x, y);
           return;
@@ -355,9 +332,8 @@ export class CharacterView {
       if (e.pointerType === 'pen') this.penDown = false;
       if (!tracked) return;
 
-      if (this.mode === 'pinch') {
-        if (this.touchCount() >= 2) this.startPinch();
-        else if (this.touchCount() === 0) this.mode = 'idle';
+      if (this.mode === 'blocked') {
+        if (this.pointers.size === 0) this.mode = 'idle';
         return;
       }
       if (e.pointerId === this.activeId) {
@@ -378,20 +354,7 @@ export class CharacterView {
       }
     });
 
-    canvas.addEventListener(
-      'wheel',
-      (e) => {
-        e.preventDefault();
-        const { x, y } = this.local(e);
-        if (e.ctrlKey || e.metaKey) this.zoomAt(x, y, this.zoom * Math.exp(-e.deltaY * 0.01));
-        else {
-          this.offsetX -= e.deltaX;
-          this.offsetY -= e.deltaY;
-        }
-        this.requestDraw();
-      },
-      { passive: false },
-    );
+    canvas.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
 
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   }
@@ -420,30 +383,6 @@ export class CharacterView {
       this.last = cell;
     }
     this.setHover(x, y);
-    this.requestDraw();
-  }
-
-  private startPinch(): void {
-    const touches = [...this.pointers.values()].filter((p) => p.type === 'touch');
-    if (touches.length < 2) return;
-    const [a, b] = touches;
-    this.pinchDistance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-    this.pinchZoom = this.zoom;
-    this.pinchMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    this.mode = 'pinch';
-    this.activeId = null;
-  }
-
-  private updatePinch(): void {
-    const touches = [...this.pointers.values()].filter((p) => p.type === 'touch');
-    if (touches.length < 2) return;
-    const [a, b] = touches;
-    const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    this.zoomAt(mid.x, mid.y, this.pinchZoom * (distance / this.pinchDistance));
-    this.offsetX += mid.x - this.pinchMid.x;
-    this.offsetY += mid.y - this.pinchMid.y;
-    this.pinchMid = mid;
     this.requestDraw();
   }
 

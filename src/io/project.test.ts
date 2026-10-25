@@ -115,6 +115,15 @@ describe('saving and loading a project', () => {
     expect(saved.lastPlayedCharacter).toBe(second.id);
   });
 
+  it('keeps the picture traced over and the last canvas size', () => {
+    const character = createCharacter(16, 2, 2, 1, 'Tracer');
+    character.reference = { src: 'data:image/png;base64,AAAA', opacity: 0.3, visible: false };
+    const saved = throughJson(serializeProject(createDoc(), [character], character.id, { tilesW: 3, tilesH: 4 }));
+    const [back] = deserializeCharacters(saved);
+    expect(back.reference).toEqual({ src: 'data:image/png;base64,AAAA', opacity: 0.3, visible: false });
+    expect(saved.lastCharacterSize).toEqual({ tilesW: 3, tilesH: 4 });
+  });
+
   it('keeps pixels that live in part of a larger buffer', () => {
     const character = createCharacter(16, 1, 1, 1, 'Slice');
     const expected = character.w * character.h * 4;

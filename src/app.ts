@@ -277,7 +277,7 @@ export class App {
     // Tiles held up with the select tool are saved where they float, so
     // closing the app mid-move never loses them.
     this.autosave = createAutosave(() =>
-      serializeProject(this.editor.settledDoc(), this.studio.characters, this.studio.lastPlayedId),
+      serializeProject(this.editor.settledDoc(), this.studio.characters, this.studio.lastPlayedId, this.studio.lastSize),
     );
 
     // Held tiles belong to the select tool; picking up any other tool sets them down.
@@ -618,6 +618,11 @@ export class App {
     const index = this.studio.characters.findIndex((character) => character.id === id);
     this.studio.activeCharacter = index >= 0 ? index : 0;
     this.studio.lastPlayedId = this.studio.characters[this.studio.activeCharacter]?.id ?? null;
+    const size = data.lastCharacterSize;
+    this.studio.lastSize =
+      size && Number.isFinite(size.tilesW) && Number.isFinite(size.tilesH)
+        ? { tilesW: size.tilesW, tilesH: size.tilesH }
+        : null;
     this.studio.clearHistory();
     this.studio.emit();
     this.characterPanel.refresh();

@@ -38,6 +38,43 @@ export interface Character {
   palette: string[];
   /** Milliseconds per frame when previewing. */
   frameMs: number;
+  /** A picture to trace over. It is never part of the sprite Play walks. */
+  reference?: CharacterReference;
+}
+
+export interface CharacterReference {
+  /** Data URL, so the picture saves with the project. */
+  src: string;
+  opacity: number;
+  visible: boolean;
+  /** Loaded from `src`; not saved. */
+  image?: HTMLImageElement;
+}
+
+/** The decoded picture for a reference, created on first use. */
+export function referenceImage(reference: CharacterReference, onLoad: () => void): HTMLImageElement | null {
+  if (!reference.image || reference.image.getAttribute('src') !== reference.src) {
+    const image = new Image();
+    image.src = reference.src;
+    reference.image = image;
+  }
+  const image = reference.image;
+  if (image.complete && image.naturalWidth > 0) return image;
+  image.addEventListener('load', onLoad, { once: true });
+  return null;
+}
+
+/** Where a picture sits inside the sprite box: as large as fits, centred, standing on the bottom. */
+export function referencePlacement(
+  imageW: number,
+  imageH: number,
+  boxW: number,
+  boxH: number,
+): { x: number; y: number; w: number; h: number } {
+  const scale = Math.min(boxW / Math.max(1, imageW), boxH / Math.max(1, imageH));
+  const w = imageW * scale;
+  const h = imageH * scale;
+  return { x: (boxW - w) / 2, y: boxH - h, w, h };
 }
 
 /**
@@ -67,6 +104,15 @@ export const STARTER_PALETTE = [
 export function frameIndex(dir: number, frame: number, frameCount: number): number {
   return dir * frameCount + frame;
 }
+
+/** Canvas sizes offered in the studio, in tiles across by tiles tall. */
+export const CANVAS_PRESETS: readonly { tilesW: number; tilesH: number }[] = [
+  { tilesW: 1, tilesH: 2 },
+  { tilesW: 2, tilesH: 2 },
+  { tilesW: 2, tilesH: 3 },
+  { tilesW: 3, tilesH: 3 },
+  { tilesW: 3, tilesH: 4 },
+];
 
 /** A frame's pixels at exactly w by h. A short or long buffer cannot throw a blit. */
 export function framePixels(data: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {

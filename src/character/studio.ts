@@ -5,6 +5,7 @@ import {
   frameIndex,
   getPixel,
   hexToRgba,
+  resizeCharacter,
   rgbaToHex,
   sameColor,
   setPixel,
@@ -32,6 +33,8 @@ export class Studio {
   activeCharacter = 0;
   /** The character Play walks, remembered across reloads. */
   lastPlayedId: string | null = null;
+  /** Canvas size, in tiles, the last time a stroke changed any pixels. */
+  lastSize: { tilesW: number; tilesH: number } | null = null;
   /** Index into `DIRECTIONS`. */
   direction = 0;
   frame = 0;
@@ -135,7 +138,18 @@ export class Studio {
     this.undoStack.push({ frameId: frame.id, before, after: new Uint8ClampedArray(frame.data) });
     if (this.undoStack.length > MAX_HISTORY) this.undoStack.shift();
     this.redoStack = [];
+    const character = this.character;
+    if (character) this.lastSize = { tilesW: character.tilesW, tilesH: character.tilesH };
     this.emit();
+  }
+
+  /** Changes the open character's canvas, keeping the art centred on its feet. */
+  resizeCanvas(tileSize: number, tilesW: number, tilesH: number): void {
+    const character = this.character;
+    if (!character) return;
+    resizeCharacter(character, tileSize, tilesW, tilesH);
+    this.clearHistory();
+    this.emit(true);
   }
 
   private paintPixel(frame: Frame, w: number, h: number, x: number, y: number, color: RGBA): void {

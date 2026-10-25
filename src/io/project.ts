@@ -122,6 +122,8 @@ interface SerializedCharacter {
   palette: string[];
   /** Base64 RGBA buffers, direction-major like `Character.frames`. */
   frames: string[];
+  /** Picture traced over, absent when there is none. */
+  reference?: { src: string; opacity: number; visible: boolean };
 }
 
 export interface SerializedProject {
@@ -139,6 +141,8 @@ export interface SerializedProject {
   characters?: SerializedCharacter[];
   /** Id of the character Play should walk. Absent in older files. */
   lastPlayedCharacter?: string;
+  /** Canvas size, in tiles, the last time a character was drawn on. */
+  lastCharacterSize?: { tilesW: number; tilesH: number };
   pins?: AssetRef[];
   folders?: AssetFolder[];
 }
@@ -161,9 +165,15 @@ function fromBase64(value: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-export function serializeProject(doc: Doc, characters: Character[] = [], lastPlayedId?: string | null): SerializedProject {
+export function serializeProject(
+  doc: Doc,
+  characters: Character[] = [],
+  lastPlayedId?: string | null,
+  lastCharacterSize?: { tilesW: number; tilesH: number } | null,
+): SerializedProject {
   return {
     ...(lastPlayedId ? { lastPlayedCharacter: lastPlayedId } : {}),
+    ...(lastCharacterSize ? { lastCharacterSize: { ...lastCharacterSize } } : {}),
     characters: characters.map((c) => ({
       id: c.id,
       name: c.name,
@@ -175,6 +185,9 @@ export function serializeProject(doc: Doc, characters: Character[] = [], lastPla
       frameMs: c.frameMs,
       palette: [...c.palette],
       frames: c.frames.map((f) => toBase64(f.data.buffer.slice(f.data.byteOffset, f.data.byteOffset + f.data.byteLength))),
+      ...(c.reference
+        ? { reference: { src: c.reference.src, opacity: c.reference.opacity, visible: c.reference.visible } }
+        : {}),
     })),
     format: 'pixel-fusion-project',
     version: PROJECT_VERSION,
@@ -264,6 +277,15 @@ export function deserializeCharacters(data: SerializedProject): Character[] {
       frameMs: c.frameMs ?? 140,
       palette: c.palette?.length ? [...c.palette] : [...STARTER_PALETTE],
       frames,
+      ...(c.reference && typeof c.reference.src === 'string'
+        ? {
+            reference: {
+              src: c.reference.src,
+              opacity: finite(c.reference.opacity, 0.5),
+              visible: c.reference.visible !== false,
+            },
+          }
+        : {}),
     };
   });
 }

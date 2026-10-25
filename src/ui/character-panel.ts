@@ -4,13 +4,15 @@ import {
   applyTemplate,
   frameIndex,
   framePixels,
-  resizeCharacter,
+  referenceImage,
+  referencePlacement,
   type Character,
 } from '../character/model';
 import type { PixelTool, Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
 import type { Store } from '../core/store';
 import { openColorPopover } from './color-popover';
+import { pickFile, readFileAsDataUrl } from './dialogs';
 import { button, clear, el } from './dom';
 import { icon, type IconName } from './icons';
 
@@ -79,13 +81,15 @@ export class CharacterPanel {
       this.toolsSection(),
       this.paletteSection(character),
       this.framesSection(character),
+      this.traceSection(character),
       this.previewSection(character),
-      this.sizeSection(character),
+      this.templateSection(character),
     );
   }
 
   private createCharacter(withTemplate: boolean): void {
-    this.studio.addCharacter(this.store.doc.tileSize, 2, 2, withTemplate);
+    const size = this.studio.lastSize ?? { tilesW: 2, tilesH: 2 };
+    this.studio.addCharacter(this.store.doc.tileSize, size.tilesW, size.tilesH, withTemplate);
     this.view.fit();
     this.refresh();
   }
@@ -266,6 +270,17 @@ export class CharacterPanel {
         const frame = character.frames[frameIndex(this.studio.direction, f, character.frameCount)];
         if (frame) image.data.set(framePixels(frame.data, character.w, character.h));
         ctx.putImageData(image, 0, 0);
+        const reference = character.reference;
+        const picture = reference?.visible ? referenceImage(reference, () => this.refreshOnce()) : null;
+        if (reference && picture) {
+          // Behind the pixels, so the thumbnail matches the canvas.
+          const at = referencePlacement(picture.naturalWidth, picture.naturalHeight, character.w, character.h);
+          ctx.globalCompositeOperation = 'destination-over';
+          ctx.globalAlpha = reference.opacity;
+          ctx.drawImage(picture, at.x, at.y, at.w, at.h);
+          ctx.globalAlpha = 1;
+          ctx.globalCompositeOperation = 'source-over';
+        }
       }
       thumb.addEventListener('click', () => {
         this.studio.select(this.studio.direction, f);
@@ -337,29 +352,84 @@ export class CharacterPanel {
     ]);
   }
 
-  private sizeSection(character: Character): HTMLElement {
-    const tilesW = el('input', { class: 'input', type: 'number', min: 1, max: 8, step: 1, value: character.tilesW });
-    const tilesH = el('input', { class: 'input', type: 'number', min: 1, max: 8, step: 1, value: character.tilesH });
-    tilesW.inputMode = 'numeric';
-    tilesH.inputMode = 'numeric';
+  /** A picture behind the pixels to trace over, like a reference image on the map. */
+  private traceSection(character: Character): HTMLElement {
+    const reference = character.reference;
+    const importPicture = async () => {
+      const file = await pickFile('image/*');
+      if (!file) return;
+      try {
+        const src = await readFileAsDataUrl(file);
+        character.reference = { src, opacity: reference?.opacity ?? 0.5, visible: true };
+        this.studio.emit(true);
+        this.view.requestDraw();
+        this.refresh();
+      } catch {
+        this.store.toast('That picture could not be loaded');
+      }
+    };
 
-    return section('Size', [
-      el('div', { class: 'grid-2' }, [
-        labelled('Tiles across', tilesW),
-        labelled('Tiles tall', tilesH),
+    if (!reference) {
+      return section('Trace a picture', [
+        el('p', {
+          class: 'hint',
+          text: 'Put a drawing or photo behind the pixels and draw over it. It stays in place on every pose and is not part of the character.',
+        }),
+        button('btn full', 'Import a picture to trace', () => void importPicture(), [
+          icon('image', 16),
+          el('span', { text: 'Import a picture' }),
+        ]),
+      ]);
+    }
+
+    const opacity = el('input', {
+      class: 'slider',
+      type: 'range',
+      min: 5,
+      max: 100,
+      step: 5,
+      value: Math.round(reference.opacity * 100),
+    });
+    const readout = el('span', { class: 'slider-value', text: `${Math.round(reference.opacity * 100)}%` });
+    opacity.addEventListener('input', () => {
+      reference.opacity = Number(opacity.value) / 100;
+      readout.textContent = `${opacity.value}%`;
+      this.view.requestDraw();
+    });
+    opacity.addEventListener('change', () => this.studio.emit());
+
+    return section('Trace a picture', [
+      el('label', { class: 'field' }, [
+        el('span', { class: 'field-label', text: 'Fade' }),
+        el('div', { class: 'slider-row' }, [opacity, readout]),
       ]),
+      el('div', { class: 'chip-row' }, [
+        this.toggleChip(reference.visible ? 'eye' : 'eyeOff', reference.visible ? 'Showing' : 'Hidden', reference.visible, 'Show or hide the picture', () => {
+          reference.visible = !reference.visible;
+          this.studio.emit();
+          this.view.requestDraw();
+          this.refresh();
+        }),
+        button('chip', 'Replace the picture', () => void importPicture(), [
+          icon('image', 17),
+          el('span', { class: 'chip-text', text: 'Replace' }),
+        ]),
+        button('chip danger', 'Remove the picture', () => {
+          delete character.reference;
+          this.studio.emit(true);
+          this.view.requestDraw();
+          this.refresh();
+        }, [icon('trash', 17), el('span', { class: 'chip-text', text: 'Remove' })]),
+      ]),
+    ]);
+  }
+
+  private templateSection(character: Character): HTMLElement {
+    return section('Start over', [
       el('p', {
         class: 'hint',
-        text: `One tile is ${this.store.doc.tileSize} px. Resizing keeps your art centred and standing on the bottom edge.`,
+        text: 'Change the canvas size from the size shown on the bottom right of the canvas.',
       }),
-      button('btn full', 'Apply size', () => {
-        const w = clampTiles(Number(tilesW.value));
-        const h = clampTiles(Number(tilesH.value));
-        resizeCharacter(character, this.store.doc.tileSize, w, h);
-        this.studio.clearHistory();
-        this.view.fit();
-        this.refresh();
-      }, [el('span', { text: 'Apply size' })]),
       button('btn subtle full', 'Start over from the template', () => {
         if (!confirm('Replace every frame of this character with the starter body?')) return;
         applyTemplate(character);
@@ -424,14 +494,21 @@ export class CharacterPanel {
     ctx.drawImage(scratch, character.w + gap, 0, character.w * big, character.h * big);
   }
 
+  private refreshQueued = false;
+
+  /** Several thumbnails wait on the same picture; rebuild once when it arrives. */
+  private refreshOnce(): void {
+    if (this.refreshQueued) return;
+    this.refreshQueued = true;
+    requestAnimationFrame(() => {
+      this.refreshQueued = false;
+      this.refresh();
+    });
+  }
+
   destroy(): void {
     if (this.previewHandle) cancelAnimationFrame(this.previewHandle);
   }
-}
-
-function clampTiles(value: number): number {
-  if (!Number.isFinite(value)) return 1;
-  return Math.max(1, Math.min(8, Math.round(value)));
 }
 
 function section(title: string, children: (Node | null)[]): HTMLElement {
@@ -439,8 +516,4 @@ function section(title: string, children: (Node | null)[]): HTMLElement {
     el('h3', { class: 'panel-title', text: title }),
     ...children,
   ]);
-}
-
-function labelled(label: string, control: HTMLElement): HTMLElement {
-  return el('label', { class: 'field' }, [el('span', { class: 'field-label', text: label }), control]);
 }
