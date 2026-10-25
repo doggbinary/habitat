@@ -24,6 +24,7 @@ import {
   type Stamp,
 } from '../core/stamp';
 import type { Store } from '../core/store';
+import { pathRole } from '../core/autotile';
 import { EMPTY, flagsOf, indexOf, pack, tilesetOf, type PackedTile } from '../core/tiles';
 import type { Renderer } from '../render/renderer';
 import { normalizeRect, type Cell, type Rect } from './geometry';
@@ -357,6 +358,8 @@ export class Editor {
       if (erasing) this.erase(cell.x, cell.y);
       else this.paintStamp(cell.x, cell.y);
     }
+    const layer = this.targetLayer();
+    if (layer) this.retilePaths(layer, cells);
   }
 
   fillRect(rect: Rect, erasing: boolean): void {
@@ -377,6 +380,50 @@ export class Editor {
           if (tile !== EMPTY) this.write(layer, x, y, tile);
         }
       }
+    }
+    const covered: Cell[] = [];
+    for (let y = r.y0; y <= r.y1; y++) for (let x = r.x0; x <= r.x1; x++) covered.push({ x, y });
+    this.retilePaths(layer, covered);
+  }
+
+  /**
+   * After a path is painted or rubbed out, each square becomes the piece
+   * whose edges meet the same path beside it: centre, straight, or bend.
+   */
+  private retilePaths(layer: TileLayer, seeds: Cell[]): void {
+    const doc = this.doc;
+    const seen = new Set<number>();
+    const queue: Cell[] = [];
+    const push = (x: number, y: number) => {
+      if (!inBounds(doc, x, y)) return;
+      const id = cellIndex(doc, x, y);
+      if (seen.has(id)) return;
+      seen.add(id);
+      queue.push({ x, y });
+    };
+    for (const seed of seeds) {
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) push(seed.x + dx, seed.y + dy);
+    }
+    for (const cell of queue) {
+      const tile = layer.data[cellIndex(doc, cell.x, cell.y)];
+      if (tile === EMPTY) continue;
+      const tilesetIndex = tilesetOf(tile);
+      const stride = doc.tilesets[tilesetIndex]?.pathStride;
+      if (!stride) continue;
+      const row = Math.floor(indexOf(tile) / stride);
+      const same = (x: number, y: number) => {
+        if (!inBounds(doc, x, y)) return false;
+        const other = layer.data[cellIndex(doc, x, y)];
+        if (other === EMPTY || tilesetOf(other) !== tilesetIndex) return false;
+        return Math.floor(indexOf(other) / stride) === row;
+      };
+      const role = pathRole(
+        same(cell.x, cell.y - 1),
+        same(cell.x + 1, cell.y),
+        same(cell.x, cell.y + 1),
+        same(cell.x - 1, cell.y),
+      );
+      this.put(layer, cell.x, cell.y, pack(tilesetIndex, row * stride + role, flagsOf(tile)), this.stroke);
     }
   }
 

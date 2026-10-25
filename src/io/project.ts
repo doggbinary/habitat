@@ -10,6 +10,7 @@ import {
   type Tileset,
 } from '../core/doc';
 import { EMPTY } from '../core/tiles';
+import type { AssetFolder, AssetRef } from '../ui/packs';
 
 const finite = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -102,6 +103,7 @@ interface SerializedTileset {
   assets?: AssetRect[];
   assetsVersion?: number;
   assetsEdited?: boolean;
+  pathStride?: number;
 }
 
 interface SerializedCharacter {
@@ -131,6 +133,8 @@ export interface SerializedProject {
   layers: SerializedLayer[];
   /** Absent in version 1 files. */
   characters?: SerializedCharacter[];
+  pins?: AssetRef[];
+  folders?: AssetFolder[];
 }
 
 function toBase64(buffer: ArrayBufferLike): string {
@@ -168,6 +172,16 @@ export function serializeProject(doc: Doc, characters: Character[] = []): Serial
     format: 'pixel-fusion-project',
     version: PROJECT_VERSION,
     name: doc.name,
+    ...(doc.pins.length ? { pins: doc.pins.map((pin) => ({ tilesetId: pin.tilesetId, rect: { ...pin.rect } })) } : {}),
+    ...(doc.folders.length
+      ? {
+          folders: doc.folders.map((folder) => ({
+            id: folder.id,
+            name: folder.name,
+            assets: folder.assets.map((asset) => ({ tilesetId: asset.tilesetId, rect: { ...asset.rect } })),
+          })),
+        }
+      : {}),
     width: doc.width,
     height: doc.height,
     tileSize: doc.tileSize,
@@ -186,6 +200,7 @@ export function serializeProject(doc: Doc, characters: Character[] = []): Serial
       ...(t.assets ? { assets: t.assets.map((a) => ({ ...a })) } : {}),
       ...(t.assetsVersion ? { assetsVersion: t.assetsVersion } : {}),
       ...(t.assetsEdited ? { assetsEdited: true } : {}),
+      ...(t.pathStride ? { pathStride: t.pathStride } : {}),
     })),
     layers: doc.layers.map((l): SerializedLayer => {
       const base = {
@@ -263,6 +278,7 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       if (Array.isArray(t.assets)) tileset.assets = t.assets.map((a) => ({ ...a }));
       if (t.assetsVersion) tileset.assetsVersion = t.assetsVersion;
       if (t.assetsEdited) tileset.assetsEdited = true;
+      if (t.pathStride) tileset.pathStride = t.pathStride;
       tilesets.push(tileset);
     } catch {
       // A tileset that fails to decode would otherwise shift every later
@@ -342,6 +358,8 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
     tileSize: data.tileSize,
     background: data.background ?? '#1b1d24',
     tilesets,
+    pins: data.pins ?? [],
+    folders: data.folders ?? [],
     layers,
     activeLayer: Math.min(Math.max(0, data.activeLayer ?? 0), Math.max(0, layers.length - 1)),
   };

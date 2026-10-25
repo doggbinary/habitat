@@ -1,3 +1,4 @@
+import type { AssetFolder, AssetRef } from '../ui/packs';
 import { EMPTY, type PackedTile } from './tiles';
 
 export interface Tileset {
@@ -38,6 +39,12 @@ export interface Tileset {
   assetsVersion?: number;
   /** Set once the user merges, splits or deletes assets by hand. */
   assetsEdited?: boolean;
+  /**
+   * Set on expanded path sheets. Tile index `row * pathStride + role` is one
+   * shape of that ground, so painting can swap in the piece that meets its
+   * neighbours.
+   */
+  pathStride?: number;
 }
 
 /** A rectangle of a sheet image, in source pixels. */
@@ -157,6 +164,10 @@ export interface Doc {
   tileSize: number;
   background: string;
   tilesets: Tileset[];
+  /** Stickers kept on the Pinned page, at the top of the asset library. */
+  pins: AssetRef[];
+  /** Groups of stickers the user filed together. */
+  folders: AssetFolder[];
   layers: Layer[];
   /** Index into `layers`. Layer 0 renders at the bottom. */
   activeLayer: number;
@@ -235,6 +246,8 @@ export function createDoc(width = 32, height = 32, tileSize = 16): Doc {
     tileSize,
     background: '#1b1d24',
     tilesets: [],
+    pins: [],
+    folders: [],
     layers: [createLayer(width, height, 'Layer 1')],
     activeLayer: 0,
   };
