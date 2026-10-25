@@ -285,7 +285,6 @@ export class App {
     // A brand-new project has nothing to paint with, so send the user
     // straight to the import step.
     if (this.store.doc.tilesets.length === 0) this.addTileset();
-    else if (added > 0) this.shell.openTab('tiles');
   }
 
   /**
@@ -364,7 +363,7 @@ export class App {
           this.selectFirstTile();
           this.shell.openTab('tiles');
         }
-        this.store.restructured();
+        this.store.emit('library');
       } catch {
         /* one unreadable page should not drop the rest */
       }
@@ -408,8 +407,9 @@ export class App {
       } catch {
         /* one bad sheet must not block the rest */
       }
-      this.store.restructured();
+      this.store.emit('library');
     }
+    this.store.restructured();
   }
 
   /** Installs a document and resets everything derived from the old one. */

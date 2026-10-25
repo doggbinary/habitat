@@ -160,6 +160,11 @@ export class Shell {
     store.on('ui', () => this.refreshChrome());
     store.on('view', () => this.refreshStatus());
     store.on('structure', () => this.refreshPanels());
+    // Pages arriving while the library loads must not rebuild the Map or
+    // Layers panel under a finger that is about to tap a button there.
+    store.on('library', () => {
+      if (this.mode === 'map' && this.tab === 'tiles') this.palette.layout();
+    });
     store.on('toast', (message) => this.toast(String(message)));
     // The studio owns its own state, so mirror its changes into the chrome.
     studio.on(() => {

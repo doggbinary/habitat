@@ -58,7 +58,8 @@ export interface Settings {
 }
 
 /** `view` covers anything that only moves the viewport or the hovered cell. */
-type EventName = 'doc' | 'structure' | 'ui' | 'view' | 'toast';
+/** `library`: asset pages were added or redone; only the asset list cares. */
+type EventName = 'doc' | 'structure' | 'ui' | 'view' | 'toast' | 'library';
 
 type Listener = (payload?: unknown) => void;
 
