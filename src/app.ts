@@ -296,6 +296,12 @@ export class App {
     this.fit();
 
     const added = await this.loadObjectLibrary();
+    // Packs repeat ground pages, so a freshly loaded library is merged down
+    // before it is ever shown.
+    if (added > 0) {
+      collapseDuplicatePaths(this.store.doc);
+      this.store.restructured();
+    }
     // A brand-new project has nothing to paint with, so send the user
     // straight to the import step.
     if (this.store.doc.tilesets.length === 0) this.addTileset();
