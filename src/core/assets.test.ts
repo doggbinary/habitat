@@ -301,6 +301,42 @@ describe('telling ground from props', () => {
     expect(assetsInImage(rgba, W, H, grid, false)).toEqual([{ x: 0, y: 0, w: 20, h: 10 }]);
   });
 
+  it('drops a leftover white rectangle after punching a painted background', () => {
+    const rgba = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < rgba.length; i += 4) rgba.set([255, 255, 255, 255], i);
+    const fill = (x0: number, y0: number, bw: number, bh: number, shade: number) => {
+      for (let y = y0; y < y0 + bh; y++) {
+        for (let x = x0; x < x0 + bw; x++) rgba.set([shade, shade, shade, 255], (y * W + x) * 4);
+      }
+    };
+    fill(2, 2, 8, 8, 40);
+    fill(20, 2, 8, 8, 200);
+    // Just below the punch threshold, so it survives as an island and
+    // has to be recognised as leftover void rather than a prop.
+    fill(2, 20, 6, 6, 242);
+    const assets = assetsInImage(rgba, W, H, grid, false);
+    expect(assets).toEqual([
+      { x: 2, y: 2, w: 8, h: 8 },
+      { x: 20, y: 2, w: 8, h: 8 },
+    ]);
+  });
+
+  it('splits props painted on solid white instead of treating the page as one asset', () => {
+    const rgba = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < rgba.length; i += 4) rgba.set([255, 255, 255, 255], i);
+    const fill = (x0: number, y0: number, bw: number, bh: number, shade: number) => {
+      for (let y = y0; y < y0 + bh; y++) {
+        for (let x = x0; x < x0 + bw; x++) rgba.set([shade, shade, shade, 255], (y * W + x) * 4);
+      }
+    };
+    fill(2, 2, 8, 8, 40);
+    fill(20, 2, 8, 8, 200);
+    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([
+      { x: 2, y: 2, w: 8, h: 8 },
+      { x: 20, y: 2, w: 8, h: 8 },
+    ]);
+  });
+
   it('knows which library stickers are floor squares', () => {
     const sheet = {
       name: 'modern city 5',

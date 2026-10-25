@@ -67,9 +67,12 @@ export function librarySheetName(folders: string[], file: string): string {
  */
 export function isSampleMap(imgW: number, imgH: number, assets: { w: number; h: number }[]): boolean {
   const sheet = imgW * imgH;
-  if (sheet === 0 || assets.length === 0) return false;
+  if (sheet === 0) return false;
+  if (assets.length === 0) return true;
   const biggest = assets.reduce((max, asset) => Math.max(max, asset.w * asset.h), 0);
-  return biggest / sheet > 0.45;
+  // A finished picture is the page. A long counter on a furniture page can
+  // also be large, but that page still has a normal library of other props.
+  return biggest / sheet > 0.45 && assets.length <= 4;
 }
 
 export interface LibraryEntry {

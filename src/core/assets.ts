@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 10;
+export const DETECT_VERSION = 12;
 
 /** A ground cell is drawn corner to corner; a prop leaves background showing. */
 const TERRAIN_FILL = 0.92;
@@ -45,6 +45,68 @@ const PANEL_MIN_CELLS = 6;
 const PANEL_BACKGROUND = 0.3;
 /** Whatever is left standing has to be this much of a cell to be a prop. */
 const PANEL_PIECE_SHARE = 0.25;
+
+/**
+ * Some packs paint objects on solid white instead of a transparent
+ * background. That white joins every tent or tree into one island, so it
+ * is treated as empty — but only when the sheet has no real transparency
+ * and a large share of the picture is that flat void.
+ */
+function punchFakeBackground(rgba: Uint8ClampedArray, alpha: Uint8Array, w: number, h: number): void {
+  let clear = 0;
+  let white = 0;
+  for (let i = 0; i < alpha.length; i++) {
+    if (alpha[i] <= ALPHA_CUTOFF) {
+      clear += 1;
+      continue;
+    }
+    const at = i * 4;
+    if (rgba[at] > 245 && rgba[at + 1] > 245 && rgba[at + 2] > 245) white += 1;
+  }
+  if (clear / alpha.length > 0.02 || white / alpha.length < 0.15) return;
+  for (let i = 0; i < alpha.length; i++) {
+    if (alpha[i] <= ALPHA_CUTOFF) continue;
+    const at = i * 4;
+    if (rgba[at] > 245 && rgba[at + 1] > 245 && rgba[at + 2] > 245) alpha[i] = 0;
+  }
+}
+
+/** A leftover after floors were lifted, not a sticker someone would place. */
+function isLeftoverProp(
+  rect: AssetRect,
+  rgba: Uint8ClampedArray,
+  alpha: Uint8Array,
+  w: number,
+  h: number,
+  palette: number[][],
+): boolean {
+  if ((rect.w * rect.h) / (w * h) > 0.85) return true;
+
+  let drawn = 0;
+  let white = 0;
+  let dark = 0;
+  let terrain = 0;
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      const i = y * w + x;
+      if (alpha[i] <= ALPHA_CUTOFF) continue;
+      drawn += 1;
+      const at = i * 4;
+      if (rgba[at] > 240 && rgba[at + 1] > 240 && rgba[at + 2] > 240) white += 1;
+      if (rgba[at] + rgba[at + 1] + rgba[at + 2] < 500) dark += 1;
+      if (isTerrainColour(rgba, at, palette)) terrain += 1;
+    }
+  }
+  if (drawn === 0) return true;
+  // Punching a painted white background leaves empty rectangles behind.
+  // A real white prop (paper, a tent fly) has a drawn outline.
+  if (white / drawn > 0.92 && dark / drawn < 0.02) return true;
+  // Leftover grass or pavement after the squares were taken: a sliver,
+  // or a whole leftover patch that is only floor colour.
+  if (palette.length > 0 && terrain / drawn > 0.9) return true;
+  if (palette.length > 0 && (rect.w <= 6 || rect.h <= 6) && terrain / drawn > 0.8) return true;
+  return false;
+}
 
 /** A cell this solid reads as floor: ground texture runs edge to edge. */
 const FLOOR_FILL = 0.97;
@@ -647,6 +709,7 @@ export function splitSheet(
 ): SheetSplit {
   const alpha = new Uint8Array(w * h);
   for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4 + 3];
+  punchFakeBackground(rgba, alpha, w, h);
   const count = grid.cols * grid.rows;
 
   if (groundSheet) {
@@ -677,7 +740,7 @@ export function splitSheet(
       .flatMap((rect) => splitPanel(rect, rgba, alpha, w, grid, palette))
       .flatMap((rect) => splitCellFloor(rect, rgba, alpha, w, grid, palette))
       .flatMap((rect) => splitCellBlobs(rect, alpha, w, grid)),
-  );
+  ).filter((rect) => !isLeftoverProp(rect, rgba, alpha, w, h, palette));
 
   const assets = readingOrder([...props, ...squares]);
   const isGround = new Set(squares);

@@ -42,6 +42,11 @@ describe('object-sheet library', () => {
 
   it('recognises a finished scene, where one asset covers the page', () => {
     expect(isSampleMap(1000, 1000, [{ w: 900, h: 800 }])).toBe(true);
+    expect(isSampleMap(1000, 1000, [])).toBe(true);
     expect(isSampleMap(1000, 1000, [{ w: 80, h: 40 }, { w: 30, h: 30 }])).toBe(false);
+    // A long kitchen counter is large, but the page still has other props.
+    const furniture = Array.from({ length: 20 }, () => ({ w: 40, h: 40 }));
+    furniture[0] = { w: 700, h: 800 };
+    expect(isSampleMap(1000, 1000, furniture)).toBe(false);
   });
 });
