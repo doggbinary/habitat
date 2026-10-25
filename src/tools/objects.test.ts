@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDoc, createObjectLayer, objectSize, type MapObject, type ObjectLayer } from '../core/doc';
 import { Store } from '../core/store';
 import { fakeObject, fakeRenderer, fakeTileset } from '../test-support/fakes';
-import { MAX_SCALE, MIN_SCALE, ObjectTools, onWholePixels } from './objects';
+import { MAX_SCALE, MIN_SCALE, ObjectTools, onWholePixels, scaleFromCorner } from './objects';
 
 let store: Store;
 let tools: ObjectTools;
@@ -109,6 +109,31 @@ describe('resizing', () => {
     const { w, h } = objectSize(obj);
     expect(Number.isInteger(obj.x - w / 2)).toBe(true);
     expect(Number.isInteger(obj.y - h / 2)).toBe(true);
+  });
+
+  it('still asks for the larger size after the centre jumps to the grid', () => {
+    const [obj] = withObjects(fakeObject());
+    const startScale = obj.scale;
+    const start = objectSize(obj);
+    const anchorX = obj.x - start.w / 2;
+    const anchorY = obj.y - start.h / 2;
+    const pointerX = anchorX + start.w + store.doc.tileSize;
+    const pointerY = anchorY + start.h + store.doc.tileSize;
+    const requested = scaleFromCorner(startScale, start.w, start.h, anchorX, anchorY, pointerX, pointerY);
+    expect(requested).toBeGreaterThan(startScale);
+
+    const cornerDistance = Math.hypot(start.w / 2, start.h / 2);
+    tools.scaleTo(obj, requested);
+    expect(obj.scale).toBeGreaterThan(startScale);
+
+    // The same pointer, measured from the corner we remembered, still wants
+    // the grown size. Measuring from the centre that just moved does not.
+    const again = scaleFromCorner(startScale, start.w, start.h, anchorX, anchorY, pointerX, pointerY);
+    expect(again).toBe(requested);
+    tools.scaleTo(obj, again);
+    expect(obj.scale).toBeGreaterThan(startScale);
+    const fromCentre = startScale * (Math.hypot(pointerX - obj.x, pointerY - obj.y) / cornerDistance);
+    expect(fromCentre).toBeLessThan(obj.scale);
   });
 });
 

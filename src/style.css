@@ -1536,6 +1536,11 @@ textarea {
     display: none;
   }
 
+  /* Facing and tool names in the character studio are the only label on the button. */
+  .character-panel .chip-text {
+    display: inline;
+  }
+
   /* Order arrows mean nothing without their words. */
   .order-chip .chip-text {
     display: inline;

@@ -233,13 +233,20 @@ export class Shell {
 
     // Both canvases are laid out by CSS, so whichever just appeared needs to
     // measure itself before its first paint.
+    const showSprite = () => {
+      this.characterView.resize();
+      if (this.characterView.canvas.clientWidth === 0) return false;
+      if (this.studio.characters.length > 0) this.characterView.fit();
+      return true;
+    };
     requestAnimationFrame(() => {
-      if (character) {
-        this.characterView.resize();
-        if (this.studio.characters.length > 0) this.characterView.fit();
-      } else {
+      if (!character) {
         this.renderer.resize();
+        return;
       }
+      // The canvas is display:none until this frame. If layout has not
+      // caught up, measure once more so the sprite is not left blank.
+      if (!showSprite()) requestAnimationFrame(showSprite);
     });
   }
 

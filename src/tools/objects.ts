@@ -54,6 +54,27 @@ export function gridScale(rectW: number, rectH: number, requested: number, tile:
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
 }
 
+/**
+ * Scale that puts the bottom-right corner on the pointer, measured from the
+ * top-left corner captured when the drag began.
+ *
+ * The live centre cannot be used. Snapping onto the grid moves it toward the
+ * pointer, and the next sample would ask for the old size.
+ */
+export function scaleFromCorner(
+  startScale: number,
+  startW: number,
+  startH: number,
+  anchorX: number,
+  anchorY: number,
+  pointerX: number,
+  pointerY: number,
+): number {
+  const sx = startW > 0 ? (pointerX - anchorX) / startW : 0;
+  const sy = startH > 0 ? (pointerY - anchorY) / startH : 0;
+  return startScale * Math.max(sx, sy, 0);
+}
+
 /** Centre of a box whose top-left corner sits on a grid line. */
 export function snapToGrid(w: number, h: number, x: number, y: number, tile: number): { x: number; y: number } {
   if (tile <= 0) return { x, y };

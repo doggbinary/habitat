@@ -44,7 +44,7 @@ import { gridScale, ObjectTools } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
 import { hexToHsv, hsvToHex } from './ui/color-wheel';
 import { importSpriteSheet } from './character/import';
-import { frameIndex } from './character/model';
+import { frameIndex, framePixels } from './character/model';
 import { Studio } from './character/studio';
 import { CharacterView } from './character/view';
 import { EMPTY_STAMP, singleStamp } from './core/stamp';
@@ -591,7 +591,7 @@ export class App {
     const ctx = scratch.getContext('2d');
     if (!ctx) return null;
     const image = ctx.createImageData(character.w, character.h);
-    image.data.set(frame.data);
+    image.data.set(framePixels(frame.data, character.w, character.h));
     ctx.putImageData(image, 0, 0);
     return { canvas: scratch, w: character.w, h: character.h };
   }
@@ -619,6 +619,9 @@ export class App {
     this.studio.activeCharacter = index >= 0 ? index : 0;
     this.studio.lastPlayedId = this.studio.characters[this.studio.activeCharacter]?.id ?? null;
     this.studio.clearHistory();
+    this.studio.emit();
+    this.characterPanel.refresh();
+    this.characterView.fit();
   }
 
   /**

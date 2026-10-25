@@ -1,5 +1,5 @@
 import type { Settings } from '../core/store';
-import type { Character, Frame } from './model';
+import { framePixels, type Character, type Frame } from './model';
 import type { Studio } from './studio';
 
 const BACKDROP = '#0e0f13';
@@ -126,7 +126,7 @@ export class CharacterView {
       this.scratch.height = character.h;
     }
     const image = this.scratchCtx.createImageData(character.w, character.h);
-    image.data.set(frame.data);
+    image.data.set(framePixels(frame.data, character.w, character.h));
     this.scratchCtx.putImageData(image, 0, 0);
     return this.scratch;
   }

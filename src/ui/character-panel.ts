@@ -3,6 +3,7 @@ import {
   DIRECTION_LABELS,
   applyTemplate,
   frameIndex,
+  framePixels,
   resizeCharacter,
   type Character,
 } from '../character/model';
@@ -262,7 +263,8 @@ export class CharacterPanel {
       const ctx = thumb.getContext('2d');
       if (ctx) {
         const image = ctx.createImageData(character.w, character.h);
-        image.data.set(character.frames[frameIndex(this.studio.direction, f, character.frameCount)].data);
+        const frame = character.frames[frameIndex(this.studio.direction, f, character.frameCount)];
+        if (frame) image.data.set(framePixels(frame.data, character.w, character.h));
         ctx.putImageData(image, 0, 0);
       }
       thumb.addEventListener('click', () => {
@@ -415,7 +417,7 @@ export class CharacterPanel {
     const sctx = scratch.getContext('2d');
     if (!sctx) return;
     const image = sctx.createImageData(character.w, character.h);
-    image.data.set(frame.data);
+    image.data.set(framePixels(frame.data, character.w, character.h));
     sctx.putImageData(image, 0, 0);
 
     ctx.drawImage(scratch, 0, height - character.h, character.w, character.h);

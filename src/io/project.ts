@@ -174,7 +174,7 @@ export function serializeProject(doc: Doc, characters: Character[] = [], lastPla
       frameCount: c.frameCount,
       frameMs: c.frameMs,
       palette: [...c.palette],
-      frames: c.frames.map((f) => toBase64(f.data.buffer)),
+      frames: c.frames.map((f) => toBase64(f.data.buffer.slice(f.data.byteOffset, f.data.byteOffset + f.data.byteLength))),
     })),
     format: 'pixel-fusion-project',
     version: PROJECT_VERSION,

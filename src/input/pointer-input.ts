@@ -1,13 +1,13 @@
 import { assetIsGround, assetsOf, tileIsGround } from '../core/assets';
 import { EMPTY, indexOf, tilesetOf } from '../core/tiles';
-import { isMovableImage, type ImageLayer, type MapObject } from '../core/doc';
+import { isMovableImage, objectSize, type ImageLayer, type MapObject } from '../core/doc';
 import type { Shape, Store } from '../core/store';
 import { clampZoom, screenToCell, screenToWorld, snapZoom, zoomAt } from '../render/camera';
 import type { Renderer } from '../render/renderer';
 import type { Editor } from '../tools/edit';
 import { lineCells } from '../tools/geometry';
 import { hitsHandle, scaleFromHandle, snapPlacement } from '../tools/image-transform';
-import { HANDLE_HIT, objectHandlePoint, type ObjectTools } from '../tools/objects';
+import { HANDLE_HIT, objectHandlePoint, scaleFromCorner, type ObjectTools } from '../tools/objects';
 
 interface TrackedPointer {
   id: number;
@@ -94,7 +94,8 @@ export class PointerInput {
   private grab = { dx: 0, dy: 0 };
   private objectMoved = false;
   private scaleStart = 1;
-  private scaleStartDistance = 1;
+  private scaleAnchor = { x: 0, y: 0 };
+  private scaleStartSize = { w: 1, h: 1 };
 
   /** Pinch baseline, captured when the second finger lands. */
   private pinchDistance = 1;
@@ -187,11 +188,17 @@ export class PointerInput {
   private startObjectScale(pointer: TrackedPointer): void {
     const found = this.objects.selected();
     if (!found) return;
-    const world = this.worldAt(pointer.x, pointer.y);
     this.mode = 'object-scale';
     this.activeId = pointer.id;
+    const world = this.worldAt(pointer.x, pointer.y);
+    const size = objectSize(found.obj);
+    const anchor = { x: found.obj.x - size.w / 2, y: found.obj.y - size.h / 2 };
     this.scaleStart = found.obj.scale;
-    this.scaleStartDistance = Math.max(1, Math.hypot(world.x - found.obj.x, world.y - found.obj.y));
+    this.scaleAnchor = anchor;
+    this.scaleStartSize = {
+      w: Math.max(1, world.x - anchor.x),
+      h: Math.max(1, world.y - anchor.y),
+    };
     this.objects.beginGesture();
   }
 
@@ -661,8 +668,18 @@ export class PointerInput {
       const found = this.objects.selected();
       if (found) {
         const world = this.worldAt(x, y);
-        const distance = Math.hypot(world.x - found.obj.x, world.y - found.obj.y);
-        this.objects.scaleTo(found.obj, this.scaleStart * (distance / this.scaleStartDistance));
+        this.objects.scaleTo(
+          found.obj,
+          scaleFromCorner(
+            this.scaleStart,
+            this.scaleStartSize.w,
+            this.scaleStartSize.h,
+            this.scaleAnchor.x,
+            this.scaleAnchor.y,
+            world.x,
+            world.y,
+          ),
+        );
       }
       return;
     }

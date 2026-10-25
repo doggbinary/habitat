@@ -115,6 +115,19 @@ describe('saving and loading a project', () => {
     expect(saved.lastPlayedCharacter).toBe(second.id);
   });
 
+  it('keeps pixels that live in part of a larger buffer', () => {
+    const character = createCharacter(16, 1, 1, 1, 'Slice');
+    const expected = character.w * character.h * 4;
+    const bigger = new Uint8ClampedArray(expected + 40);
+    bigger.fill(7);
+    const view = bigger.subarray(40);
+    view[0] = 200;
+    character.frames[0].data = view;
+    const [back] = deserializeCharacters(throughJson(serializeProject(createDoc(), [character])));
+    expect(back.frames[0].data[0]).toBe(200);
+    expect(back.frames[0].data[1]).toBe(7);
+  });
+
   it('recognises its own files and rejects others', () => {
     expect(isProjectFile(serializeProject(createDoc()))).toBe(true);
     expect(isProjectFile({ layers: [] })).toBe(false);

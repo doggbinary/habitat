@@ -68,6 +68,15 @@ export function frameIndex(dir: number, frame: number, frameCount: number): numb
   return dir * frameCount + frame;
 }
 
+/** A frame's pixels at exactly w by h. A short or long buffer cannot throw a blit. */
+export function framePixels(data: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {
+  const expected = w * h * 4;
+  if (data.length === expected) return data;
+  const fixed = new Uint8ClampedArray(expected);
+  fixed.set(data.subarray(0, Math.min(data.length, expected)));
+  return fixed;
+}
+
 function emptyFrame(w: number, h: number): Frame {
   return { id: uid('frame'), data: new Uint8ClampedArray(w * h * 4) };
 }

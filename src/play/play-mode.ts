@@ -1,10 +1,10 @@
-import { DIRECTIONS, frameIndex, type Character } from '../character/model';
+import { DIRECTIONS, frameIndex, framePixels, type Character, type Frame } from '../character/model';
 import { createLayer, objectSize, type Doc, type TileLayer } from '../core/doc';
 import type { Store } from '../core/store';
 import { EMPTY, pack } from '../core/tiles';
 import { drawObject } from '../render/object-draw';
 import { drawTile } from '../render/tile-draw';
-import type { ObjectTools } from '../tools/objects';
+import { scaleFromCorner, type ObjectTools } from '../tools/objects';
 
 /** Tiles crossed per second. Roughly a brisk walk at typical tile sizes. */
 const SPEED_TILES = 4.2;
@@ -45,7 +45,8 @@ export class PlayMode {
   private grabDy = 0;
   private dragStart = { x: 0, y: 0 };
   private scaleStart = 1;
-  private scaleStartDistance = 1;
+  private scaleAnchor = { x: 0, y: 0 };
+  private scaleStartSize = { w: 1, h: 1 };
   private blockClearing = false;
   private blockLayer: TileLayer | null = null;
   private blockBefore: Int32Array | null = null;
@@ -267,10 +268,18 @@ export class PlayMode {
     if (this.tool === 'size') {
       const found = this.objects.selected();
       if (found && this.onHandle(local.x, local.y)) {
-        const world = this.worldAt(local.x, local.y);
         this.sizing = true;
+        const world = this.worldAt(local.x, local.y);
+        const size = objectSize(found.obj);
+        const anchor = { x: found.obj.x - size.w / 2, y: found.obj.y - size.h / 2 };
         this.scaleStart = found.obj.scale;
-        this.scaleStartDistance = Math.max(1, Math.hypot(world.x - found.obj.x, world.y - found.obj.y));
+        this.scaleAnchor = anchor;
+        // The grab is the unit of scale, so touching the handle does not jump
+        // the size. Later samples stay measured from this corner, not the centre.
+        this.scaleStartSize = {
+          w: Math.max(1, world.x - anchor.x),
+          h: Math.max(1, world.y - anchor.y),
+        };
         this.objects.beginGesture();
         return;
       }
@@ -304,8 +313,18 @@ export class PlayMode {
       if (!found) return;
       const world = this.worldAt(local.x, local.y);
       if (this.sizing) {
-        const distance = Math.hypot(world.x - found.obj.x, world.y - found.obj.y);
-        this.objects.scaleTo(found.obj, this.scaleStart * (distance / this.scaleStartDistance));
+        this.objects.scaleTo(
+          found.obj,
+          scaleFromCorner(
+            this.scaleStart,
+            this.scaleStartSize.w,
+            this.scaleStartSize.h,
+            this.scaleAnchor.x,
+            this.scaleAnchor.y,
+            world.x,
+            world.y,
+          ),
+        );
       } else {
         this.objects.moveSelected(found.obj, world.x - this.grabDx, world.y - this.grabDy);
       }
@@ -486,6 +505,22 @@ export class PlayMode {
     return false;
   }
 
+  /** The pose to draw. An undrawn step falls back to a frame that has pixels. */
+  private visibleFrame(): Frame | undefined {
+    const count = this.character.frameCount;
+    const step = this.moving ? Math.floor(this.walkTime / (this.character.frameMs / 1000)) % count : 0;
+    const wanted = frameIndex(this.dir, step, count);
+    const inked = (frame: Frame | undefined): frame is Frame =>
+      !!frame && frame.data.some((value, index) => (index & 3) === 3 && value > 0);
+    const frames = this.character.frames;
+    if (inked(frames[wanted])) return frames[wanted];
+    for (let f = 0; f < count; f++) {
+      const frame = frames[frameIndex(this.dir, f, count)];
+      if (inked(frame)) return frame;
+    }
+    return frames.find(inked) ?? frames[wanted];
+  }
+
   private draw(): void {
     const { ctx } = this;
     const zoom = this.zoom;
@@ -523,6 +558,24 @@ export class PlayMode {
       ctx.fillRect((tx * size - camX) * zoom, (ty * size - camY) * zoom, size * zoom, size * zoom);
     }
 
+    // Walk frames alternate stand, step, stand, other step. A pose the user
+    // never drew falls back to one that has pixels, so Play is not a blank.
+    const cell = this.visibleFrame();
+    if (cell) {
+      const sctx = this.spriteCanvas.getContext('2d');
+      if (sctx) {
+        const image = sctx.createImageData(this.character.w, this.character.h);
+        image.data.set(framePixels(cell.data, this.character.w, this.character.h));
+        sctx.putImageData(image, 0, 0);
+
+        // Feet sit on the character's position; the art rises above it.
+        const drawX = (this.x - this.character.w / 2 - camX) * zoom;
+        const drawY = (this.y + (FOOT_H * this.doc.tileSize) / 2 - this.character.h - camY) * zoom;
+        ctx.drawImage(this.spriteCanvas, drawX, drawY, this.character.w * zoom, this.character.h * zoom);
+      }
+    }
+
+    // After the character, so a sprite standing on the object cannot hide the grip.
     if (this.tool === 'size') {
       const found = this.objects.selected();
       if (found) {
@@ -538,24 +591,6 @@ export class PlayMode {
         ctx.fill();
       }
     }
-
-    // Walk frames alternate stand, step, stand, other step.
-    const frame = this.moving
-      ? Math.floor(this.walkTime / (this.character.frameMs / 1000)) % this.character.frameCount
-      : 0;
-    const cell = this.character.frames[frameIndex(this.dir, frame, this.character.frameCount)];
-    if (!cell) return;
-
-    const sctx = this.spriteCanvas.getContext('2d');
-    if (!sctx) return;
-    const image = sctx.createImageData(this.character.w, this.character.h);
-    image.data.set(cell.data);
-    sctx.putImageData(image, 0, 0);
-
-    // Feet sit on the character's position; the art rises above it.
-    const drawX = (this.x - this.character.w / 2 - camX) * zoom;
-    const drawY = (this.y + (FOOT_H * this.doc.tileSize) / 2 - this.character.h - camY) * zoom;
-    ctx.drawImage(this.spriteCanvas, drawX, drawY, this.character.w * zoom, this.character.h * zoom);
     this.refreshHistory();
   }
 
