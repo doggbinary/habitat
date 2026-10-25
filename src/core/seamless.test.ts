@@ -41,17 +41,21 @@ describe('seamlessFloor', () => {
     expect(jump / 48).toBeLessThan(8);
   });
 
-  it('fills a square from a pile too small to hold one, by repeating a smaller piece', () => {
-    const square = seamlessFloor(plot(), W, { x: 30, y: 30, w: 44, h: 40 }, 48)!;
+  it('pieces a square together from a pile too small to hold one, in the pile’s overall colour', () => {
+    const rgba = plot();
+    const pile = { x: 30, y: 30, w: 44, h: 40 };
+    const square = seamlessFloor(rgba, W, pile, 48)!;
     expect(square).not.toBeNull();
     for (let i = 0; i < 48 * 48; i++) expect(square[i * 4 + 3]).toBe(255);
-    // A 16 px piece, three times across.
-    expect(at(square, 48, 5, 7)).toEqual(at(square, 48, 21, 7));
-    expect(at(square, 48, 5, 7)).toEqual(at(square, 48, 37, 39));
+    let pileRed = 0;
+    for (let y = pile.y; y < pile.y + pile.h; y++) for (let x = pile.x; x < pile.x + pile.w; x++) pileRed += rgba[(y * W + x) * 4];
+    let floorRed = 0;
+    for (let i = 0; i < 48 * 48; i++) floorRed += square[i * 4];
+    expect(Math.abs(floorRed / (48 * 48) - pileRed / (pile.w * pile.h))).toBeLessThan(2);
   });
 
   it('gives up on a speck with no middle to speak of', () => {
-    expect(seamlessFloor(plot(), W, { x: 30, y: 30, w: 20, h: 20 }, 48)).toBeNull();
+    expect(seamlessFloor(plot(), W, { x: 30, y: 30, w: 10, h: 10 }, 48)).toBeNull();
   });
 });
 
