@@ -410,7 +410,8 @@ export class CharacterView {
   private continueDraw(e: PointerEvent, x: number, y: number): void {
     // The Pencil samples faster than the display refreshes; replaying the
     // coalesced queue keeps a quick stroke continuous.
-    const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+    const coalesced =
+      e.pointerType === 'pen' && typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
     const points = coalesced.length > 0 ? coalesced.map((s) => this.local(s)) : [{ x, y }];
     for (const point of points) {
       const cell = this.toPixel(point.x, point.y);

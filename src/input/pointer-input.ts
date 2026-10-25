@@ -477,8 +477,12 @@ export class PointerInput {
       }
       if (this.pressAsset(pointer, false)) return;
 
+      // The eraser has to work from a finger even when drawing is reserved
+      // for the Pencil, otherwise a placed asset cannot be removed by touch.
       const drawsWithFinger =
-        this.store.settings.fingerDraws && this.store.tool !== 'pan' && !this.spaceHeld;
+        this.store.tool !== 'pan' &&
+        !this.spaceHeld &&
+        (this.store.settings.fingerDraws || this.store.tool === 'eraser');
       if (drawsWithFinger && !this.tapObject) this.startDraw(pointer, false);
       else this.beginPan(pointer);
       return;
@@ -707,8 +711,11 @@ export class PointerInput {
     if (shape === 'fill') return;
 
     // The Pencil reports far more samples than there are frames. Replaying the
-    // coalesced queue keeps fast strokes from skipping tiles.
-    const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+    // coalesced queue keeps fast strokes from skipping tiles. A finger's
+    // extra samples often arrive at 0,0, and following them paints a streak
+    // across the map.
+    const coalesced =
+      e.pointerType === 'pen' && typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
     const points = coalesced.length > 0 ? coalesced.map((s) => this.local(s)) : [{ x, y }];
 
     for (const point of points) {

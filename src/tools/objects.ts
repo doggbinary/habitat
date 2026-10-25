@@ -353,5 +353,6 @@ export class ObjectTools {
     this.store.selectedObject = null;
     this.store.changed();
     this.renderer.requestDraw();
+    this.store.toast('Deleted');
   }
 }

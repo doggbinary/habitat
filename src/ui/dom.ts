@@ -71,6 +71,9 @@ export function button(
   onPress: () => void,
   children: Child[] = [],
 ): HTMLButtonElement {
+  // iPad often delivers the tap as pointerup and then drops the click, so the
+  // press itself runs the action. The click is only a fallback.
+  let pressed = false;
   return el(
     'button',
     {
@@ -79,8 +82,19 @@ export function button(
       title: label,
       aria: { label },
       on: {
+        pointerup: (e) => {
+          if (e.pointerType === 'mouse' && e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          pressed = true;
+          onPress();
+        },
         click: (e) => {
           e.preventDefault();
+          if (pressed) {
+            pressed = false;
+            return;
+          }
           onPress();
         },
       },

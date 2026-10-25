@@ -351,7 +351,7 @@ export class Shell {
         el('div', { class: 'divider vertical' }),
         this.selectionChip('copy', 'Duplicate', () => this.objects.duplicate()),
         el('div', { class: 'divider vertical' }),
-        this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger'),
+        this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger', 'Delete'),
       );
       return;
     }
@@ -380,7 +380,7 @@ export class Shell {
         order,
         el('div', { class: 'divider vertical' }),
         this.selectionChip('copy', 'Duplicate', () => this.editor.duplicateSelection()),
-        this.selectionChip('trash', 'Delete', () => this.editor.deleteSelection(), 'danger'),
+        this.selectionChip('trash', 'Delete', () => this.editor.deleteSelection(), 'danger', 'Delete'),
         button('chip primary-chip', 'Done', () => {
           this.editor.commitSelection();
           this.refreshChrome();
