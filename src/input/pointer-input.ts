@@ -1,7 +1,8 @@
-import { assetIsGround } from '../core/assets';
+import { tileIsGround } from '../core/assets';
+import { EMPTY, indexOf, tilesetOf } from '../core/tiles';
 import { isMovableImage, type ImageLayer, type MapObject } from '../core/doc';
 import type { Shape, Store } from '../core/store';
-import { clampZoom, screenToCell, screenToWorld, zoomAt } from '../render/camera';
+import { clampZoom, screenToCell, screenToWorld, snapZoom, zoomAt } from '../render/camera';
 import type { Renderer } from '../render/renderer';
 import type { Editor } from '../tools/edit';
 import { lineCells } from '../tools/geometry';
@@ -98,6 +99,8 @@ export class PointerInput {
   private pinchZoom = 1;
   private pinchMid = { x: 0, y: 0 };
 
+  private wheelSettle: ReturnType<typeof setTimeout> | undefined;
+
   private gestureStart = 0;
   private gestureMaxFingers = 0;
   private gestureMoved = false;
@@ -116,14 +119,14 @@ export class PointerInput {
     canvas.addEventListener('pointerdown', this.onDown, { passive: false });
     canvas.addEventListener('pointermove', this.onMove, { passive: false });
     canvas.addEventListener('pointerup', this.onUp);
-    canvas.addEventListener('pointercancel', this.onUp);
+    canvas.addEventListener('pointercancel', this.onCancel);
     canvas.addEventListener('pointerleave', this.onLeave);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     // A mouse click paints, so double-click only opens the tile menu from the
-    // pan tool, where a click changes nothing.
+    // select tool, where a click on bare ground changes nothing.
     canvas.addEventListener('dblclick', (e) => {
-      if (this.store.tool !== 'pan') return;
+      if (this.store.tool !== 'select' && this.store.tool !== 'pan') return;
       const { x, y } = this.local(e);
       this.onDoubleTap?.(this.cellAt(x, y), e.clientX, e.clientY);
     });
@@ -204,8 +207,7 @@ export class PointerInput {
    * through to the active tool.
    */
   private pressAsset(pointer: TrackedPointer, precise: boolean): boolean {
-    // The select tool is for painted ground, so it reaches through assets.
-    if (this.spaceHeld || this.store.tool === 'pan' || this.store.tool === 'select') return false;
+    if (this.spaceHeld || this.store.tool === 'pan') return false;
 
     if (this.onSelectedHandle(pointer.x, pointer.y)) {
       if (this.objects.selected()?.obj.locked) {
@@ -221,8 +223,10 @@ export class PointerInput {
     if (!hit) return false;
     this.editor.commitSelection();
 
-    // The eraser removes an asset outright rather than painting under it.
-    if (this.store.tool === 'eraser') {
+    // The Pencil's eraser removes an asset outright. A finger is treated like
+    // any other finger, since one resting on the map is too easy to do by
+    // accident: a tap selects the asset, and Delete removes it.
+    if (this.store.tool === 'eraser' && precise) {
       this.objects.select(hit.layer, hit.obj);
       if (hit.obj.locked) this.store.toast('Unlock it to delete');
       else this.objects.remove();
@@ -293,21 +297,31 @@ export class PointerInput {
   }
 
   /**
-   * A finger may paint only while a path square is the brush. Objects are
-   * placed, not stroked, so picking a bench must not turn the next touch
-   * into a draw. The eraser is the exception: a finger has to be able to
-   * rub out a mistake.
+   * A finger may paint only while a path square is the brush, and only with
+   * "Finger paints paths" on. Objects are placed, not stroked, so picking a
+   * bench must not turn the next touch into a draw. The eraser follows the
+   * same switch, so a finger never wipes the map by surprise.
    */
   private fingerPaints(): boolean {
     if (this.spaceHeld || this.store.tool === 'pan' || this.store.tool === 'select') return false;
-    if (this.store.tool === 'eraser') return true;
     if (!this.store.settings.fingerDraws) return false;
     const tool = this.store.tool;
+    if (tool === 'eraser') return true;
     if (tool !== 'brush' && tool !== 'fill' && tool !== 'rect' && tool !== 'line') return false;
-    const pick = this.store.libraryPick;
-    if (!pick) return false;
-    const sheet = this.store.doc.tilesets.find((tileset) => tileset.id === pick.tilesetId);
-    return !!sheet && assetIsGround(sheet, pick.index);
+    return this.stampIsGround();
+  }
+
+  /** True when every square of the brush is a path or floor square. */
+  private stampIsGround(): boolean {
+    const { stamp, doc } = this.store;
+    let any = false;
+    for (const tile of stamp.tiles) {
+      if (tile === EMPTY) continue;
+      const sheet = doc.tilesets[tilesetOf(tile)];
+      if (!sheet || !tileIsGround(sheet, indexOf(tile))) return false;
+      any = true;
+    }
+    return any;
   }
 
   /** The Pencil, a mouse, or a drawing finger has touched down. */
@@ -328,7 +342,17 @@ export class PointerInput {
 
     const paints =
       this.store.tool === 'brush' || this.store.tool === 'fill' || this.store.tool === 'rect' || this.store.tool === 'line';
-    if (!paints && this.pressAsset(pointer, true)) return;
+    const touch = pointer.type === 'touch';
+    if (!paints && this.pressAsset(pointer, !touch)) return;
+    if (touch && this.store.tool === 'eraser') {
+      // A finger erasing over a tree must not wipe the ground under it.
+      const world = this.worldAt(pointer.x, pointer.y);
+      if (this.objects.hitTest(world.x, world.y)) {
+        this.mode = 'idle';
+        this.activeId = pointer.id;
+        return;
+      }
+    }
     // Pressing on bare map means you have moved on from the selected asset.
     this.objects.deselect();
 
@@ -522,6 +546,11 @@ export class PointerInput {
         this.grabHeldBlock(pointer);
         return;
       }
+      // Pick tile is a single tap, so a finger can sample a square too.
+      if (this.store.tool === 'picker' && !this.spaceHeld) {
+        this.startDraw(pointer, false);
+        return;
+      }
       // A finger only paints paths. After an object is placed, the next
       // touch pans or moves that object — it must not start a brush stroke.
       if (!this.fingerPaints() && this.pressAsset(pointer, false)) return;
@@ -661,6 +690,7 @@ export class PointerInput {
         this.startGesture();
       } else if (this.touchCount() === 0) {
         if (this.mode === 'object-pinch') this.objects.endGesture('Resize');
+        else this.settleZoom(this.pinchMid.x, this.pinchMid.y);
         this.endInteraction();
       } else if (this.mode === 'object-pinch') {
         // One finger left: finish the resize, ignore the remaining finger.
@@ -689,6 +719,40 @@ export class PointerInput {
     this.renderer.requestDraw();
   };
 
+  /**
+   * iPadOS cancels a touch when it takes the gesture for itself (a swipe
+   * from the edge, a palm, the app switcher). That is not the user finishing
+   * a rectangle, so whatever was half-drawn is dropped rather than committed.
+   */
+  private onCancel = (e: PointerEvent): void => {
+    if (e.pointerId === this.activeId) {
+      if (this.mode === 'draw') {
+        if (this.editor.isStroking) this.editor.abortStroke();
+        this.mode = 'idle';
+      } else if (this.mode === 'selection-rect') {
+        this.mode = 'idle';
+      } else if (this.mode === 'image') {
+        this.cancelImageDrag();
+        this.mode = 'idle';
+      }
+      this.store.preview = null;
+      this.anchorCell = null;
+    }
+    // Never resolve a cancelled touch as a tap: that would undo or deselect.
+    this.gestureMoved = true;
+    this.onUp(e);
+  };
+
+  /** Eases a freehand zoom onto the nearest sharp zoom once the gesture ends. */
+  private settleZoom(x: number, y: number): void {
+    const camera = this.store.camera;
+    const sharp = snapZoom(camera.zoom);
+    if (sharp === camera.zoom) return;
+    zoomAt(camera, x, y, sharp);
+    this.store.emit('view');
+    this.renderer.requestDraw();
+  }
+
   private onLeave = (): void => {
     if (this.mode === 'idle' && this.store.hover) {
       this.store.hover = null;
@@ -703,6 +767,8 @@ export class PointerInput {
     // Browsers report a trackpad pinch as ctrl+wheel.
     if (e.ctrlKey || e.metaKey) {
       zoomAt(camera, x, y, camera.zoom * Math.exp(-e.deltaY * 0.01));
+      clearTimeout(this.wheelSettle);
+      this.wheelSettle = setTimeout(() => this.settleZoom(x, y), 160);
     } else {
       camera.x += (e.shiftKey ? e.deltaY : e.deltaX) / camera.zoom;
       if (!e.shiftKey) camera.y += e.deltaY / camera.zoom;

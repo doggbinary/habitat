@@ -4,10 +4,9 @@ import type { Editor } from '../tools/edit';
 import { button, clear, el } from './dom';
 
 interface MapPanelActions {
-  fitToView: () => void;
   newMap: () => void;
+  newMapFromPicture: () => void;
   openProject: () => void;
-  exportMap: () => void;
 }
 
 /** Map dimensions plus the display and input preferences. */
@@ -62,61 +61,41 @@ export class MapPanel {
     });
 
     this.element.append(
+      section('Start a map', [
+        button('btn primary full', 'New map from picture', () => this.actions.newMapFromPicture(), [
+          el('span', { text: 'New map from picture' }),
+        ]),
+        el('p', {
+          class: 'hint',
+          text: 'Pick a drawing of a map. It becomes a locked background 32 squares wide, lined up with the grid, so paths and objects land on its squares.',
+        }),
+        button('btn subtle full', 'New blank map', () => this.actions.newMap(), [el('span', { text: 'New blank map' })]),
+        button('btn subtle full', 'Open project file', () => this.actions.openProject(), [
+          el('span', { text: 'Open project file' }),
+        ]),
+      ]),
       section('Map', [
         field('Name', name),
         el('div', { class: 'grid-2' }, [field('Width', width), field('Height', height)]),
         el('p', { class: 'hint', text: 'Tiles are kept from the top-left corner when you resize.' }),
         apply,
         field('Grid size (px)', tileSize),
+        el('p', { class: 'hint', text: '48 matches the library art exactly. Other sizes shrink or stretch it.' }),
         field('Background', background),
-      ]),
-      section('View', [
-        this.switchRow('Show grid', this.store.settings.showGrid, (on) => {
-          this.store.settings.showGrid = on;
-          this.store.emit('doc');
-        }),
-        this.switchRow(
-          'Alignment guides',
-          this.store.settings.alignGuides,
-          (on) => {
-            this.store.settings.alignGuides = on;
-            if (!on) this.store.alignLines = null;
-            this.store.emit('doc');
-          },
-          'Pink lines appear when an asset lines up with another, and it eases onto that line.',
-        ),
         this.switchRow('Dim inactive layers', this.store.settings.highlightActiveLayer, (on) => {
           this.store.settings.highlightActiveLayer = on;
           this.store.emit('doc');
         }),
-        button('btn subtle full', 'Fit map to screen', () => this.actions.fitToView(), [
-          el('span', { text: 'Fit map to screen' }),
-        ]),
       ]),
-      section('Input', [
-        this.switchRow(
-          'Draw with finger',
-          this.store.settings.fingerDraws,
-          (on) => {
-            this.store.settings.fingerDraws = on;
-            this.store.emit('ui');
-          },
-          'On, a finger paints only while a path or floor square is selected. Objects are still placed, not drawn.',
-        ),
+      section('Pencil and fingers', [
         el('div', { class: 'gesture-help' }, [
-          gesture('One finger', 'Pan, or paint a path if one is selected'),
-          gesture('Two fingers', 'Pinch to zoom, drag to pan'),
+          gesture('Apple Pencil', 'Does the tool: paint, erase, box tiles, grab assets'),
+          gesture('One finger', 'Pans. Tap an asset to select it, then drag it'),
+          gesture('Finger paints paths', 'When on, one finger paints with a path or floor brush'),
+          gesture('Two fingers', 'Pinch to zoom, drag to pan, pinch an asset to resize'),
           gesture('Two-finger tap', 'Undo'),
           gesture('Three-finger tap', 'Redo'),
-          gesture('Apple Pencil', 'Draws with the current tool'),
         ]),
-      ]),
-      section('Project', [
-        button('btn subtle full', 'New map', () => this.actions.newMap(), [el('span', { text: 'New map' })]),
-        button('btn subtle full', 'Open project file', () => this.actions.openProject(), [
-          el('span', { text: 'Open project file' }),
-        ]),
-        button('btn primary full', 'Export', () => this.actions.exportMap(), [el('span', { text: 'Export' })]),
       ]),
     );
   }

@@ -31,6 +31,14 @@ export function objectScreenRect(camera: Camera, obj: MapObject): { x: number; y
   };
 }
 
+/**
+ * A centre for a box of this size whose left and top edges sit on whole
+ * world pixels, so its art pixels line up with the tiles around it.
+ */
+export function onWholePixels(w: number, h: number, x: number, y: number): { x: number; y: number } {
+  return { x: Math.round(x - w / 2) + w / 2, y: Math.round(y - h / 2) + h / 2 };
+}
+
 /** True when two placed assets cover some of the same ground. */
 export function overlaps(a: MapObject, b: MapObject): boolean {
   const sa = objectSize(a);
@@ -303,7 +311,7 @@ export class ObjectTools {
   aligned(w: number, h: number, x: number, y: number, ignoreId?: string): { x: number; y: number } {
     if (!this.store.settings.alignGuides) {
       this.store.alignLines = null;
-      return { x: Math.round(x), y: Math.round(y) };
+      return onWholePixels(w, h, x, y);
     }
     const targets: AlignBox[] = [];
     for (const layer of this.doc.layers) {
@@ -329,19 +337,27 @@ export class ObjectTools {
       snapped.vertical.length || snapped.horizontal.length
         ? { vertical: snapped.vertical, horizontal: snapped.horizontal }
         : null;
-    return snapped;
+    return onWholePixels(w, h, snapped.x, snapped.y);
   }
 
   /**
-   * Sets the size, nudging toward whole and half multiples when close.
-   * Pixel art only looks crisp at those, so it is worth a gentle pull.
+   * Sets the size in steps of half the art's own size. In between, pixel art
+   * has to drop or double odd rows of pixels, which is what reads as warped.
    */
   scaleTo(obj: MapObject, scale: number): void {
     if (obj.locked) return;
-    let next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
-    const nearestHalf = Math.round(next * 2) / 2;
-    if (nearestHalf > 0 && Math.abs(next - nearestHalf) / nearestHalf < 0.05) next = nearestHalf;
+    const sheet = this.doc.tilesets.find((t) => t.id === obj.tilesetId);
+    const base = sheet && sheet.tileW > 0 ? this.doc.tileSize / sheet.tileW : 1;
+    const clamped = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
+    const steps = Math.max(1, Math.round((clamped / base) * 2));
+    const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, (steps / 2) * base));
+    if (next === obj.scale) return;
+    // Keep the edges on whole pixels at the new size.
+    const size = objectSize({ ...obj, scale: next });
+    const at = onWholePixels(size.w, size.h, obj.x, obj.y);
     obj.scale = next;
+    obj.x = at.x;
+    obj.y = at.y;
     this.renderer.requestDraw();
     this.store.emit('ui');
   }
@@ -494,7 +510,7 @@ export class ObjectTools {
       ...found.obj,
       id: uid('obj'),
       rect: { ...found.obj.rect },
-      x: found.obj.x + Math.max(8, w / 3),
+      x: found.obj.x + Math.round(Math.max(8, w / 3)),
       locked: false,
     };
     const index = found.layer.objects.indexOf(found.obj);

@@ -2,7 +2,7 @@ import type { PixelTool, Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
 import { flipStampH, flipStampV, rotateStampCW, type Stamp } from '../core/stamp';
 import type { Shape, Store, ToolId } from '../core/store';
-import { clampZoom, zoomAt } from '../render/camera';
+import { stepZoom, zoomAt } from '../render/camera';
 import type { Renderer } from '../render/renderer';
 import type { Editor } from '../tools/edit';
 import type { ObjectTools } from '../tools/objects';
@@ -30,6 +30,7 @@ export interface ShellActions {
   addImageLayer: () => void;
   replaceImage: (index: number) => void;
   newMap: () => void;
+  newMapFromPicture: () => void;
   openProject: () => void;
   exportMap: () => void;
   fitToView: () => void;
@@ -55,13 +56,11 @@ const TOOLS: { id: ToolId; icon: IconName; label: string; key: string }[] = [
   { id: 'line', icon: 'line', label: 'Line', key: 'L' },
   { id: 'select', icon: 'select', label: 'Select', key: 'V' },
   { id: 'picker', icon: 'picker', label: 'Pick tile', key: 'I' },
-  { id: 'pan', icon: 'pan', label: 'Pan', key: 'H' },
 ];
 
 const ERASER_SHAPES: { id: Shape; icon: IconName; label: string }[] = [
   { id: 'brush', icon: 'brush', label: 'Freehand' },
-  { id: 'rect', icon: 'rect', label: 'Rectangle' },
-  { id: 'line', icon: 'line', label: 'Line' },
+  { id: 'rect', icon: 'rect', label: 'Box' },
   { id: 'fill', icon: 'fill', label: 'Connected area' },
 ];
 
@@ -292,17 +291,6 @@ export class Shell {
       if (redoLabel) redo.title = `Redo ${redoLabel.toLowerCase()}`;
     }
 
-    const selectedAsset = !character && this.objects.selected();
-    const heldTiles = !character && this.store.selection;
-    if (selectedAsset || heldTiles) {
-      this.topActions.append(
-        button('top-delete', 'Delete', () => {
-          if (this.objects.selected()) this.objects.remove();
-          else this.editor.deleteSelection();
-        }, [icon('trash', 18), el('span', { text: 'Delete' })]),
-      );
-    }
-
     this.topActions.append(
       undo,
       redo,
@@ -430,14 +418,24 @@ export class Shell {
 
     if (this.mode === 'map' && store.tool === 'select') {
       this.optionsBar.append(
-        el('span', { class: 'chip-label', text: 'Draw a box around painted tiles to pick them up' }),
+        el('span', {
+          class: 'chip-label',
+          text: 'Pencil: box tiles to pick them up · Finger: tap an asset, then drag it',
+        }),
       );
       return;
     }
 
     if (this.mode === 'character') {
       chips.push(
-        el('span', { class: 'chip-label', text: this.studio.character ? 'Pencil draws · fingers pan' : 'No character yet' }),
+        el('span', {
+          class: 'chip-label',
+          text: !this.studio.character
+            ? 'No character yet'
+            : store.settings.fingerDraws
+              ? 'Pencil or one finger draws · two fingers pan'
+              : 'Pencil draws · fingers pan',
+        }),
         el('div', { class: 'divider vertical' }),
         this.chipToggle('flipH', 'Symmetry', this.studio.mirrorX, () => {
           this.studio.mirrorX = !this.studio.mirrorX;
@@ -603,7 +601,7 @@ export class Shell {
       return;
     }
     const camera = this.store.camera;
-    zoomAt(camera, this.renderer.viewW / 2, this.renderer.viewH / 2, clampZoom(camera.zoom * factor));
+    zoomAt(camera, this.renderer.viewW / 2, this.renderer.viewH / 2, stepZoom(camera.zoom, factor > 1 ? 1 : -1));
     this.store.emit('view');
     this.renderer.requestDraw();
   }

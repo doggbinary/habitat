@@ -1,7 +1,11 @@
 import {
+  ART_TILE,
   createDoc,
   createImageLayer,
+  exactPlacement,
   fitPlacement,
+  pictureMapSize,
+  upgradeTileSize,
   isImageLayer,
   loadImage,
   makeTileset,
@@ -47,6 +51,7 @@ import { fitToView, screenToCell, screenToWorld } from './render/camera';
 import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
 import { el } from './ui/dom';
+import { openModal } from './ui/modal';
 import { Shell } from './ui/shell';
 
 /**
@@ -176,6 +181,7 @@ export class App {
       addImageLayer: () => void this.addImageLayer(),
       replaceImage: (index) => void this.replaceImage(index),
       newMap: () => this.newMap(),
+      newMapFromPicture: () => void this.newMapFromPicture(),
       openProject: () => void this.openProject(),
       exportMap: () => {
         this.editor.commitSelection();
@@ -192,7 +198,7 @@ export class App {
     // Held tiles belong to the select tool; picking up any other tool sets them down.
     this.store.on('ui', () => {
       const tool = this.store.tool;
-      if (this.store.selection && tool !== 'select' && tool !== 'pan') this.editor.commitSelection();
+      if (this.store.selection && tool !== 'select') this.editor.commitSelection();
     });
 
     this.store.on('doc', () => {
@@ -418,8 +424,12 @@ export class App {
       // need a newer detector are redone after the first paint, not here.
       if (sheet.image && isRawPathSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) expandPaths(sheet);
     }
+    // Maps made with 16 px squares shrank every library tile to a third,
+    // which is what warped the pixels. They move onto the art's own size.
+    const upgraded = upgradeTileSize(doc);
 
     this.store.doc = doc;
+    if (upgraded) this.store.toast('Map squares are now 48 px, so the art shows pixel for pixel');
     this.store.history.clear();
     this.store.activeTileset = 0;
     this.store.setStamp(EMPTY_STAMP);
@@ -931,6 +941,70 @@ export class App {
         this.fit();
       },
     });
+  }
+
+  /** Asks first, since a new map replaces the one that is open. */
+  private newMapFromPicture(): void {
+    openModal({
+      title: 'New map from picture',
+      body: el('div', { class: 'dialog-body' }, [
+        el('p', {
+          text: 'Choose a drawing of a map. It becomes a locked background, 32 squares wide and as tall as its shape needs, with each of its squares on a grid square.',
+        }),
+        el('p', { class: 'hint', text: 'This replaces the map you have open. Export it first if you want to keep it.' }),
+      ]),
+      actions: [
+        { label: 'Cancel' },
+        // The file picker has to open straight from the tap, or iPadOS blocks it.
+        { label: 'Choose picture', variant: 'primary', onSelect: () => void this.buildPictureMap() },
+      ],
+    });
+  }
+
+  /**
+   * A map sized to a picture, with the picture as its locked background.
+   * The picture is redrawn once at the map's exact pixel size, so every
+   * square it was drawn on lands on a grid square and it draws pixel for
+   * pixel instead of being stretched on every frame.
+   */
+  private async buildPictureMap(): Promise<void> {
+    const file = await pickFile('image/*');
+    if (!file) return;
+    try {
+      const image = await loadImage(await readFileAsDataUrl(file));
+      const { width, height } = pictureMapSize(image.naturalWidth, image.naturalHeight);
+      const doc = createDoc(width, height, ART_TILE);
+      doc.name = file.name.replace(/\.[^.]+$/, '') || 'Picture map';
+      doc.tilesets = this.store.doc.tilesets;
+      doc.pins = this.store.doc.pins;
+      doc.folders = this.store.doc.folders;
+
+      const placement = exactPlacement(doc);
+      const canvas = document.createElement('canvas');
+      canvas.width = placement.w;
+      canvas.height = placement.h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('2D canvas is unavailable');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(image, 0, 0, placement.w, placement.h);
+      const src = canvas.toDataURL('image/png');
+      const baked = await loadImage(src);
+
+      const background = createImageLayer(src, baked, 'Background', placement);
+      background.opacity = 1;
+      background.locked = true;
+      const paths = doc.layers[0];
+      paths.name = 'Paths';
+      doc.layers = [background, paths];
+      doc.activeLayer = 1;
+
+      this.adoptDoc(doc);
+      this.fit();
+      this.store.toast(`${doc.name}: ${width} x ${height} squares. Paint paths and add objects on top.`);
+    } catch {
+      this.store.toast('That picture could not be used');
+    }
   }
 
   private async openProject(): Promise<void> {

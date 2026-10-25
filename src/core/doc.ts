@@ -241,13 +241,69 @@ export function fitPlacement(
   const mapW = doc.width * doc.tileSize;
   const mapH = doc.height * doc.tileSize;
   if (naturalW <= 0 || naturalH <= 0) return { x: 0, y: 0, w: mapW, h: mapH };
+  // A picture shaped like the map fills it edge to edge, so its squares land
+  // on the grid lines rather than a few pixels off.
+  if (Math.abs(naturalW / naturalH - mapW / mapH) < 0.02 * (mapW / mapH)) return exactPlacement(doc);
   const scale = Math.min(mapW / naturalW, mapH / naturalH);
   const w = naturalW * scale;
   const h = naturalH * scale;
   return { x: (mapW - w) / 2, y: (mapH - h) / 2, w, h };
 }
 
-export function createDoc(width = 32, height = 32, tileSize = 16): Doc {
+/**
+ * The size the asset library is drawn at. A map square this big shows that
+ * art pixel for pixel; any other size has to shrink or stretch it.
+ */
+export const ART_TILE = 48;
+
+/**
+ * Moves a map made with small squares onto the library's own square size.
+ * Every painted cell stays where it is; placed assets and pictures are
+ * scaled with the squares so the map looks the same, only sharper.
+ * Returns false when the map is already at that size or cannot be scaled
+ * by a whole number.
+ */
+export function upgradeTileSize(doc: Doc): boolean {
+  if (doc.tileSize >= ART_TILE || ART_TILE % doc.tileSize !== 0) return false;
+  if (!doc.tilesets.some((sheet) => !sheet.generated && sheet.tileW === ART_TILE)) return false;
+  const k = ART_TILE / doc.tileSize;
+  doc.tileSize = ART_TILE;
+  for (const layer of doc.layers) {
+    if (layer.kind === 'objects') {
+      for (const obj of layer.objects) {
+        obj.x *= k;
+        obj.y *= k;
+        obj.scale *= k;
+      }
+    } else if (layer.kind === 'image') {
+      layer.x *= k;
+      layer.y *= k;
+      layer.w *= k;
+      layer.h *= k;
+    }
+  }
+  return true;
+}
+
+/** Squares across a map made from a picture. Its height follows the picture. */
+export const PICTURE_MAP_COLUMNS = 32;
+
+/** Map size, in squares, for a picture so it fills the map without stretching. */
+export function pictureMapSize(naturalW: number, naturalH: number): { width: number; height: number } {
+  const width = PICTURE_MAP_COLUMNS;
+  const height = naturalW > 0 ? Math.max(1, Math.round((width * naturalH) / naturalW)) : width;
+  return { width, height };
+}
+
+/**
+ * Placement that fills the map exactly, square edge to square edge. A picture
+ * drawn on a grid of its own then has its squares on the map's grid lines.
+ */
+export function exactPlacement(doc: Doc): { x: number; y: number; w: number; h: number } {
+  return { x: 0, y: 0, w: doc.width * doc.tileSize, h: doc.height * doc.tileSize };
+}
+
+export function createDoc(width = 32, height = 32, tileSize = ART_TILE): Doc {
   return {
     name: 'Untitled map',
     width,

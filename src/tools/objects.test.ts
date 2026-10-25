@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDoc, createObjectLayer, objectSize, type MapObject, type ObjectLayer } from '../core/doc';
 import { Store } from '../core/store';
 import { fakeObject, fakeRenderer, fakeTileset } from '../test-support/fakes';
-import { MAX_SCALE, MIN_SCALE, ObjectTools } from './objects';
+import { MAX_SCALE, MIN_SCALE, ObjectTools, onWholePixels } from './objects';
 
 let store: Store;
 let tools: ObjectTools;
@@ -83,19 +83,36 @@ describe('resizing', () => {
     const [obj] = withObjects(fakeObject());
     tools.scaleTo(obj, 1000);
     expect(obj.scale).toBe(MAX_SCALE);
+    // Never smaller than half the art: below that pixel art loses rows.
     tools.scaleTo(obj, 0);
-    expect(obj.scale).toBe(MIN_SCALE);
+    expect(obj.scale).toBe(0.5);
+    expect(obj.scale).toBeGreaterThanOrEqual(MIN_SCALE);
   });
 
-  it('settles onto crisp half multiples when close to one', () => {
+  it('only stops on half steps, where pixel art stays crisp', () => {
     const [obj] = withObjects(fakeObject());
     tools.scaleTo(obj, 2.04);
     expect(obj.scale).toBe(2);
     tools.scaleTo(obj, 1.47);
     expect(obj.scale).toBe(1.5);
-    // Far from any half step, the exact value is kept.
     tools.scaleTo(obj, 1.3);
-    expect(obj.scale).toBe(1.3);
+    expect(obj.scale).toBe(1.5);
+  });
+
+  it('keeps the edges on whole pixels after a resize', () => {
+    const [obj] = withObjects(fakeObject());
+    tools.scaleTo(obj, 1.5);
+    const { w, h } = objectSize(obj);
+    expect(Number.isInteger(obj.x - w / 2)).toBe(true);
+    expect(Number.isInteger(obj.y - h / 2)).toBe(true);
+  });
+});
+
+describe('whole pixels', () => {
+  it('puts the left and top edges on whole pixels', () => {
+    const at = onWholePixels(15, 9, 40.3, 20.8);
+    expect(Number.isInteger(at.x - 7.5)).toBe(true);
+    expect(Number.isInteger(at.y - 4.5)).toBe(true);
   });
 });
 

@@ -152,7 +152,7 @@ export class LayersPanel {
         class: 'hint',
         text:
           count === 0
-            ? 'No objects yet. Drag a prop from the Tiles panel onto the map to place one here.'
+            ? 'No objects yet. Tap or drag a prop from the Assets panel onto the map to place one here.'
             : `${count} object${count === 1 ? '' : 's'}. Tap one on the map to move, resize, turn or recolour it. Later objects sit in front.`,
       }),
     );

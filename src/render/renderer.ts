@@ -6,6 +6,7 @@ import type { Store } from '../core/store';
 import { EMPTY } from '../core/tiles';
 import { lineCells, normalizeRect } from '../tools/geometry';
 import { handleScreenRect, imageScreenRect } from '../tools/image-transform';
+import { isCrispZoom } from './camera';
 import { LayerCache } from './layer-cache';
 import { drawTile } from './tile-draw';
 
@@ -38,6 +39,8 @@ export class Renderer {
   private characterSource: (() => CharacterPreviewSource | null) | null = null;
   private frame = 0;
   private dpr = 1;
+  /** Whether this frame's zoom puts art pixels on whole screen pixels. */
+  private crisp = true;
   /** Viewport size in CSS pixels. */
   viewW = 0;
   viewH = 0;
@@ -120,19 +123,19 @@ export class Renderer {
     const mapH = doc.height * doc.tileSize;
     const zoom = camera.zoom;
 
-    // Map surface.
-    const originX = (0 - camera.x) * zoom;
-    const originY = (0 - camera.y) * zoom;
+    // Map surface, its corner on a whole screen pixel so every tile edge is too.
+    const originX = Math.round(-camera.x * zoom * this.dpr) / this.dpr;
+    const originY = Math.round(-camera.y * zoom * this.dpr) / this.dpr;
     ctx.fillStyle = doc.background;
     ctx.fillRect(originX, originY, mapW * zoom, mapH * zoom);
 
-    // Minification reads better with smoothing; magnified pixel art must not
-    // be interpolated or it turns to mush.
-    ctx.imageSmoothingEnabled = zoom < 1;
+    // At a sharp zoom each art pixel is a whole block of screen pixels and is
+    // drawn as is. Anywhere in between, dropping or doubling odd rows is what
+    // makes pixel art look warped, so it is smoothed instead.
+    this.crisp = isCrispZoom(zoom, this.dpr);
+    ctx.imageSmoothingEnabled = !this.crisp;
 
     this.drawLayers(doc, originX, originY, zoom);
-
-    ctx.imageSmoothingEnabled = false;
 
     if (store.settings.showGrid) this.drawGrid(doc, originX, originY, zoom);
 
@@ -179,7 +182,7 @@ export class Renderer {
     const x = originX + (preview.tx - (tilesW - 1) / 2) * cell;
     const y = originY + (preview.ty + 1) * cell - source.h * zoom;
 
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = !this.crisp;
     ctx.drawImage(source.canvas, x, y, source.w * zoom, source.h * zoom);
 
     // Footprint marker, so it is obvious which tile it occupies.
@@ -209,9 +212,7 @@ export class Renderer {
         // Objects move constantly while being arranged, so they are drawn
         // fresh each frame rather than baked into a cache that would need
         // rebuilding on every nudge.
-        ctx.imageSmoothingEnabled = false;
         for (const obj of layer.objects) drawObject(ctx, doc, obj, originX, originY, zoom);
-        ctx.imageSmoothingEnabled = zoom < 1;
       } else if (cacheable) {
         const cache = this.cacheFor(layer);
         cache.sync(doc, layer);
@@ -232,10 +233,11 @@ export class Renderer {
   private drawImageLayer(layer: ImageLayer, originX: number, originY: number, zoom: number): void {
     if (!layer.image) return;
     const { ctx } = this;
-    // Reference art is usually a photo or a mockup rather than pixel art, so
-    // it gets smoothing regardless of the zoom level.
+    // A background made to fit the grid is drawn pixel for pixel. Any other
+    // reference picture is stretched to an arbitrary size, so it is smoothed.
+    const exact = layer.w === layer.naturalW && layer.h === layer.naturalH;
     const previous = ctx.imageSmoothingEnabled;
-    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingEnabled = !(this.crisp && exact);
     ctx.drawImage(
       layer.image,
       originX + layer.x * zoom,
@@ -380,7 +382,7 @@ export class Renderer {
     };
     const { ctx } = this;
     ctx.globalAlpha = 0.72;
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = !this.crisp;
     drawObject(ctx, doc, preview, originX, originY, zoom);
     ctx.globalAlpha = 1;
   }

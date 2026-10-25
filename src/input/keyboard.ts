@@ -1,6 +1,6 @@
 import { flipStampH, flipStampV, rotateStampCW } from '../core/stamp';
 import type { Store } from '../core/store';
-import { clampZoom, zoomAt } from '../render/camera';
+import { stepZoom, zoomAt } from '../render/camera';
 import type { Renderer } from '../render/renderer';
 import type { Shell } from '../ui/shell';
 import type { PointerInput } from './pointer-input';
@@ -83,8 +83,8 @@ export function bindKeyboard(options: {
       case '+':
       case '-':
       case '_': {
-        const factor = key === '-' || key === '_' ? 1 / 1.4 : 1.4;
-        zoomAt(store.camera, renderer.viewW / 2, renderer.viewH / 2, clampZoom(store.camera.zoom * factor));
+        const direction = key === '-' || key === '_' ? -1 : 1;
+        zoomAt(store.camera, renderer.viewW / 2, renderer.viewH / 2, stepZoom(store.camera.zoom, direction));
         store.emit('view');
         renderer.requestDraw();
         break;

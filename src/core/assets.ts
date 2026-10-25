@@ -1232,6 +1232,15 @@ export function assetsOf(tileset: Tileset): AssetRect[] {
   return tileset.assets ?? [];
 }
 
+/** Whether a painted square of this sheet is ground: a path, floor or grass. */
+export function tileIsGround(tileset: Tileset, tileIndex: number): boolean {
+  if (sheetIsAllTiles(tileset.name) || tileset.pathStride) return true;
+  const ground = tileset.groundAssets;
+  if (!ground || ground.length === 0) return false;
+  const rects = assetsOf(tileset);
+  return ground.some((i) => rects[i] !== undefined && tileIndexOf(tileset, rects[i]) === tileIndex);
+}
+
 /**
  * The tile an asset is, when it is exactly one square of the sheet's grid,
  * so it can be painted with the brush; otherwise -1.
