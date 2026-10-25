@@ -1,7 +1,7 @@
 import { isMovableImage, type Doc, type ImageLayer, type MapObject, type TileLayer } from '../core/doc';
 import { HANDLE_RADIUS, objectHandlePoint, objectScreenRect } from '../tools/objects';
 import { drawObject } from './object-draw';
-import { isEmptyStamp, stampTileAt } from '../core/stamp';
+import { brushFootprint, isEmptyStamp, stampTileAt } from '../core/stamp';
 import type { Store } from '../core/store';
 import { EMPTY } from '../core/tiles';
 import { lineCells, normalizeRect } from '../tools/geometry';
@@ -500,7 +500,7 @@ export class Renderer {
           }
         } else {
           for (const c of lineCells(preview.x0, preview.y0, preview.x1, preview.y1)) {
-            this.drawStampAnchored(doc, c.x, c.y, originX, originY, cell);
+            this.drawStampAnchored(doc, c.x, c.y, originX, originY, cell, true);
           }
         }
         ctx.globalAlpha = 1;
@@ -519,19 +519,24 @@ export class Renderer {
 
     if (!hover) return;
 
+    const one = { w: 1, h: 1, tiles: Int32Array.of(0) };
+    const footprint = brushFootprint(erasing || store.stamp.w === 0 ? one : store.stamp, store.settings.brushSize);
+    const sized = erasing || (tool === 'brush' && store.stamp.w <= 1);
+
     if (tool === 'brush' || tool === 'fill') {
       ctx.globalAlpha = 0.55;
-      this.drawStampAnchored(doc, hover.x, hover.y, originX, originY, cell);
+      this.drawStampAnchored(doc, hover.x, hover.y, originX, originY, cell, tool === 'brush');
       ctx.globalAlpha = 1;
     }
 
-    const paints = tool === 'brush' || tool === 'rect' || tool === 'line';
-    const w = paints ? Math.max(1, store.stamp.w) : 1;
-    const h = paints ? Math.max(1, store.stamp.h) : 1;
+    const w = sized ? Math.max(1, footprint.w) : Math.max(1, tool === 'rect' || tool === 'line' ? store.stamp.w : 1);
+    const h = sized ? Math.max(1, footprint.h) : Math.max(1, tool === 'rect' || tool === 'line' ? store.stamp.h : 1);
+    const ox = sized ? footprint.ox : 0;
+    const oy = sized ? footprint.oy : 0;
 
     ctx.strokeStyle = erasing ? COLOR_ERASE : COLOR_CURSOR;
     ctx.lineWidth = 2;
-    ctx.strokeRect(originX + hover.x * cell, originY + hover.y * cell, w * cell, h * cell);
+    ctx.strokeRect(originX + (hover.x + ox) * cell, originY + (hover.y + oy) * cell, w * cell, h * cell);
   }
 
   /** Draws the whole stamp block with its top-left corner on a cell. */
@@ -542,12 +547,18 @@ export class Renderer {
     originX: number,
     originY: number,
     cell: number,
+    grow = false,
   ): void {
     const stamp = this.store.stamp;
     if (isEmptyStamp(stamp)) return;
-    for (let y = 0; y < stamp.h; y++) {
-      for (let x = 0; x < stamp.w; x++) {
-        this.drawPreviewTile(doc, stamp.tiles[y * stamp.w + x], cx + x, cy + y, originX, originY, cell);
+    const single = grow && stamp.w === 1 && stamp.h === 1;
+    const foot = single
+      ? brushFootprint(stamp, this.store.settings.brushSize)
+      : { w: stamp.w, h: stamp.h, ox: 0, oy: 0 };
+    for (let y = 0; y < foot.h; y++) {
+      for (let x = 0; x < foot.w; x++) {
+        const painted = single ? stamp.tiles[0] : stamp.tiles[y * stamp.w + x];
+        this.drawPreviewTile(doc, painted, cx + foot.ox + x, cy + foot.oy + y, originX, originY, cell);
       }
     }
   }

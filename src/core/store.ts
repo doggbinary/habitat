@@ -55,6 +55,8 @@ export interface Settings {
   snapImageToGrid: boolean;
   /** Pink lines, and a gentle pull, when a moved asset lines up with another. */
   alignGuides: boolean;
+  /** Squares across that the brush and eraser paint. A single tile repeats to fill them. */
+  brushSize: number;
 }
 
 /** `view` covers anything that only moves the viewport or the hovered cell. */
@@ -87,6 +89,7 @@ export class Store {
     showTileOutlines: false,
     snapImageToGrid: false,
     alignGuides: true,
+    brushSize: 1,
   };
 
   /** Lines showing while an asset is being dragged into line with another. */

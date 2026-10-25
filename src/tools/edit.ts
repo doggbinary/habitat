@@ -18,6 +18,7 @@ import { snapshot, Stroke, type DocSnapshot } from '../core/history';
 import {
   flipStampH,
   flipStampV,
+  brushFootprint,
   isEmptyStamp,
   randomTile,
   rotateStampCW,
@@ -335,6 +336,16 @@ export class Editor {
       return;
     }
 
+    // One tile repeats across the brush, centred on the cell under the pointer.
+    if (stamp.w === 1 && stamp.h === 1) {
+      const foot = brushFootprint(stamp, this.store.settings.brushSize);
+      const tile = stamp.tiles[0];
+      for (let sy = 0; sy < foot.h; sy++) {
+        for (let sx = 0; sx < foot.w; sx++) this.write(layer, x + foot.ox + sx, y + foot.oy + sy, tile);
+      }
+      return;
+    }
+
     for (let sy = 0; sy < stamp.h; sy++) {
       for (let sx = 0; sx < stamp.w; sx++) {
         const tile = stamp.tiles[sy * stamp.w + sx];
@@ -343,6 +354,12 @@ export class Editor {
         this.write(layer, x + sx, y + sy, tile);
       }
     }
+  }
+
+  /** Erases a block the size of the brush, centred on the cell. */
+  eraseBrush(x: number, y: number): void {
+    const foot = brushFootprint({ w: 1, h: 1, tiles: Int32Array.of(0) }, this.store.settings.brushSize);
+    this.erase(x + foot.ox, y + foot.oy, foot.w, foot.h);
   }
 
   erase(x: number, y: number, w = 1, h = 1): void {
@@ -355,7 +372,7 @@ export class Editor {
 
   paintCells(cells: Cell[], erasing: boolean): void {
     for (const cell of cells) {
-      if (erasing) this.erase(cell.x, cell.y);
+      if (erasing) this.eraseBrush(cell.x, cell.y);
       else this.paintStamp(cell.x, cell.y);
     }
   }

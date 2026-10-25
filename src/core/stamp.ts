@@ -13,6 +13,28 @@ export interface Stamp {
 
 export const EMPTY_STAMP: Stamp = { w: 0, h: 0, tiles: new Int32Array(0) };
 
+/** The brush paints between one and this many squares across. */
+export const BRUSH_MIN = 1;
+export const BRUSH_MAX = 8;
+
+/** Where a brush of this size starts, so the cell under the pointer stays its middle. */
+export function brushOrigin(size: number): number {
+  return 0 - Math.floor((size - 1) / 2);
+}
+
+/**
+ * How many cells the brush covers, and where that block starts relative to
+ * the cell under the pointer. A single tile grows with the brush size. A
+ * block of different tiles is already its own size, so it is unchanged.
+ */
+export function brushFootprint(stamp: Stamp, brushSize: number): { w: number; h: number; ox: number; oy: number } {
+  const single = stamp.w === 1 && stamp.h === 1 && stamp.tiles.length === 1;
+  if (!single) return { w: stamp.w, h: stamp.h, ox: 0, oy: 0 };
+  const size = Math.max(BRUSH_MIN, Math.min(BRUSH_MAX, brushSize | 0));
+  const origin = brushOrigin(size);
+  return { w: size, h: size, ox: origin, oy: origin };
+}
+
 export function singleStamp(tilesetIndex: number, tileIndex: number): Stamp {
   return { w: 1, h: 1, tiles: Int32Array.of(pack(tilesetIndex, tileIndex)) };
 }

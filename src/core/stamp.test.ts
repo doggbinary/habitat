@@ -5,6 +5,7 @@ import {
   randomTile,
   rotateStampCW,
   singleStamp,
+  brushFootprint,
   stampFromRegion,
   stampTileAt,
   type Stamp,
@@ -71,6 +72,12 @@ describe('stamp sampling', () => {
     expect(indices(s)).toEqual([-1, -1, -1, -1]);
     const partial = stampFromRegion(0, 4, 0, 1, 2, 2, 6);
     expect(indices(partial)).toEqual([4, 5, -1, -1]);
+  });
+
+  it('grows a single tile with the brush and centres it', () => {
+    expect(brushFootprint(singleStamp(0, 3), 1)).toEqual({ w: 1, h: 1, ox: 0, oy: 0 });
+    expect(brushFootprint(singleStamp(0, 3), 4)).toEqual({ w: 4, h: 4, ox: -1, oy: -1 });
+    expect(brushFootprint(sample(), 4)).toEqual({ w: 3, h: 2, ox: 0, oy: 0 });
   });
 
   it('never scatters an empty cell', () => {

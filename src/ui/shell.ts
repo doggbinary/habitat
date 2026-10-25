@@ -464,7 +464,7 @@ export class Shell {
     }
 
     if (store.tool === 'eraser') {
-      chips.push(el('span', { class: 'chip-label', text: 'Erase' }));
+      chips.push(store.eraserShape === 'brush' ? this.brushSizeControl() : el('span', { class: 'chip-label', text: 'Erase' }));
       for (const shape of ERASER_SHAPES) {
         const active = store.eraserShape === shape.id;
         chips.push(
@@ -476,13 +476,11 @@ export class Shell {
       }
     } else {
       const stamp = store.stamp;
-      const text =
-        stamp.w === 0
-          ? 'No tile selected'
-          : stamp.w === 1 && stamp.h === 1
-            ? '1 tile'
-            : `${stamp.w} x ${stamp.h} tiles`;
-      chips.push(el('span', { class: 'chip-label', text }));
+      if (stamp.w > 1 || stamp.h > 1) {
+        chips.push(el('span', { class: 'chip-label', text: `${stamp.w} x ${stamp.h} tiles` }));
+      } else {
+        chips.push(this.brushSizeControl());
+      }
 
       // Orientation belongs next to the canvas: you decide which way a tile
       // faces while placing it, not while browsing the sheet.
@@ -573,6 +571,25 @@ export class Shell {
       this.refreshChrome();
       this.renderer.requestDraw();
     }, text ? [icon(name, 17), el('span', { class: 'chip-text', text })] : [icon(name, 17)]);
+  }
+
+  /** Smaller and bigger, for the brush and the eraser. */
+  private brushSizeControl(): HTMLElement {
+    const size = this.store.settings.brushSize;
+    const set = (next: number) => {
+      this.store.settings.brushSize = Math.max(1, Math.min(8, next));
+      this.store.emit('ui');
+      this.renderer.requestDraw();
+    };
+    const smaller = button('chip', 'Smaller brush', () => set(size - 1), [el('span', { text: '−' })]);
+    smaller.disabled = size <= 1;
+    const bigger = button('chip', 'Bigger brush', () => set(size + 1), [el('span', { text: '+' })]);
+    bigger.disabled = size >= 8;
+    return el('div', { class: 'brush-size' }, [
+      smaller,
+      el('span', { class: 'chip-label', text: size === 1 ? '1 tile' : `${size} tiles` }),
+      bigger,
+    ]);
   }
 
   /**

@@ -71,6 +71,12 @@ export function bindKeyboard(options: {
       case 'q':
         store.setStamp(rotateStampCW(store.stamp), store.paletteSelection);
         break;
+      case '[':
+      case ']':
+        store.settings.brushSize = Math.max(1, Math.min(8, store.settings.brushSize + (key === ']' ? 1 : -1)));
+        store.emit('ui');
+        renderer.requestDraw();
+        break;
       case 'f':
         store.settings.showGrid = !store.settings.showGrid;
         store.emit('ui');

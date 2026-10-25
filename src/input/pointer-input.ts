@@ -427,7 +427,7 @@ export class PointerInput {
       this.editor.floodFill(cell.x, cell.y, erases);
       this.editor.endStroke();
     } else if (erases) {
-      this.editor.erase(cell.x, cell.y);
+      this.editor.eraseBrush(cell.x, cell.y);
     } else {
       this.editor.paintStamp(cell.x, cell.y);
     }

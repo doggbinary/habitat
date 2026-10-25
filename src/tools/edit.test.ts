@@ -68,6 +68,17 @@ describe('painting', () => {
     expect(at(3, 2)).toBe(EMPTY);
   });
 
+  it('paints a bigger brush as a block centred on the cell', () => {
+    store.settings.brushSize = 3;
+    store.stamp = { w: 1, h: 1, tiles: Int32Array.of(T(4)) };
+    editor.beginStroke('Paint');
+    editor.paintStamp(3, 3);
+    editor.endStroke();
+    for (let y = 2; y <= 4; y++) for (let x = 2; x <= 4; x++) expect(at(x, y)).toBe(T(4));
+    expect(at(1, 3)).toBe(EMPTY);
+    expect(at(5, 3)).toBe(EMPTY);
+  });
+
   it('rolls an aborted stroke back completely', () => {
     store.stamp = { w: 1, h: 1, tiles: Int32Array.of(T(4)) };
     editor.beginStroke('Paint');
