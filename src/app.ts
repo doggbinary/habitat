@@ -626,7 +626,7 @@ export class App {
       ? { x: preview.tx, y: preview.ty }
       : screenToCell(this.store.camera, this.store.doc, this.renderer.viewW / 2, this.renderer.viewH / 2);
 
-    new PlayMode(this.store.doc, character, tile, () => {
+    new PlayMode(this.store, this.objects, character, tile, () => {
       // Returning from the test should not look like anything moved.
       this.renderer.resize();
       this.renderer.requestDraw();

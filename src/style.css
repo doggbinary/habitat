@@ -1359,6 +1359,31 @@ textarea {
   border: 1px solid rgba(255, 255, 255, 0.4);
 }
 
+.play-tools {
+  position: fixed;
+  left: calc(14px + var(--sa-left));
+  bottom: calc(14px + var(--sa-bottom));
+  display: flex;
+  gap: 8px;
+}
+
+.play-tool {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(22, 24, 31, 0.92);
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.play-tool.active {
+  color: var(--text);
+  background: rgba(126, 160, 255, 0.28);
+}
+
 .play-controls {
   position: fixed;
   top: calc(14px + var(--sa-top));
