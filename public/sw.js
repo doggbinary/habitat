@@ -4,7 +4,7 @@
  * production build, so a new deploy evicts the old assets instead of serving
  * a half-updated mix.
  */
-const CACHE = 'pixel-fusion-v2';
+const CACHE = 'pixel-fusion-v3';
 
 self.addEventListener('install', (event) => {
   // The app shell is tiny; everything else is picked up on first use.
@@ -39,13 +39,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // The app shell has to come from the network, or a reload keeps the previous
-  // version forever. Pictures can stay cached.
+  // The app shell and the library list have to come from the network, or a
+  // reload keeps the previous version forever and new packs never appear.
+  // Pictures can stay cached.
   const fresh =
     request.mode === 'navigate' ||
     request.destination === 'script' ||
     request.destination === 'style' ||
     request.destination === 'worker' ||
+    request.cache === 'no-cache' ||
+    request.cache === 'reload' ||
+    url.pathname.endsWith('.json') ||
     url.pathname.endsWith('/sw.js');
   if (fresh) {
     event.respondWith(

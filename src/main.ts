@@ -9,15 +9,6 @@ const app = new App(root);
 void app.start();
 
 /**
- * Safari zooms the whole document on a two-finger pinch over page chrome,
- * which would fight the editor's own pinch-to-zoom. Double-tap zoom is handled
- * in CSS with `touch-action: manipulation` so taps still register normally.
- */
-for (const name of ['gesturestart', 'gesturechange']) {
-  document.addEventListener(name, (e) => e.preventDefault(), { passive: false });
-}
-
-/**
  * Offline support for the web build: once cached, the editor keeps working
  * with no network at all.
  *
@@ -29,7 +20,7 @@ if ('serviceWorker' in navigator && import.meta.env.PROD && !isNative()) {
   window.addEventListener('load', () => {
     // The query keeps an already-installed worker from handing back its own
     // cached copy of this file, which would freeze the app on an old version.
-    void navigator.serviceWorker.register('./sw.js?v=2').catch(() => {
+    void navigator.serviceWorker.register('./sw.js?v=3').catch(() => {
       /* offline support is a bonus, not a requirement */
     });
   });
