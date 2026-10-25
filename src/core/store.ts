@@ -114,6 +114,8 @@ export class Store {
   selectedObject: { layerId: string; objectId: string } | null = null;
   /** Every asset in the current selection, including `selectedObject`. */
   selectedGroup: { layerId: string; objectId: string }[] = [];
+  /** While on, tapping an asset adds it to the selection or takes it out. */
+  addingToSelection = false;
   /** The library asset being dragged onto the map, and where it would land. */
   drag: {
     tilesetId: string;

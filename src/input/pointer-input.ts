@@ -242,8 +242,7 @@ export class PointerInput {
       return true;
     }
 
-    const selected = this.objects.selected();
-    const isSelected = selected?.obj === hit.obj;
+    const isSelected = this.objects.isSelected(hit.obj);
 
     // Remember what a finger landed on, so a tap can select it on release and
     // a tap on the selected asset does not count as tapping bare map.
@@ -252,7 +251,23 @@ export class PointerInput {
       this.tapObjectLayer = hit.layer.id;
     }
 
-    if (precise || isSelected) {
+    // Building up a selection: the Pencil adds an asset on touch; a finger
+    // does it on release, in case the touch turns into a pan.
+    if (precise && this.store.addingToSelection && !isSelected) {
+      this.objects.toggleInSelection(hit.layer, hit.obj);
+      this.mode = 'idle';
+      this.activeId = pointer.id;
+      return true;
+    }
+
+    if (isSelected) {
+      // Dragging any asset in the selection moves the whole selection with it.
+      this.store.selectedObject = { layerId: hit.layer.id, objectId: hit.obj.id };
+      this.startObjectMove(pointer, hit.obj);
+      return true;
+    }
+
+    if (precise) {
       // The Pencil grabs at once; a finger only drags what is already chosen.
       this.objects.select(hit.layer, hit.obj);
       this.startObjectMove(pointer, hit.obj);
@@ -1002,7 +1017,8 @@ export class PointerInput {
         const layer = this.store.doc.layers.find((l) => l.id === tappedLayer);
         if (layer?.kind === 'objects') {
           this.editor.commitSelection();
-          this.objects.select(layer, tappedObject);
+          if (this.store.addingToSelection) this.objects.toggleInSelection(layer, tappedObject);
+          else this.objects.select(layer, tappedObject);
         }
         return;
       }

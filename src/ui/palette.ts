@@ -1,4 +1,4 @@
-import { assetsOf } from '../core/assets';
+import { assetsOf, type AssetEdit } from '../core/assets';
 import type { AssetRect, Tileset } from '../core/doc';
 import type { Store } from '../core/store';
 import { button, clear, el } from './dom';
@@ -59,7 +59,7 @@ export interface PaletteActions {
   /** `dropped` is false when the gesture was cancelled by the system. */
   dragEnd: (clientX: number, clientY: number, dropped: boolean) => void;
   /** Fixes detection by hand: join pieces of one asset, or drop strays. */
-  editAssets: (tilesetIndex: number, op: 'merge' | 'delete', indices: number[]) => void;
+  editAssets: (tilesetIndex: number, op: AssetEdit, indices: number[]) => void;
   /** Adds stickers to the Pinned page, or takes them off it. */
   setPinned: (refs: AssetRef[], pinned: boolean) => void;
   /**
@@ -543,10 +543,18 @@ export class PalettePanel {
     const view = this.view;
 
     if (view.kind === 'sheet') {
-      const run = (op: 'merge' | 'delete') => {
+      // Thumbnails skip the sheet's ground squares, so a thumbnail's place
+      // is not its asset number on the sheet.
+      const run = (op: AssetEdit) => {
+        const indices = picked.flatMap((i) => (this.entries[i] ? [this.entries[i].assetIndex] : []));
         this.selected.clear();
-        this.actions.editAssets(sheetIndex, op, picked);
+        this.actions.editAssets(sheetIndex, op, indices);
       };
+      const toPaths = button('chip', 'Make these paintable floor squares on the Ground page', () => run('toGround'), [
+        icon('tiles', 16),
+        el('span', { text: 'Move to paths' }),
+      ]);
+      toPaths.disabled = picked.length === 0;
       const merge = button('chip', 'Join the selected pieces into one asset', () => run('merge'), [
         el('span', { text: 'Merge' }),
       ]);
@@ -568,10 +576,10 @@ export class PalettePanel {
       }, [icon('layers', 16), el('span', { text: 'File' })]);
       file.disabled = refs.length === 0;
 
-      chips.push(pin, file, merge, remove);
+      chips.push(toPaths, pin, file, merge, remove);
     } else if (view.kind === 'ground') {
-      // Ground is gathered from the sheets, so it cannot be taken off this
-      // page; it can only be pinned or filed for quicker reach.
+      // Ground is gathered from many sheets, so a square can be pinned, filed,
+      // or sent back to its own sheet as an object.
       const pin = button('chip', 'Keep these on the Pinned page', () => {
         this.actions.setPinned(refs, true);
         done();
@@ -580,9 +588,20 @@ export class PalettePanel {
         this.chooseFolder(refs);
         done();
       }, [icon('layers', 16), el('span', { text: 'File' })]);
+      const back = button('chip', 'Put these back on their sheet as objects', () => {
+        const bySheet = new Map<number, number[]>();
+        for (const i of picked) {
+          const entry = this.entries[i];
+          if (!entry) continue;
+          bySheet.set(entry.tilesetIndex, [...(bySheet.get(entry.tilesetIndex) ?? []), entry.assetIndex]);
+        }
+        this.selected.clear();
+        for (const [sheet, indices] of bySheet) this.actions.editAssets(sheet, 'toObjects', indices);
+      }, [el('span', { text: 'Move back to objects' })]);
       pin.disabled = refs.length === 0;
       file.disabled = refs.length === 0;
-      chips.push(pin, file);
+      back.disabled = picked.length === 0;
+      chips.push(pin, file, back);
     } else {
       const label = view.kind === 'pins' ? 'Unpin' : 'Take out';
       const take = button('chip danger', `${label} the selected assets`, () => {
@@ -610,9 +629,9 @@ export class PalettePanel {
         text:
           picked.length === 0
             ? view.kind === 'sheet'
-              ? 'Tap assets to select them. Pin them, file them in a folder, merge pieces that belong together, or delete stray marks.'
+              ? 'Tap assets to select them. Move grass, floors or paving to paths, pin or file them, merge pieces that belong together, or delete stray marks.'
               : view.kind === 'ground'
-                ? 'Tap the ground you use most, then pin it or file it in a folder.'
+                ? 'Tap ground squares to pin or file them, or move ones that are really objects back to their sheet.'
                 : 'Tap assets to select them, then take them off this page.'
             : `${picked.length} selected`,
       }),
@@ -660,7 +679,9 @@ export class PalettePanel {
    */
   private groundEntries(): Entry[] {
     const doc = this.store.doc;
-    const key = doc.tilesets.map((sheet) => `${sheet.id}:${sheet.groundAssets?.length ?? 0}`).join('|');
+    const key = doc.tilesets
+      .map((sheet) => `${sheet.id}:${sheet.groundAssets?.length ?? 0}:${sheet.groundBlocks?.length ?? 0}`)
+      .join('|');
     if (this.groundCache?.key === key) return this.groundCache.entries;
 
     const canvas = document.createElement('canvas');
@@ -672,9 +693,20 @@ export class PalettePanel {
     const seen = new Set<string>();
     doc.tilesets.forEach((tileset, tilesetIndex) => {
       const assets = assetsOf(tileset);
+      const patches = tileset.groundBlocks ?? [];
       for (const assetIndex of tileset.groundAssets ?? []) {
         const rect = assets[assetIndex];
         if (!rect) continue;
+        // A patch paints as a whole from any of its squares, so it needs
+        // only one thumbnail.
+        const patch = patches.findIndex(
+          (p) => rect.x >= p.x && rect.y >= p.y && rect.x + rect.w <= p.x + p.w && rect.y + rect.h <= p.y + p.h,
+        );
+        if (patch !== -1) {
+          const id = `${tileset.id}#${patch}`;
+          if (seen.has(id)) continue;
+          seen.add(id);
+        }
         const look = ctx && tileset.image ? groundLook(ctx, tileset.image, rect) : String(entries.length);
         if (seen.has(look)) continue;
         seen.add(look);

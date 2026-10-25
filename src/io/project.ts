@@ -106,6 +106,7 @@ interface SerializedTileset {
   assetsVersion?: number;
   assetsEdited?: boolean;
   groundAssets?: number[];
+  groundBlocks?: AssetRect[];
   pathStride?: number;
 }
 
@@ -204,6 +205,7 @@ export function serializeProject(doc: Doc, characters: Character[] = []): Serial
       ...(t.assetsVersion ? { assetsVersion: t.assetsVersion } : {}),
       ...(t.assetsEdited ? { assetsEdited: true } : {}),
       ...(t.groundAssets?.length ? { groundAssets: [...t.groundAssets] } : {}),
+      ...(t.groundBlocks?.length ? { groundBlocks: t.groundBlocks.map((b) => ({ ...b })) } : {}),
       ...(t.pathStride ? { pathStride: t.pathStride } : {}),
     })),
     layers: doc.layers.map((l): SerializedLayer => {
@@ -283,6 +285,7 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       if (t.assetsVersion) tileset.assetsVersion = t.assetsVersion;
       if (t.assetsEdited) tileset.assetsEdited = true;
       if (Array.isArray(t.groundAssets)) tileset.groundAssets = [...t.groundAssets];
+      if (Array.isArray(t.groundBlocks)) tileset.groundBlocks = t.groundBlocks.map((b) => ({ ...b }));
       if (t.pathStride) tileset.pathStride = t.pathStride;
       tilesets.push(tileset);
     } catch {
@@ -309,6 +312,7 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
         ...(t.assetsVersion ? { assetsVersion: t.assetsVersion } : {}),
         ...(t.assetsEdited ? { assetsEdited: true } : {}),
         ...(Array.isArray(t.groundAssets) ? { groundAssets: [...t.groundAssets] } : {}),
+        ...(Array.isArray(t.groundBlocks) ? { groundBlocks: t.groundBlocks.map((b) => ({ ...b })) } : {}),
         ...(t.pathStride ? { pathStride: t.pathStride } : {}),
       });
     }

@@ -108,6 +108,32 @@ describe('resizing', () => {
   });
 });
 
+describe('selecting several to recolour together', () => {
+  it('adds assets to the selection one tap at a time, and takes them out again', () => {
+    const [a, b, c] = withObjects(fakeObject({ id: 'a' }), fakeObject({ id: 'b' }), fakeObject({ id: 'c' }));
+    tools.select(layer, a);
+    tools.toggleInSelection(layer, b);
+    tools.toggleInSelection(layer, c);
+    expect(tools.recolorable().map((o) => o.id)).toEqual(['a', 'b', 'c']);
+    tools.toggleInSelection(layer, b);
+    expect(tools.recolorable().map((o) => o.id)).toEqual(['a', 'c']);
+  });
+
+  it('leaves locked assets out of a recolour', () => {
+    const [a, b] = withObjects(fakeObject({ id: 'a' }), fakeObject({ id: 'b', locked: true }));
+    tools.select(layer, a);
+    tools.toggleInSelection(layer, b);
+    expect(tools.recolorable().map((o) => o.id)).toEqual(['a']);
+  });
+
+  it('clears the selection when the last asset is taken out', () => {
+    const [a] = withObjects(fakeObject({ id: 'a' }));
+    tools.select(layer, a);
+    tools.toggleInSelection(layer, a);
+    expect(tools.selected()).toBeNull();
+  });
+});
+
 describe('whole pixels', () => {
   it('puts the left and top edges on whole pixels', () => {
     const at = onWholePixels(15, 9, 40.3, 20.8);

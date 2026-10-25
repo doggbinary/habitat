@@ -1,7 +1,14 @@
 import type { AssetRect } from './doc';
 
-/** How many placeable pieces each ground type gets: centre, edges, bends, straights, ends. */
-export const PATH_STRIDE = 15;
+/**
+ * Pieces built for each ground type: the 47 RPG Maker floor shapes, which
+ * cover every way the squares around one can continue, inner corners
+ * included. The 48th shape in the table is only the pack's preview square.
+ */
+export const PATH_STRIDE = 47;
+
+/** The piece shown for a path type in the library: one square on its own. */
+export const PATH_PREVIEW = 46;
 
 /**
  * Quarter of the autotile block (columns 0-3, rows 0-5 of half-tiles) for
@@ -23,10 +30,53 @@ const FLOOR: readonly (readonly [number, number])[][] = [
   [[0, 4], [3, 4], [0, 5], [3, 5]], [[2, 2], [3, 2], [2, 5], [3, 5]], [[0, 2], [3, 2], [0, 5], [3, 5]], [[0, 0], [1, 0], [0, 1], [1, 1]],
 ];
 
-/** Which piece to draw for a cell, from whether the same path continues in each direction. */
-export function pathRole(north: boolean, east: boolean, south: boolean, west: boolean): number {
-  const borders = (!north ? 1 : 0) | (!east ? 2 : 0) | (!south ? 4 : 0) | (!west ? 8 : 0);
-  return [0, 1, 2, 5, 3, 9, 6, 11, 4, 8, 10, 13, 7, 12, 14, 0][borders];
+/** Whether the same path continues into each of the eight squares around one. */
+export interface Neighbours {
+  n: boolean;
+  ne: boolean;
+  e: boolean;
+  se: boolean;
+  s: boolean;
+  sw: boolean;
+  w: boolean;
+  nw: boolean;
+}
+
+type Half = readonly [number, number];
+
+/**
+ * One quarter of a square, from its two side neighbours and the diagonal
+ * between them: inside the path, an inner corner where only the diagonal is
+ * missing, an edge along the side that stops, or an outer corner.
+ */
+function quarter(
+  vertical: boolean,
+  horizontal: boolean,
+  diagonal: boolean,
+  pieces: { inside: Half; inner: Half; side: Half; top: Half; corner: Half },
+): Half {
+  if (vertical && horizontal) return diagonal ? pieces.inside : pieces.inner;
+  if (vertical) return pieces.side;
+  if (horizontal) return pieces.top;
+  return pieces.corner;
+}
+
+const SHAPE_OF = new Map<string, number>();
+FLOOR.forEach((quarters, shape) => {
+  const key = quarters.map(([x, y]) => `${x},${y}`).join(';');
+  if (!SHAPE_OF.has(key)) SHAPE_OF.set(key, shape);
+});
+
+/** Which of the 47 floor shapes a square takes, given which neighbours are the same path. */
+export function pathShape(around: Neighbours): number {
+  const { n, ne, e, se, s, sw, w, nw } = around;
+  const quarters = [
+    quarter(n, w, nw, { inside: [2, 4], inner: [2, 0], side: [0, 4], top: [2, 2], corner: [0, 2] }),
+    quarter(n, e, ne, { inside: [1, 4], inner: [3, 0], side: [3, 4], top: [1, 2], corner: [3, 2] }),
+    quarter(s, w, sw, { inside: [2, 3], inner: [2, 1], side: [0, 3], top: [2, 5], corner: [0, 5] }),
+    quarter(s, e, se, { inside: [1, 3], inner: [3, 1], side: [3, 3], top: [1, 5], corner: [3, 5] }),
+  ];
+  return SHAPE_OF.get(quarters.map(([x, y]) => `${x},${y}`).join(';')) ?? PATH_PREVIEW;
 }
 
 /** A ground page straight from the pack: blocks of 2 by 3 tiles, not the expanded set. */
@@ -45,8 +95,8 @@ export interface ExpandedPaths {
 }
 
 /**
- * Turns one autotile page into rows of pieces that meet: the centre, the four
- * edges, the four bends, the two straights, and the four ends.
+ * Turns one autotile page into rows of pieces, one row per ground type, built
+ * from the pack's 2 by 3 block exactly as RPG Maker assembles them.
  */
 export function expandPathSheet(rgba: Uint8ClampedArray, width: number, height: number, tile: number): ExpandedPaths {
   const half = tile / 2;
@@ -57,12 +107,10 @@ export function expandPathSheet(rgba: Uint8ClampedArray, width: number, height: 
   for (let by = 0; by < blocksY; by++) {
     for (let bx = 0; bx < blocksX; bx++) {
       if (!blockHasInk(rgba, width, bx * tile * 2, by * tile * 3, tile)) continue;
-      const shapes = FLOOR.map((_, shape) => compose(rgba, width, bx * tile * 2, by * tile * 3, half, shape));
-      const center = calmest(shapes, tile);
       const row = new Uint8ClampedArray(PATH_STRIDE * tile * tile * 4);
-      for (let role = 0; role < PATH_STRIDE; role++) {
-        const shape = pickShape(shapes, center, roleMask(role), tile);
-        blitTile(shapes[shape], row, role * tile, 0, tile, PATH_STRIDE * tile);
+      for (let shape = 0; shape < PATH_STRIDE; shape++) {
+        const piece = compose(rgba, width, bx * tile * 2, by * tile * 3, half, shape);
+        blitTile(piece, row, shape * tile, 0, tile, PATH_STRIDE * tile);
       }
       rows.push(row);
     }
@@ -86,19 +134,15 @@ export function expandPathSheet(rgba: Uint8ClampedArray, width: number, height: 
     }
   }
 
+  // One thumbnail per ground type. Painting picks the right piece around it,
+  // so offering every corner and edge separately would only be clutter.
   const assets: AssetRect[] = [];
   for (let row = 0; row < rows.length; row++) {
-    for (let col = 0; col < cols; col++) {
-      if (opaque(out, outW, col * tile, row * tile, tile) < 8) continue;
-      assets.push({ x: col * tile, y: row * tile, w: tile, h: tile });
-    }
+    const x = PATH_PREVIEW * tile;
+    if (opaque(out, outW, x, row * tile, tile) < 8) continue;
+    assets.push({ x, y: row * tile, w: tile, h: tile });
   }
   return { rgba: out, width: outW, height: outH, cols, rows: rows.length, assets };
-}
-
-/** Sides that should show the outside of the path for each role. Bit 1 top, 2 right, 4 bottom, 8 left. */
-function roleMask(role: number): number {
-  return [0, 1, 2, 4, 8, 1 | 2, 4 | 2, 4 | 8, 1 | 8, 1 | 4, 2 | 8, 1 | 2 | 4, 1 | 4 | 8, 1 | 2 | 8, 2 | 4 | 8][role];
 }
 
 function compose(
@@ -141,76 +185,6 @@ function blitTile(tile: Uint8ClampedArray, dest: Uint8ClampedArray, dx: number, 
       dest[d + 3] = tile[s + 3];
     }
   }
-}
-
-/** The shape whose edges match its own middle: the piece that repeats cleanly. */
-function calmest(shapes: Uint8ClampedArray[], tile: number): number {
-  let best = 0;
-  let score = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < shapes.length; i++) {
-    const mid = average(shapes[i], tile, tile / 2 - 4, tile / 2 - 4, 8, 8);
-    let diff = 0;
-    diff += distance(average(shapes[i], tile, 0, 8, 3, tile - 16), mid);
-    diff += distance(average(shapes[i], tile, tile - 3, 8, 3, tile - 16), mid);
-    diff += distance(average(shapes[i], tile, 8, 0, tile - 16, 3), mid);
-    diff += distance(average(shapes[i], tile, 8, tile - 3, tile - 16, 3), mid);
-    if (diff < score) {
-      score = diff;
-      best = i;
-    }
-  }
-  return best;
-}
-
-function pickShape(shapes: Uint8ClampedArray[], center: number, mask: number, tile: number): number {
-  const base = sides(shapes[center], tile);
-  let best = center;
-  let score = Number.POSITIVE_INFINITY;
-  const bits = [1, 2, 4, 8];
-  for (let i = 0; i < shapes.length; i++) {
-    const mine = sides(shapes[i], tile);
-    let total = 0;
-    for (let s = 0; s < 4; s++) {
-      const diff = distance(mine[s], base[s]);
-      total += mask & bits[s] ? Math.max(0, 48 - diff) : diff;
-    }
-    if (total < score) {
-      score = total;
-      best = i;
-    }
-  }
-  return best;
-}
-
-function sides(px: Uint8ClampedArray, tile: number): [number, number, number][] {
-  return [
-    average(px, tile, 8, 0, tile - 16, 3),
-    average(px, tile, tile - 3, 8, 3, tile - 16),
-    average(px, tile, 8, tile - 3, tile - 16, 3),
-    average(px, tile, 0, 8, 3, tile - 16),
-  ];
-}
-
-function average(px: Uint8ClampedArray, tile: number, x: number, y: number, w: number, h: number): [number, number, number] {
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  let n = 0;
-  for (let yy = y; yy < y + h; yy++) {
-    for (let xx = x; xx < x + w; xx++) {
-      const i = (yy * tile + xx) * 4;
-      if (px[i + 3] < 16) continue;
-      r += px[i];
-      g += px[i + 1];
-      b += px[i + 2];
-      n++;
-    }
-  }
-  return n ? [r / n, g / n, b / n] : [0, 0, 0];
-}
-
-function distance(a: [number, number, number], b: [number, number, number]): number {
-  return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
 }
 
 function blockHasInk(src: Uint8ClampedArray, width: number, x: number, y: number, tile: number): boolean {

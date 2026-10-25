@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 12;
+export const DETECT_VERSION = 13;
 
 /** A ground cell is drawn corner to corner; a prop leaves background showing. */
 const TERRAIN_FILL = 0.92;
@@ -252,6 +252,116 @@ export function mergeAssets(assets: AssetRect[], indices: number[]): AssetRect[]
 export function deleteAssets(assets: AssetRect[], indices: number[]): AssetRect[] {
   const drop = new Set(indices);
   return assets.filter((_, i) => !drop.has(i));
+}
+
+/** A hand correction to a sheet's assets. */
+export type AssetEdit = 'merge' | 'delete' | 'toGround' | 'toObjects';
+
+/** A sheet's assets, which of them are ground, and its ground patches. */
+export interface SheetAssets {
+  assets: AssetRect[];
+  ground: number[];
+  patches: AssetRect[];
+}
+
+const rectKey = (r: AssetRect) => `${r.x},${r.y},${r.w},${r.h}`;
+const contains = (outer: AssetRect, inner: AssetRect) =>
+  inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h;
+
+/** The grid squares an asset covers, as sheet rectangles. */
+function squaresUnder(tileset: Tileset, rect: AssetRect): AssetRect[] {
+  const stepX = tileset.tileW + tileset.spacing;
+  const stepY = tileset.tileH + tileset.spacing;
+  const c0 = Math.max(0, Math.floor((rect.x - tileset.margin) / stepX));
+  const r0 = Math.max(0, Math.floor((rect.y - tileset.margin) / stepY));
+  const c1 = Math.floor((rect.x + rect.w - 1 - tileset.margin) / stepX);
+  const r1 = Math.floor((rect.y + rect.h - 1 - tileset.margin) / stepY);
+  const squares: AssetRect[] = [];
+  for (let row = r0; row <= r1; row++) {
+    for (let col = c0; col <= c1; col++) {
+      squares.push({
+        x: tileset.margin + col * stepX,
+        y: tileset.margin + row * stepY,
+        w: tileset.tileW,
+        h: tileset.tileH,
+      });
+    }
+  }
+  return squares;
+}
+
+/**
+ * Applies a hand correction, keeping track of which assets are ground.
+ *
+ * Merge and Delete keep every remaining ground square marked. "To ground"
+ * turns assets into paintable squares: a one-square asset is simply marked,
+ * a bigger one is split into its grid squares, kept together as a patch so
+ * it paints as one continuous texture. "To objects" undoes that: a square,
+ * or the whole patch it belongs to, becomes a single object again.
+ */
+export function editSheetAssets(tileset: Tileset, op: AssetEdit, indices: number[]): SheetAssets {
+  const assets = tileset.assets ?? [];
+  const groundKeys = new Set((tileset.groundAssets ?? []).flatMap((i) => (assets[i] ? [rectKey(assets[i])] : [])));
+  let patches = [...(tileset.groundBlocks ?? [])];
+  let next = assets;
+  const picked = [...new Set(indices)].filter((i) => assets[i]);
+
+  if (op === 'merge') {
+    next = mergeAssets(assets, picked);
+  } else if (op === 'delete') {
+    next = deleteAssets(assets, picked);
+  } else if (op === 'toGround') {
+    const drop = new Set<number>();
+    const added: AssetRect[] = [];
+    for (const i of picked) {
+      const rect = assets[i];
+      const squares = squaresUnder(tileset, rect);
+      if (squares.length === 1 && rectKey(squares[0]) === rectKey(rect)) {
+        groundKeys.add(rectKey(rect));
+        continue;
+      }
+      drop.add(i);
+      for (const square of squares) {
+        groundKeys.add(rectKey(square));
+        if (!assets.some((a) => rectKey(a) === rectKey(square))) added.push(square);
+      }
+      if (squares.length > 1) {
+        patches = patches.filter((p) => !squares.some((s) => contains(p, s)));
+        const x0 = squares[0].x;
+        const y0 = squares[0].y;
+        const last = squares[squares.length - 1];
+        patches.push({ x: x0, y: y0, w: last.x + last.w - x0, h: last.y + last.h - y0 });
+      }
+    }
+    next = [...assets.filter((_, i) => !drop.has(i)), ...added];
+  } else {
+    const drop = new Set<number>();
+    const added: AssetRect[] = [];
+    for (const i of picked) {
+      const rect = assets[i];
+      const patch = patches.find((p) => contains(p, rect));
+      if (!patch) {
+        groundKeys.delete(rectKey(rect));
+        continue;
+      }
+      // The whole patch goes back as the one object it was drawn as.
+      patches = patches.filter((p) => p !== patch);
+      assets.forEach((a, j) => {
+        if (contains(patch, a) && groundKeys.has(rectKey(a))) {
+          drop.add(j);
+          groundKeys.delete(rectKey(a));
+        }
+      });
+      added.push({ ...patch });
+    }
+    next = [...assets.filter((_, i) => !drop.has(i)), ...added];
+  }
+
+  return {
+    assets: next,
+    ground: next.flatMap((rect, i) => (groundKeys.has(rectKey(rect)) ? [i] : [])),
+    patches,
+  };
 }
 /**
  * The detection itself, on a plain alpha channel so it can be reasoned about
@@ -698,6 +808,8 @@ export interface SheetSplit {
   assets: AssetRect[];
   /** Places in `assets` that are a square of ground, ready for the brush. */
   ground: number[];
+  /** Ground squares drawn to sit together, painted as one continuous texture. */
+  patches?: AssetRect[];
 }
 
 export function splitSheet(
@@ -744,7 +856,11 @@ export function splitSheet(
 
   const assets = readingOrder([...props, ...squares]);
   const isGround = new Set(squares);
-  return { assets, ground: assets.flatMap((rect, i) => (isGround.has(rect) ? [i] : [])) };
+  return {
+    assets,
+    ground: assets.flatMap((rect, i) => (isGround.has(rect) ? [i] : [])),
+    patches: groundPatches(rgba, w, h, grid, terrain),
+  };
 }
 
 /**
@@ -1140,6 +1256,85 @@ export function terrainCells(
   return cells;
 }
 
+/** Ground squares side by side this close in average colour are one patch. */
+const PATCH_MATCH = 12;
+/** Largest patch kept, in squares a side; bigger panels are cut into these. */
+const PATCH_MAX = 6;
+
+/**
+ * Rectangles of ground squares the pack drew to sit together, such as a 3 by
+ * 3 patch of grass. Painting one of its squares then uses the neighbouring
+ * square of the patch beside it, so the texture continues instead of
+ * repeating one square and showing its edges. Single squares are left out:
+ * they have no neighbours to continue into.
+ */
+export function groundPatches(
+  rgba: Uint8ClampedArray,
+  w: number,
+  h: number,
+  grid: SheetGrid,
+  terrain: Uint8Array,
+): AssetRect[] {
+  const mean = new Map<number, [number, number, number]>();
+  forEachCell(grid, w, h, (index, x0, y0, cw, ch) => {
+    if (!terrain[index]) return;
+    const look = cellLook(rgba, w, x0, y0, cw, ch);
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    const blocks = look.length / 3;
+    for (let i = 0; i < blocks; i++) {
+      r += look[i * 3];
+      g += look[i * 3 + 1];
+      b += look[i * 3 + 2];
+    }
+    mean.set(index, [r / blocks, g / blocks, b / blocks]);
+  });
+  const alike = (a: number, b: number) => {
+    const ca = mean.get(a);
+    const cb = mean.get(b);
+    if (!ca || !cb) return false;
+    return (Math.abs(ca[0] - cb[0]) + Math.abs(ca[1] - cb[1]) + Math.abs(ca[2] - cb[2])) / 3 < PATCH_MATCH;
+  };
+
+  // Greedy rectangles in reading order: run right from the first free
+  // square while the squares match, then grow down while a whole row does.
+  const used = new Uint8Array(grid.cols * grid.rows);
+  const patches: AssetRect[] = [];
+  for (let row = 0; row < grid.rows; row++) {
+    for (let col = 0; col < grid.cols; col++) {
+      const start = row * grid.cols + col;
+      if (used[start] || !mean.has(start)) continue;
+      let width = 1;
+      while (
+        width < PATCH_MAX &&
+        col + width < grid.cols &&
+        !used[start + width] &&
+        alike(start + width - 1, start + width)
+      ) {
+        width += 1;
+      }
+      let height = 1;
+      grow: while (height < PATCH_MAX && row + height < grid.rows) {
+        for (let dx = 0; dx < width; dx++) {
+          const below = start + height * grid.cols + dx;
+          if (used[below] || !alike(below - grid.cols, below)) break grow;
+        }
+        height += 1;
+      }
+      const members: number[] = [];
+      for (let dy = 0; dy < height; dy++) {
+        for (let dx = 0; dx < width; dx++) {
+          used[start + dy * grid.cols + dx] = 1;
+          members.push(start + dy * grid.cols + dx);
+        }
+      }
+      if (members.length > 1) patches.push(cellsBox(members, grid));
+    }
+  }
+  return patches;
+}
+
 /** How much a square varies within itself: near zero for a flat texture. */
 function lookStructure(look: Float64Array): number {
   const blocks = look.length / 3;
@@ -1230,6 +1425,38 @@ function gridCells(tileset: Tileset): AssetRect[] {
 export function assetsOf(tileset: Tileset): AssetRect[] {
   if (tileset.generated) return gridCells(tileset);
   return tileset.assets ?? [];
+}
+
+/** Grid cell of a sheet pixel position. */
+function cellAt(tileset: Tileset, px: number, py: number): { col: number; row: number } {
+  return {
+    col: Math.floor((px - tileset.margin) / (tileset.tileW + tileset.spacing)),
+    row: Math.floor((py - tileset.margin) / (tileset.tileH + tileset.spacing)),
+  };
+}
+
+/**
+ * The square to paint at a map position when the brush is a square of a
+ * ground patch: the patch square that falls there, counting from the map's
+ * top-left corner. Neighbouring squares then come out as the pack drew them
+ * side by side, and separate strokes still meet. Anything else is unchanged.
+ */
+export function patchTileAt(tileset: Tileset, tileIndex: number, x: number, y: number): number {
+  const patches = tileset.groundBlocks;
+  if (!patches || patches.length === 0 || tileset.pathStride || tileset.cols <= 0) return tileIndex;
+  const col = tileIndex % tileset.cols;
+  const row = Math.floor(tileIndex / tileset.cols);
+  for (const patch of patches) {
+    const a = cellAt(tileset, patch.x, patch.y);
+    const b = cellAt(tileset, patch.x + patch.w - 1, patch.y + patch.h - 1);
+    if (col < a.col || col > b.col || row < a.row || row > b.row) continue;
+    const w = b.col - a.col + 1;
+    const h = b.row - a.row + 1;
+    const pc = a.col + (((x % w) + w) % w);
+    const pr = a.row + (((y % h) + h) % h);
+    return pr * tileset.cols + pc;
+  }
+  return tileIndex;
 }
 
 /** Whether a painted square of this sheet is ground: a path, floor or grass. */

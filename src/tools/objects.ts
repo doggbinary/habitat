@@ -117,8 +117,43 @@ export class ObjectTools {
     this.renderer.requestDraw();
   }
 
+  /** Whether an asset is part of the current selection. */
+  isSelected(obj: MapObject): boolean {
+    return this.store.selectedGroup.some((sel) => sel.objectId === obj.id) || this.store.selectedObject?.objectId === obj.id;
+  }
+
+  /**
+   * Adds an asset (with its group) to the selection, or takes it out if it
+   * is already in, so several can be recoloured or moved together.
+   */
+  toggleInSelection(layer: ObjectLayer, obj: MapObject): void {
+    const members = obj.groupId ? this.withGroup(obj.groupId) : [{ layer, obj }];
+    const ids = new Set(members.map((member) => member.obj.id));
+    let group = this.store.selectedGroup.length
+      ? [...this.store.selectedGroup]
+      : this.store.selectedObject
+        ? [this.store.selectedObject]
+        : [];
+    if (this.isSelected(obj)) {
+      group = group.filter((sel) => !ids.has(sel.objectId));
+    } else {
+      group.push(...members.map((member) => ({ layerId: member.layer.id, objectId: member.obj.id })));
+    }
+    if (group.length === 0) {
+      this.deselect();
+      return;
+    }
+    this.store.selectedGroup = group;
+    if (!this.store.selectedObject || !group.some((sel) => sel.objectId === this.store.selectedObject?.objectId)) {
+      this.store.selectedObject = group[0];
+    }
+    this.store.emit('ui');
+    this.renderer.requestDraw();
+  }
+
   deselect(): void {
     if (!this.store.selectedObject && this.store.selectedGroup.length === 0) return;
+    this.store.addingToSelection = false;
     this.store.selectedObject = null;
     this.store.selectedGroup = [];
     this.store.alignLines = null;
@@ -360,6 +395,14 @@ export class ObjectTools {
     obj.y = at.y;
     this.renderer.requestDraw();
     this.store.emit('ui');
+  }
+
+  /** Every unlocked asset in the selection, or just the selected one. */
+  recolorable(): MapObject[] {
+    const many = this.selectedMany().map((member) => member.obj);
+    const found = this.selected();
+    const all = many.length > 0 ? many : found ? [found.obj] : [];
+    return all.filter((obj) => !obj.locked);
   }
 
   setColor(obj: MapObject, color: { hueShift: number; saturation: number; brightness: number }): void {

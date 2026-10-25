@@ -15,8 +15,17 @@ import {
   type Tileset,
 } from './core/doc';
 import { sameAsset, type AssetRef } from './ui/packs';
-import { DETECT_VERSION, assetIsGround, assetsOf, deleteAssets, detectSheetSplit, mergeAssets, tileIndexOf } from './core/assets';
+import {
+  DETECT_VERSION,
+  assetIsGround,
+  assetsOf,
+  detectSheetSplit,
+  editSheetAssets,
+  tileIndexOf,
+  type AssetEdit,
+} from './core/assets';
 import { PATH_STRIDE, expandPathSheet, isRawPathSheet } from './core/autotile';
+import { repieceAllPaths, restridePaths } from './core/path-tiles';
 import { applyTilesetMerge, pathMergePlan } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
 import { dominantColor, recolorToCanvas } from './io/recolor';
@@ -66,6 +75,9 @@ function needsDetection(sheet: Tileset): boolean {
 
 /** Finds a sheet's assets and stamps them with the detector that found them. */
 function detectInto(sheet: Tileset): void {
+  // An expanded path page is already its pieces; splitting it again would
+  // treat them as a raw page.
+  if (sheet.pathStride && sheet.image instanceof HTMLCanvasElement) return;
   if (sheet.image && isRawPathSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) {
     expandPaths(sheet);
     return;
@@ -73,6 +85,7 @@ function detectInto(sheet: Tileset): void {
   const split = detectSheetSplit(sheet);
   sheet.assets = split.assets;
   sheet.groundAssets = split.ground;
+  sheet.groundBlocks = split.patches;
   sheet.assetsVersion = DETECT_VERSION;
   sheet.splitMode = 'objects';
 }
@@ -418,12 +431,22 @@ export class App {
     // there was a separate ground view, or by an older detector. Placed
     // assets keep the rectangle they were placed with, so the map is unchanged.
     collapseDuplicatePaths(doc);
-    for (const sheet of doc.tilesets) {
+    let restrided = false;
+    doc.tilesets.forEach((sheet, index) => {
       // Path pages are expanded every load: the saved file keeps the original
       // ground picture, and the pieces are built from it. Object pages that
       // need a newer detector are redone after the first paint, not here.
-      if (sheet.image && isRawPathSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) expandPaths(sheet);
-    }
+      if (!sheet.image || !isRawPathSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) return;
+      const oldStride = sheet.pathStride;
+      expandPaths(sheet);
+      // Maps painted with an older set of pieces keep each square's ground
+      // type and get the piece that meets its neighbours.
+      if (oldStride && oldStride !== PATH_STRIDE) {
+        restridePaths(doc, index, oldStride, PATH_STRIDE);
+        restrided = true;
+      }
+    });
+    if (restrided) repieceAllPaths(doc);
     // Maps made with 16 px squares shrank every library tile to a third,
     // which is what warped the pixels. They move onto the art's own size.
     const upgraded = upgradeTileSize(doc);
@@ -626,22 +649,28 @@ export class App {
    * Applies a hand correction to a sheet's assets. The sheet is then marked
    * as edited, so a future detector never redoes it over the user's changes.
    */
-  private editAssets(sheetIndex: number, op: 'merge' | 'delete', indices: number[]): void {
+  private editAssets(sheetIndex: number, op: AssetEdit, indices: number[]): void {
     const sheet = this.store.doc.tilesets[sheetIndex];
-    const current = sheet?.assets;
-    if (!sheet || !current || indices.length === 0) return;
+    if (!sheet?.assets || indices.length === 0) return;
 
-    const next = op === 'merge' ? mergeAssets(current, indices) : deleteAssets(current, indices);
-    if (next === current) return;
-    const label = op === 'merge' ? 'Merge assets' : 'Delete assets';
+    const next = editSheetAssets(sheet, op, indices);
+    if (op === 'merge' && next.assets === sheet.assets) return;
+    const label = {
+      merge: 'Merge assets',
+      delete: 'Delete assets',
+      toGround: 'Move to paths',
+      toObjects: 'Move back to objects',
+    }[op];
     this.editor.structural(label, () => {
-      sheet.assets = next;
+      sheet.assets = next.assets;
+      sheet.groundAssets = next.ground;
+      sheet.groundBlocks = next.patches;
       sheet.assetsEdited = true;
-      // The places recorded as ground no longer line up with the new list.
-      sheet.groundAssets = undefined;
     });
     this.store.libraryPick = null;
-    this.store.toast(`${label}: ${next.length} left`);
+    if (op === 'toGround') this.store.toast('Moved to the Ground page. Pick it there and paint it like a path.');
+    else if (op === 'toObjects') this.store.toast('Back on its sheet as an object');
+    else this.store.toast(`${label}: ${next.assets.length} left`);
   }
 
   /** Puts stickers on the Pinned page, or takes them off it. */
@@ -820,18 +849,36 @@ export class App {
    * so every shade shifts together rather than flattening to one colour.
    */
   private recolorObject(anchor: HTMLElement): void {
-    const found = this.objects.selected();
-    if (!found) return;
-    const { obj } = found;
-    const sheet = this.store.doc.tilesets.find((t) => t.id === obj.tilesetId);
-    if (!sheet?.image) return;
+    const objs = this.objects.recolorable();
+    if (objs.length === 0) return;
+    const doc = this.store.doc;
 
-    const base = dominantColor(cropAsset(sheet.image, obj.rect));
-    const startColor = hsvToHex({
-      h: (((base.h + obj.hueShift) % 360) + 360) % 360,
-      s: Math.min(1, base.s * obj.saturation),
-      v: Math.min(1, base.v * obj.brightness),
+    // One strip of every asset's art, so the wheel starts on the colour of
+    // the selection as a whole and every asset shifts by the same amount.
+    const crops = objs.flatMap((obj) => {
+      const sheet = doc.tilesets.find((t) => t.id === obj.tilesetId);
+      return sheet?.image ? [cropAsset(sheet.image, obj.rect)] : [];
     });
+    if (crops.length === 0) return;
+    const strip = document.createElement('canvas');
+    strip.width = crops.reduce((sum, c) => sum + c.width, 0);
+    strip.height = Math.max(...crops.map((c) => c.height));
+    const ctx = strip.getContext('2d');
+    let offset = 0;
+    for (const crop of crops) {
+      ctx?.drawImage(crop, offset, 0);
+      offset += crop.width;
+    }
+    const base = dominantColor(strip);
+    const first = objs[0];
+    const startColor =
+      objs.length === 1
+        ? hsvToHex({
+            h: (((base.h + first.hueShift) % 360) + 360) % 360,
+            s: Math.min(1, base.s * first.saturation),
+            v: Math.min(1, base.v * first.brightness),
+          })
+        : hsvToHex(base);
 
     this.objects.beginGesture();
     openColorPopover({
@@ -839,13 +886,14 @@ export class App {
       initial: startColor,
       onChange: (hex) => {
         const target = hexToHsv(hex);
-        this.objects.setColor(obj, {
+        const color = {
           hueShift: target.h - base.h,
           saturation: base.s > 0.02 ? target.s / base.s : 1,
           brightness: base.v > 0.02 ? target.v / base.v : 1,
-        });
+        };
+        for (const obj of objs) this.objects.setColor(obj, color);
       },
-      onClose: () => this.objects.endGesture('Recolour'),
+      onClose: () => this.objects.endGesture(objs.length > 1 ? `Recolour ${objs.length}` : 'Recolour'),
     });
   }
 

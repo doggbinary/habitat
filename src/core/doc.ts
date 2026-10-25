@@ -45,6 +45,11 @@ export interface Tileset {
    */
   groundAssets?: number[];
   /**
+   * Rectangles of ground squares drawn to sit together, in sheet pixels.
+   * Painting any of their squares continues the whole patch.
+   */
+  groundBlocks?: AssetRect[];
+  /**
    * Set on expanded path sheets. Tile index `row * pathStride + role` is one
    * shape of that ground, so painting can swap in the piece that meets its
    * neighbours.

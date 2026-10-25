@@ -363,7 +363,13 @@ export class Shell {
             ? this.selectionChip('layers', 'Ungroup', () => this.objects.ungroupSelected(), '', 'Ungroup')
             : null;
 
+      const adding = this.store.addingToSelection;
       this.optionsBar.append(
+        ...(picked > 1 ? [el('span', { class: 'chip-label', text: `${picked} selected` })] : []),
+        this.chipToggle('plus', adding ? 'Tap assets to add' : 'Select more', adding, () => {
+          this.store.addingToSelection = !this.store.addingToSelection;
+          this.refreshChrome();
+        }),
         this.chipToggle(locked ? 'lock' : 'unlock', locked ? 'Unlock' : 'Lock', locked, () => this.objects.toggleLock()),
         ...(grouping ? [grouping] : []),
         guard(this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger', 'Delete')),
