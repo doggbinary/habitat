@@ -201,22 +201,15 @@ describe('telling ground from props', () => {
     return rgba;
   };
 
-  it('splits a connected road into one square each, so the pieces can be placed apart', () => {
+  it('keeps a solid building as one asset instead of cutting it into squares', () => {
     const rgba = painted([[0, 0, 90], [1, 0, 90], [0, 1, 90], [1, 1, 90]]);
-    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([
-      { x: 0, y: 0, w: 10, h: 10 },
-      { x: 10, y: 0, w: 10, h: 10 },
-      { x: 0, y: 10, w: 10, h: 10 },
-      { x: 10, y: 10, w: 10, h: 10 },
-    ]);
+    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([{ x: 0, y: 0, w: 20, h: 20 }]);
   });
 
-  it('keeps touching squares of different ground as their own tiles', () => {
-    const rgba = painted([[0, 0, 60], [1, 0, 60], [2, 0, 200], [3, 0, 200]]);
+  it('keeps two drawings apart when the background shows between them', () => {
+    const rgba = painted([[0, 0, 60], [3, 0, 200]]);
     expect(assetsInImage(rgba, W, H, grid, false)).toEqual([
       { x: 0, y: 0, w: 10, h: 10 },
-      { x: 10, y: 0, w: 10, h: 10 },
-      { x: 20, y: 0, w: 10, h: 10 },
       { x: 30, y: 0, w: 10, h: 10 },
     ]);
   });

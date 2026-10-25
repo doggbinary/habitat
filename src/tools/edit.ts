@@ -2,6 +2,7 @@ import {
   activeLayerOf,
   cellIndex,
   createLayer,
+  createObjectLayer,
   inBounds,
   isEditable,
   isTileLayer,
@@ -492,6 +493,18 @@ export class Editor {
   }
 
   // --- Structural operations ----------------------------------------------
+
+  addObjectLayer(): void {
+    this.transact('Add object layer', () => {
+      const doc = this.doc;
+      const count = doc.layers.filter((layer) => layer.kind === 'objects').length;
+      const layer = createObjectLayer(count === 0 ? 'Objects' : `Objects ${count + 1}`);
+      doc.layers.splice(doc.activeLayer + 1, 0, layer);
+      doc.activeLayer = Math.min(doc.activeLayer + 1, doc.layers.length - 1);
+    });
+    this.renderer.invalidateAll();
+    this.store.restructured();
+  }
 
   addLayer(name?: string): void {
     this.transact('Add layer', () => {

@@ -120,6 +120,12 @@ export class LayersPanel {
     const layer = doc.layers[index];
 
     this.footer.append(
+      button('btn full', 'Add an object layer for props', () => this.editor.addObjectLayer(), [
+        icon('plus', 16),
+        el('span', { text: 'Object layer' }),
+      ]),
+    );
+    this.footer.append(
       el('div', { class: 'layer-actions' }, [
         button('icon-btn', 'Add tile layer', () => this.editor.addLayer(), [icon('plus', 18)]),
         button('icon-btn', 'Add reference image', () => this.actions.addImageLayer(), [icon('image', 18)]),

@@ -196,6 +196,16 @@ describe('structural edits', () => {
     expect((store.doc.layers[1] as ObjectLayer).objects.map((o) => o.id)).toEqual(['keep']);
   });
 
+  it('adds another object layer above the one that is open', () => {
+    store.doc.layers.push(createObjectLayer('Objects'));
+    store.doc.activeLayer = 1;
+    editor.addObjectLayer();
+    expect(store.doc.layers).toHaveLength(3);
+    expect(store.doc.layers[2].kind).toBe('objects');
+    expect(store.doc.layers[2].name).toBe('Objects 2');
+    expect(store.doc.activeLayer).toBe(2);
+  });
+
   it('duplicating an object layer makes independent copies with new ids', () => {
     const objects = createObjectLayer();
     objects.objects = [fakeObject({ id: 'one' })];

@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 7;
+export const DETECT_VERSION = 8;
 
 /** A cell this solid reads as floor: ground texture runs edge to edge. */
 const FLOOR_FILL = 0.97;
@@ -547,21 +547,22 @@ export function detectSheetAssets(tileset: Tileset): AssetRect[] {
 }
 
 /**
- * Every asset on a sheet: each prop whole, found with the floor left out so
- * a bench never fuses with the grass beside it, then each floor square on
- * its own. A run of road or grass is a path, and the squares have to come
- * apart so a corner can be placed by itself.
+ * Every asset on a sheet. A ground page is one square per cell. An object
+ * page is one sticker per connected drawing: a building stays whole, and a
+ * gap in the picture keeps the next building separate. Solid walls are not
+ * cut into floor squares.
  */
 export function assetsInImage(rgba: Uint8ClampedArray, w: number, h: number, grid: SheetGrid, groundSheet: boolean): AssetRect[] {
   const alpha = new Uint8Array(w * h);
   for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4 + 3];
-  const ground = findGround(alpha, w, h, grid, groundSheet);
-  const props = groundSheet ? [] : detectAssetsInMask(alpha, w, h, { tile: grid, ground: { ...ground, props: [] } });
-
+  if (!groundSheet) {
+    return readingOrder(withoutInnerPieces(detectAssetsInMask(alpha, w, h, { tile: grid })));
+  }
+  const ground = findGround(alpha, w, h, grid, true);
   const floor: AssetRect[] = [];
   const count = grid.cols * grid.rows;
   for (let i = 0; i < count; i++) if (ground.cells[i]) floor.push(cellsBox([i], grid));
-  return readingOrder([...withoutInnerPieces(props), ...floor]);
+  return readingOrder(floor);
 }
 
 /** Drops any asset lying entirely inside another: it is a piece of that one, not an asset. */
