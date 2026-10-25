@@ -40,6 +40,10 @@ export class PlayMode {
   private tool: 'walk' | 'size' | 'block' = 'walk';
   private editId: number | null = null;
   private sizing = false;
+  private dragging = false;
+  private grabDx = 0;
+  private grabDy = 0;
+  private dragStart = { x: 0, y: 0 };
   private scaleStart = 1;
   private scaleStartDistance = 1;
   private blockClearing = false;
@@ -118,7 +122,7 @@ export class PlayMode {
     zoomIn.addEventListener('click', () => this.nudgeZoom(1));
 
     const hint = element('div', 'play-hint');
-    hint.textContent = 'Drag to walk. Size changes an object. Block paints squares you cannot enter.';
+    hint.textContent = 'Drag to walk. In Size, drag an object to move it and its corner to resize. Block paints squares you cannot enter.';
 
     const tools = element('div', 'play-tools');
     for (const [id, label] of [
@@ -132,6 +136,7 @@ export class PlayMode {
       button.addEventListener('click', () => {
         this.tool = id;
         this.sizing = false;
+        this.dragging = false;
         if (id !== 'size') this.objects.deselect();
         for (const child of tools.children) child.classList.toggle('active', child === button);
       });
@@ -258,8 +263,18 @@ export class PlayMode {
       }
       const world = this.worldAt(local.x, local.y);
       const hit = this.objects.hitTest(world.x, world.y);
-      if (hit) this.objects.select(hit.layer, hit.obj);
-      else this.objects.deselect();
+      if (hit) {
+        this.objects.select(hit.layer, hit.obj);
+        if (!hit.obj.locked) {
+          this.dragging = true;
+          this.grabDx = world.x - hit.obj.x;
+          this.grabDy = world.y - hit.obj.y;
+          this.dragStart = { x: hit.obj.x, y: hit.obj.y };
+          this.objects.beginGesture();
+        }
+      } else {
+        this.objects.deselect();
+      }
       return;
     }
     this.blockLayer = ensureCollisionLayer(this.doc);
@@ -271,12 +286,16 @@ export class PlayMode {
   private onEditMove(e: PointerEvent): void {
     if (e.pointerId !== this.editId) return;
     const local = this.local(e);
-    if (this.tool === 'size' && this.sizing) {
+    if (this.tool === 'size' && (this.sizing || this.dragging)) {
       const found = this.objects.selected();
       if (!found) return;
       const world = this.worldAt(local.x, local.y);
-      const distance = Math.hypot(world.x - found.obj.x, world.y - found.obj.y);
-      this.objects.scaleTo(found.obj, this.scaleStart * (distance / this.scaleStartDistance));
+      if (this.sizing) {
+        const distance = Math.hypot(world.x - found.obj.x, world.y - found.obj.y);
+        this.objects.scaleTo(found.obj, this.scaleStart * (distance / this.scaleStartDistance));
+      } else {
+        this.objects.moveSelected(found.obj, world.x - this.grabDx, world.y - this.grabDy);
+      }
       return;
     }
     if (this.tool === 'block') this.paintBlock(local.x, local.y);
@@ -285,8 +304,14 @@ export class PlayMode {
   private onEditUp(e: PointerEvent): void {
     if (e.pointerId !== this.editId) return;
     if (this.sizing) this.objects.endGesture('Resize');
+    if (this.dragging) {
+      const found = this.objects.selected();
+      if (found && found.obj.x === this.dragStart.x && found.obj.y === this.dragStart.y) this.objects.cancelGesture();
+      else this.objects.endGesture('Move');
+    }
     this.commitBlock();
     this.sizing = false;
+    this.dragging = false;
     this.editId = null;
   }
 
