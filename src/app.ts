@@ -11,6 +11,7 @@ import {
 } from './core/doc';
 import { DETECT_VERSION, assetsOf, deleteAssets, detectSheetAssets, mergeAssets, tileIndexOf } from './core/assets';
 import { PATH_STRIDE, expandPathSheet, isRawPathSheet } from './core/autotile';
+import { applyTilesetMerge, pathMergePlan } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
 import { dominantColor, recolorToCanvas } from './io/recolor';
 import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
@@ -117,61 +118,15 @@ function thumbnail(image: CanvasImageSource, w: number, h: number): Uint8Array |
   return gray;
 }
 
-function samePicture(a: Uint8Array, b: Uint8Array): boolean {
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
-  return diff / a.length < 8;
-}
-
-/**
- * Packs repeat the same ground pages. Keep the first of each picture and
- * point anything already painted with a copy at that one.
- */
+/** Takes every repeated ground page out of a project, keeping one of each picture. */
 function collapseDuplicatePaths(doc: Doc): void {
-  const seen: { thumb: Uint8Array; index: number }[] = [];
-  const drop: number[] = [];
-  const keepOf = new Map<number, number>();
-  doc.tilesets.forEach((sheet, index) => {
-    if (!/^paths \d+$/i.test(sheet.name) || !sheet.image) return;
-    const thumb = thumbnail(sheet.image, sheet.imgW, sheet.imgH);
-    if (!thumb) return;
-    const kept = seen.find((item) => samePicture(item.thumb, thumb));
-    if (!kept) seen.push({ thumb, index });
-    else {
-      drop.push(index);
-      keepOf.set(index, kept.index);
-    }
-  });
-  drop.sort((a, b) => b - a);
-  for (const index of drop) {
-    const removed = doc.tilesets[index];
-    const keep = keepOf.get(index) ?? 0;
-    const keptSheet = doc.tilesets[keep];
-    doc.tilesets.splice(index, 1);
-    for (const layer of doc.layers) {
-      if (layer.kind === 'objects') {
-        for (const obj of layer.objects) if (obj.tilesetId === removed.id) obj.tilesetId = keptSheet.id;
-        continue;
-      }
-      if (layer.kind !== 'tiles') continue;
-      const data = layer.data;
-      for (let i = 0; i < data.length; i++) {
-        const tile = data[i];
-        if (tile === EMPTY) continue;
-        const owner = tilesetOf(tile);
-        if (owner === index) data[i] = pack(keep, indexOf(tile), flagsOf(tile));
-        else if (owner > index) data[i] = pack(owner - 1, indexOf(tile), flagsOf(tile));
-      }
-    }
-    for (const pin of doc.pins ?? []) if (pin.tilesetId === removed.id) pin.tilesetId = keptSheet.id;
-    for (const folder of doc.folders ?? []) {
-      for (const asset of folder.assets) if (asset.tilesetId === removed.id) asset.tilesetId = keptSheet.id;
-    }
-  }
-  let number = 1;
-  for (const sheet of doc.tilesets) {
-    if (/^paths \d+$/i.test(sheet.name)) sheet.name = `Paths ${number++}`;
-  }
+  const sheets = doc.tilesets.map((sheet) => ({
+    id: sheet.id,
+    name: sheet.name,
+    src: sheet.src,
+    thumb: sheet.image ? thumbnail(sheet.image, sheet.imgW, sheet.imgH) : null,
+  }));
+  applyTilesetMerge(doc, pathMergePlan(sheets));
 }
 
 export class App {
