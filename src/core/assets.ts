@@ -52,7 +52,7 @@ const PANEL_PIECE_SHARE = 0.25;
  * is treated as empty — but only when the sheet has no real transparency
  * and a large share of the picture is that flat void.
  */
-function punchFakeBackground(rgba: Uint8ClampedArray, alpha: Uint8Array, w: number, h: number): void {
+function punchFakeBackground(rgba: Uint8ClampedArray, alpha: Uint8Array): void {
   let clear = 0;
   let white = 0;
   for (let i = 0; i < alpha.length; i++) {
@@ -709,7 +709,7 @@ export function splitSheet(
 ): SheetSplit {
   const alpha = new Uint8Array(w * h);
   for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4 + 3];
-  punchFakeBackground(rgba, alpha, w, h);
+  punchFakeBackground(rgba, alpha);
   const count = grid.cols * grid.rows;
 
   if (groundSheet) {
