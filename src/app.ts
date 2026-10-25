@@ -84,6 +84,21 @@ function needsDetection(sheet: Tileset): boolean {
 }
 
 /** Finds a sheet's assets and stamps them with the detector that found them. */
+/**
+ * Puts a zoomed page back to its normal size. iPad browsers have no call for
+ * this, but they re-apply the viewport limits when the tag changes, which
+ * zooms the page back out to fit.
+ */
+function resetPageZoom(): void {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+  if (!meta) return;
+  const original = meta.content;
+  meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no';
+  requestAnimationFrame(() => {
+    meta.content = original;
+  });
+}
+
 function detectInto(sheet: Tileset): void {
   // A floor page already built is its squares; building it again would read
   // them as a raw page.
@@ -340,11 +355,23 @@ export class App {
     }
     window.addEventListener('resize', update);
     window.addEventListener('orientationchange', () => setTimeout(update, 150));
-    // iPad browsers ignore user-scalable=no. Without this, a pinch on a canvas
-    // that does not zoom itself zooms the whole page and strands the editor.
-    for (const name of ['gesturestart', 'gesturechange', 'gestureend']) {
-      document.addEventListener(name, (e) => e.preventDefault(), { passive: false });
-    }
+    // iPad browsers ignore user-scalable=no, so a pinch on a canvas that does
+    // not zoom itself would zoom the whole page and strand the editor. Zooming
+    // the page in is blocked; zooming back out is always allowed.
+    const zoomed = () => (window.visualViewport?.scale ?? 1) > 1.01;
+    document.addEventListener('gesturestart', (e) => {
+      if (!zoomed()) e.preventDefault();
+    }, { passive: false });
+    document.addEventListener('gesturechange', (e) => {
+      const scale = (e as Event & { scale?: number }).scale ?? 1;
+      if (!zoomed() || scale > 1) e.preventDefault();
+    }, { passive: false });
+    // The browser restores page zoom on reload, which is how the app ends up
+    // opening zoomed in. Snap back whenever the page is found zoomed.
+    window.visualViewport?.addEventListener('resize', () => {
+      if (zoomed()) resetPageZoom();
+    });
+    if (zoomed()) resetPageZoom();
   }
 
   async start(): Promise<void> {
