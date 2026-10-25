@@ -239,6 +239,11 @@ export class App {
   }
 
   async start(): Promise<void> {
+    // `?map=name` opens a map published with the site, so one link is enough
+    // to hand someone a finished map on a tablet.
+    const wanted = new URLSearchParams(location.search).get('map');
+    if (wanted && (await this.openPublishedMap(wanted))) return;
+
     const saved = await loadProject();
     if (saved && isProjectFile(saved)) {
       try {
@@ -268,6 +273,32 @@ export class App {
     // straight to the import step.
     if (this.store.doc.tilesets.length === 0) this.addTileset();
     else if (added > 0) this.shell.openTab('tiles');
+  }
+
+  /**
+   * Opens a map published alongside the site. The name is used as a file
+   * name, so anything with a slash or a dot in it is refused rather than
+   * being allowed to reach for another part of the server.
+   */
+  private async openPublishedMap(name: string): Promise<boolean> {
+    if (!/^[a-z0-9-]+$/i.test(name)) return false;
+    try {
+      const response = await fetch(new URL(`maps/${name}.pfproj`, document.baseURI));
+      if (!response.ok) return false;
+      const data = (await response.json()) as unknown;
+      if (!isProjectFile(data)) return false;
+      const doc = await deserializeProject(data);
+      this.studio.characters = deserializeCharacters(data);
+      this.studio.activeCharacter = 0;
+      this.studio.clearHistory();
+      this.adoptDoc(doc);
+      this.renderer.resize();
+      this.fit();
+      this.store.toast(`Opened ${doc.name}`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
