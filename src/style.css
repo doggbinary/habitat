@@ -492,12 +492,43 @@ textarea {
   gap: 6px;
 }
 
+/* Pinned and each folder sit across the top, ahead of the sheets. The row
+   scrolls sideways rather than wrapping, so the grid keeps its height. */
+.palette-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.palette-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.palette-tabs .chip {
+  flex: none;
+}
+
+/* Pack first, then the page within it: two short lists instead of one long one. */
+.palette-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* Page through tilesets. The arrows are full-height targets so they stay easy
    to hit without looking. */
 .palette-pager {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.palette-pager .select {
+  flex: 1;
+  min-width: 0;
 }
 
 .palette-pager .select {

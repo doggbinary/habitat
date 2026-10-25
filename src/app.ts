@@ -5,10 +5,12 @@ import {
   isImageLayer,
   loadImage,
   makeTileset,
+  uid,
   type AssetRect,
   type Doc,
   type Tileset,
 } from './core/doc';
+import { sameAsset, type AssetRef } from './ui/packs';
 import { DETECT_VERSION, assetsOf, deleteAssets, detectSheetAssets, mergeAssets, tileIndexOf } from './core/assets';
 import { PATH_STRIDE, expandPathSheet, isRawPathSheet } from './core/autotile';
 import { applyTilesetMerge, pathMergePlan } from './core/path-merge';
@@ -164,6 +166,9 @@ export class App {
       dragMove: (x, y) => this.dragMove(x, y),
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
       editAssets: (sheet, op, indices) => this.editAssets(sheet, op, indices),
+      setPinned: (refs, pinned) => this.setPinned(refs, pinned),
+      fileAssets: (folderId, name, refs) => this.fileAssets(folderId, name, refs),
+      removeFolder: (folderId) => this.removeFolder(folderId),
       recolorObject: (anchor) => this.recolorObject(anchor),
       recolorHeldTiles: (anchor) => this.recolorHeldTiles(anchor),
       addImageLayer: () => void this.addImageLayer(),
@@ -557,6 +562,43 @@ export class App {
     });
     this.store.libraryPick = null;
     this.store.toast(`${label}: ${next.length} left`);
+  }
+
+  /** Puts stickers on the Pinned page, or takes them off it. */
+  private setPinned(refs: AssetRef[], pinned: boolean): void {
+    if (refs.length === 0) return;
+    const doc = this.store.doc;
+    this.editor.structural(pinned ? 'Pin assets' : 'Unpin assets', () => {
+      doc.pins = pinned
+        ? [...doc.pins, ...refs.filter((ref) => !doc.pins.some((pin) => sameAsset(pin, ref)))]
+        : doc.pins.filter((pin) => !refs.some((ref) => sameAsset(pin, ref)));
+    });
+    this.store.toast(pinned ? `Pinned ${refs.length}` : `Unpinned ${refs.length}`);
+  }
+
+  /** Sets what a folder holds, making it first if it is a new one. */
+  private fileAssets(folderId: string | null, name: string, refs: AssetRef[]): void {
+    const doc = this.store.doc;
+    this.editor.structural(folderId ? 'Edit folder' : 'New folder', () => {
+      const folder = doc.folders.find((f) => f.id === folderId);
+      if (folder) {
+        folder.name = name;
+        folder.assets = refs;
+      } else {
+        doc.folders = [...doc.folders, { id: uid('folder'), name, assets: refs }];
+      }
+    });
+    this.store.toast(folderId ? `${name}: ${refs.length}` : `Filed ${refs.length} in ${name}`);
+  }
+
+  private removeFolder(folderId: string): void {
+    const doc = this.store.doc;
+    const folder = doc.folders.find((f) => f.id === folderId);
+    if (!folder) return;
+    this.editor.structural('Delete folder', () => {
+      doc.folders = doc.folders.filter((f) => f.id !== folderId);
+    });
+    this.store.toast(`Deleted ${folder.name}`);
   }
 
   /** The tools that paint the grid, as opposed to placing or selecting. */

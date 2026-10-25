@@ -22,6 +22,9 @@ export interface ShellActions {
   dragMove: PaletteActions['dragMove'];
   dragEnd: PaletteActions['dragEnd'];
   editAssets: PaletteActions['editAssets'];
+  setPinned: PaletteActions['setPinned'];
+  fileAssets: PaletteActions['fileAssets'];
+  removeFolder: PaletteActions['removeFolder'];
   recolorObject: (anchor: HTMLElement) => void;
   recolorHeldTiles: (anchor: HTMLElement) => void;
   addImageLayer: () => void;
@@ -104,6 +107,9 @@ export class Shell {
       dragMove: actions.dragMove,
       dragEnd: actions.dragEnd,
       editAssets: actions.editAssets,
+      setPinned: actions.setPinned,
+      fileAssets: actions.fileAssets,
+      removeFolder: actions.removeFolder,
     });
     this.layersPanel = new LayersPanel(store, editor, {
       addImageLayer: actions.addImageLayer,

@@ -2,7 +2,23 @@ import { assetsOf } from '../core/assets';
 import type { AssetRect, Tileset } from '../core/doc';
 import type { Store } from '../core/store';
 import { button, clear, el } from './dom';
-import { icon } from './icons';
+import { icon, type IconName } from './icons';
+import { packNames, packOf, sameAsset, type AssetRef } from './packs';
+
+/**
+ * Which page of the library is open. Pinned and folders gather stickers from
+ * any number of sheets; a sheet page is one imported picture.
+ */
+type View = { kind: 'sheet' } | { kind: 'pins' } | { kind: 'folder'; id: string };
+
+/** One thumbnail: the sticker, and the sheet it has to be drawn from. */
+interface Entry {
+  tileset: Tileset;
+  tilesetIndex: number;
+  rect: AssetRect;
+  /** Its place on its own sheet, which is what the edit actions work on. */
+  assetIndex: number;
+}
 
 /** Target thumbnail size; the column count adapts to the panel width. */
 const TARGET_CELL = 76;
@@ -27,6 +43,15 @@ export interface PaletteActions {
   dragEnd: (clientX: number, clientY: number, dropped: boolean) => void;
   /** Fixes detection by hand: join pieces of one asset, or drop strays. */
   editAssets: (tilesetIndex: number, op: 'merge' | 'delete', indices: number[]) => void;
+  /** Adds stickers to the Pinned page, or takes them off it. */
+  setPinned: (refs: AssetRef[], pinned: boolean) => void;
+  /**
+   * Sets what a folder holds, creating it when `folderId` is null. The list
+   * is the whole contents, so this adds and removes with one call.
+   */
+  fileAssets: (folderId: string | null, name: string, refs: AssetRef[]) => void;
+  /** Empties and removes a folder. The stickers themselves are untouched. */
+  removeFolder: (folderId: string) => void;
 }
 
 /**
@@ -49,7 +74,8 @@ export class PalettePanel {
 
   private cell = TARGET_CELL;
   private columns = 3;
-  private assets: AssetRect[] = [];
+  private entries: Entry[] = [];
+  private view: View = { kind: 'sheet' };
 
   private mode: 'idle' | 'pending' | 'scroll' | 'drag' = 'idle';
   private activeId: number | null = null;
@@ -112,7 +138,20 @@ export class PalettePanel {
     const row = Math.floor((clientY - rect.top) / this.cell);
     if (col < 0 || col >= this.columns || row < 0) return -1;
     const index = row * this.columns + col;
-    return index < this.assets.length ? index : -1;
+    return index < this.entries.length ? index : -1;
+  }
+
+  /** The sticker under a thumbnail, as it is remembered on a page or in a folder. */
+  private refAt(index: number): AssetRef | null {
+    const entry = this.entries[index];
+    return entry ? { tilesetId: entry.tileset.id, rect: entry.rect } : null;
+  }
+
+  private selectedRefs(): AssetRef[] {
+    return [...this.selected]
+      .sort((a, b) => a - b)
+      .map((i) => this.refAt(i))
+      .filter((ref): ref is AssetRef => ref !== null);
   }
 
   // --- Gestures ------------------------------------------------------------
@@ -144,14 +183,13 @@ export class PalettePanel {
   }
 
   private beginDrag(clientX: number, clientY: number): void {
-    const tileset = this.activeTileset();
-    const rect = this.assets[this.pressAsset];
-    if (!tileset || !rect) return;
+    const entry = this.entries[this.pressAsset];
+    if (!entry) return;
     this.clearLongPress();
     this.mode = 'drag';
-    this.showGhost(tileset, rect);
+    this.showGhost(entry.tileset, entry.rect);
     this.moveGhost(clientX, clientY);
-    this.actions.dragStart(tileset.id, rect);
+    this.actions.dragStart(entry.tileset.id, entry.rect);
     this.actions.dragMove(clientX, clientY);
   }
 
@@ -258,7 +296,8 @@ export class PalettePanel {
         this.buildHeader();
         this.draw();
       } else if (this.mode === 'pending' && !cancelled) {
-        this.actions.tapAsset(this.store.activeTileset, this.pressAsset);
+        const entry = this.entries[this.pressAsset];
+        if (entry) this.actions.tapAsset(entry.tilesetIndex, entry.assetIndex);
       } else if (this.mode === 'scroll') {
         this.startFling();
       } else if (this.mode === 'drag') {
@@ -323,9 +362,85 @@ export class PalettePanel {
     // Editing belongs to one sheet; never carry it onto the next.
     this.editing = false;
     this.selected.clear();
+    this.view = { kind: 'sheet' };
     this.store.activeTileset = ((index % count) + count) % count;
     this.layout();
     this.scroller.scrollTop = 0;
+  }
+
+  /** Opens Pinned, a folder, or back to the sheets. */
+  private showView(view: View): void {
+    this.editing = false;
+    this.selected.clear();
+    this.view = view;
+    this.layout();
+    this.scroller.scrollTop = 0;
+  }
+
+  private sameView(a: View, b: View): boolean {
+    if (a.kind !== b.kind) return false;
+    return a.kind !== 'folder' || b.kind !== 'folder' || a.id === b.id;
+  }
+
+  /**
+   * The pages across the top: Pinned first, then each folder, then the
+   * imported sheets. Everything you filed yourself is reachable without
+   * scrolling past two hundred sheets to find it.
+   */
+  private pageTabs(): HTMLElement {
+    const doc = this.store.doc;
+    const tab = (view: View, name: IconName, label: string, count: number) =>
+      button(`chip${this.sameView(this.view, view) ? ' active' : ''}`, label, () => this.showView(view), [
+        icon(name, 16),
+        el('span', { class: 'chip-text', text: count > 0 ? `${label} ${count}` : label }),
+      ]);
+
+    return el('div', { class: 'palette-tabs' }, [
+      tab({ kind: 'pins' }, 'star', 'Pinned', doc.pins.length),
+      ...doc.folders.map((folder) => tab({ kind: 'folder', id: folder.id }, 'layers', folder.name, folder.assets.length)),
+      tab({ kind: 'sheet' }, 'image', 'Sheets', 0),
+    ]);
+  }
+
+  /** Pack, then sheet: two short lists instead of one list of every page. */
+  private sheetPicker(): HTMLElement {
+    const doc = this.store.doc;
+    const current = this.store.activeTileset;
+    const currentPack = packOf(doc.tilesets[current]?.name ?? '');
+
+    const packs = el('select', { class: 'select' });
+    for (const name of packNames(doc.tilesets.map((t) => t.name))) {
+      const option = el('option', { value: name, text: name });
+      if (name === currentPack) option.selected = true;
+      packs.append(option);
+    }
+    packs.addEventListener('change', () => {
+      const first = doc.tilesets.findIndex((t) => packOf(t.name) === packs.value);
+      if (first >= 0) this.showPage(first);
+    });
+
+    const inPack = doc.tilesets
+      .map((t, i) => ({ name: t.name, index: i }))
+      .filter((t) => packOf(t.name) === currentPack);
+    const pages = el('select', { class: 'select' });
+    for (const page of inPack) {
+      const option = el('option', { value: String(page.index), text: page.name });
+      if (page.index === current) option.selected = true;
+      pages.append(option);
+    }
+    pages.addEventListener('change', () => this.showPage(Number(pages.value)));
+
+    const step = (by: number) => {
+      const at = inPack.findIndex((p) => p.index === current);
+      const next = inPack[at + by];
+      if (next) this.showPage(next.index);
+    };
+    const prev = button('icon-btn', 'Previous page', () => step(-1), [icon('chevronLeft', 20)]);
+    const next = button('icon-btn', 'Next page', () => step(1), [icon('chevronRight', 20)]);
+    prev.disabled = inPack[0]?.index === current;
+    next.disabled = inPack[inPack.length - 1]?.index === current;
+
+    return el('div', { class: 'palette-picker' }, [packs, el('div', { class: 'palette-pager' }, [prev, pages, next])]);
   }
 
   private buildHeader(): void {
@@ -334,44 +449,48 @@ export class PalettePanel {
     if (doc.tilesets.length === 0) return;
 
     const current = this.store.activeTileset;
-    const total = doc.tilesets.length;
-
-    const select = el('select', { class: 'select' });
-    doc.tilesets.forEach((t, i) => {
-      const option = el('option', { value: String(i), text: t.name });
-      if (i === current) option.selected = true;
-      select.append(option);
-    });
-    select.addEventListener('change', () => this.showPage(Number(select.value)));
-
-    const prev = button('icon-btn', 'Previous sheet', () => this.showPage(current - 1), [icon('chevronLeft', 20)]);
-    const next = button('icon-btn', 'Next sheet', () => this.showPage(current + 1), [icon('chevronRight', 20)]);
-    prev.disabled = total < 2;
-    next.disabled = total < 2;
+    const view = this.view;
+    const onSheet = view.kind === 'sheet';
+    const title =
+      view.kind === 'pins'
+        ? 'Pinned'
+        : view.kind === 'folder'
+          ? (doc.folders.find((f) => f.id === view.id)?.name ?? 'Folder')
+          : 'Assets';
 
     this.header.append(
-      el('div', { class: 'palette-pager' }, [prev, select, next]),
+      this.pageTabs(),
+      ...(onSheet ? [this.sheetPicker()] : []),
       el('div', { class: 'palette-meta' }, [
-        el('span', { class: 'palette-title', text: 'Assets' }),
-        el('span', {
-          class: 'muted',
-          text: `${this.assets.length}${total > 1 ? ` · sheet ${current + 1} of ${total}` : ''}`,
-        }),
+        el('span', { class: 'palette-title', text: title }),
+        el('span', { class: 'muted', text: `${this.entries.length}` }),
       ]),
-      el('div', { class: 'palette-row' }, [
-        button('icon-btn', 'Sheet settings', () => this.actions.editTileset(current), [icon('settings', 18)]),
-        button('icon-btn', 'Import another sheet', () => this.actions.addTileset(), [icon('plus', 18)]),
-        button('icon-btn danger', 'Remove sheet', () => this.actions.removeTileset(current), [icon('trash', 18)]),
-        el('div', { class: 'spacer' }),
-        button(`chip${this.editing ? ' active' : ''}`, 'Fix how this sheet is split into assets', () =>
-          this.setEditing(!this.editing),
-        [icon('select', 16), el('span', { text: this.editing ? 'Editing' : 'Edit' })]),
-      ]),
+      onSheet
+        ? el('div', { class: 'palette-row' }, [
+            button('icon-btn', 'Sheet settings', () => this.actions.editTileset(current), [icon('settings', 18)]),
+            button('icon-btn', 'Import another sheet', () => this.actions.addTileset(), [icon('plus', 18)]),
+            button('icon-btn danger', 'Remove sheet', () => this.actions.removeTileset(current), [icon('trash', 18)]),
+            el('div', { class: 'spacer' }),
+            button(`chip${this.editing ? ' active' : ''}`, 'Pin, file or fix the assets on this sheet', () =>
+              this.setEditing(!this.editing),
+            [icon('select', 16), el('span', { text: this.editing ? 'Editing' : 'Edit' })]),
+          ])
+        : el('div', { class: 'palette-row' }, [
+            el('div', { class: 'spacer' }),
+            button(`chip${this.editing ? ' active' : ''}`, 'Choose assets to take off this page', () =>
+              this.setEditing(!this.editing),
+            [icon('select', 16), el('span', { text: this.editing ? 'Editing' : 'Edit' })]),
+          ]),
       this.editing
         ? this.editBar(current)
         : el('p', {
             class: 'hint',
-            text: 'Tap an asset to add it, or press and hold, then drag it onto the map. Floor squares paint with the brush.',
+            text:
+              this.entries.length === 0
+                ? view.kind === 'pins'
+                  ? 'Nothing pinned yet. On a sheet, tap Edit, choose assets, then Pin.'
+                  : 'This folder is empty. On a sheet, tap Edit, choose assets, then File.'
+                : 'Tap an asset to add it, or press and hold, then drag it onto the map. Floor squares paint with the brush.',
           }),
     );
   }
@@ -389,50 +508,161 @@ export class PalettePanel {
    */
   private editBar(sheetIndex: number): HTMLElement {
     const picked = [...this.selected].sort((a, b) => a - b);
-    const run = (op: 'merge' | 'delete') => {
+    const refs = this.selectedRefs();
+    const done = () => {
       this.selected.clear();
-      this.actions.editAssets(sheetIndex, op, picked);
+      this.layout();
     };
 
-    const merge = button('chip', 'Join the selected pieces into one asset', () => run('merge'), [
-      el('span', { text: 'Merge' }),
-    ]);
-    merge.disabled = picked.length < 2;
-    const remove = button('chip danger', 'Remove the selected assets from this sheet', () => run('delete'), [
-      el('span', { text: 'Delete' }),
-    ]);
-    remove.disabled = picked.length === 0;
+    const chips: HTMLElement[] = [];
+    const view = this.view;
+
+    if (view.kind === 'sheet') {
+      const run = (op: 'merge' | 'delete') => {
+        this.selected.clear();
+        this.actions.editAssets(sheetIndex, op, picked);
+      };
+      const merge = button('chip', 'Join the selected pieces into one asset', () => run('merge'), [
+        el('span', { text: 'Merge' }),
+      ]);
+      merge.disabled = picked.length < 2;
+      const remove = button('chip danger', 'Remove the selected assets from this sheet', () => run('delete'), [
+        el('span', { text: 'Delete' }),
+      ]);
+      remove.disabled = picked.length === 0;
+
+      const pin = button('chip', 'Keep these on the Pinned page', () => {
+        this.actions.setPinned(refs, true);
+        done();
+      }, [icon('star', 16), el('span', { text: 'Pin' })]);
+      pin.disabled = refs.length === 0;
+
+      const file = button('chip', 'Put these in a folder', () => {
+        this.chooseFolder(refs);
+        done();
+      }, [icon('layers', 16), el('span', { text: 'File' })]);
+      file.disabled = refs.length === 0;
+
+      chips.push(pin, file, merge, remove);
+    } else {
+      const label = view.kind === 'pins' ? 'Unpin' : 'Take out';
+      const take = button('chip danger', `${label} the selected assets`, () => {
+        if (view.kind === 'pins') this.actions.setPinned(refs, false);
+        else if (view.kind === 'folder') this.unfile(view.id, refs);
+        done();
+      }, [el('span', { text: label })]);
+      take.disabled = refs.length === 0;
+      chips.push(take);
+
+      if (view.kind === 'folder') {
+        const id = view.id;
+        chips.push(
+          button('chip danger', 'Delete this folder; the assets stay on their sheets', () => {
+            this.actions.removeFolder(id);
+            this.showView({ kind: 'sheet' });
+          }, [icon('trash', 16), el('span', { text: 'Delete folder' })]),
+        );
+      }
+    }
 
     return el('div', { class: 'edit-bar' }, [
       el('p', {
         class: 'hint',
         text:
           picked.length === 0
-            ? 'Tap assets to select them. Merge pieces that belong together, or delete stray marks.'
+            ? view.kind === 'sheet'
+              ? 'Tap assets to select them. Pin them, file them in a folder, merge pieces that belong together, or delete stray marks.'
+              : 'Tap assets to select them, then take them off this page.'
             : `${picked.length} selected`,
       }),
-      el('div', { class: 'chip-row' }, [merge, remove]),
+      el('div', { class: 'chip-row' }, chips),
     ]);
+  }
+
+  /** Asks which folder the chosen stickers go in, offering a new one. */
+  private chooseFolder(refs: AssetRef[]): void {
+    const folders = this.store.doc.folders;
+    const names = folders.map((folder, i) => `${i + 1}. ${folder.name}`).join('\n');
+    const answer = window.prompt(
+      folders.length === 0
+        ? `Name a folder for ${refs.length} asset${refs.length === 1 ? '' : 's'}:`
+        : `Folder for ${refs.length} asset${refs.length === 1 ? '' : 's'} — type a number or a new name:\n${names}`,
+      folders.length === 0 ? 'Favourites' : '',
+    );
+    if (answer === null) return;
+    const name = answer.trim();
+    if (!name) return;
+    const chosen = folders[Number(name) - 1];
+    if (chosen) {
+      const added = refs.filter((ref) => !chosen.assets.some((asset) => sameAsset(asset, ref)));
+      this.actions.fileAssets(chosen.id, chosen.name, [...chosen.assets, ...added]);
+    } else {
+      this.actions.fileAssets(null, name, refs);
+    }
+  }
+
+  private unfile(folderId: string, refs: AssetRef[]): void {
+    const folder = this.store.doc.folders.find((f) => f.id === folderId);
+    if (!folder) return;
+    const keep = folder.assets.filter((asset) => !refs.some((ref) => sameAsset(asset, ref)));
+    this.actions.fileAssets(folderId, folder.name, keep);
   }
 
   // --- Rendering -----------------------------------------------------------
 
+  /**
+   * The thumbnails on the open page. A sheet page is that sheet's stickers;
+   * Pinned and folders gather stickers from wherever they came from, dropping
+   * any whose sheet has since gone.
+   */
+  private buildEntries(): Entry[] {
+    const doc = this.store.doc;
+    const view = this.view;
+    if (view.kind === 'sheet') {
+      const tileset = this.activeTileset();
+      if (!tileset) return [];
+      const index = this.store.activeTileset;
+      return assetsOf(tileset).map((rect, assetIndex) => ({ tileset, tilesetIndex: index, rect, assetIndex }));
+    }
+
+    const refs =
+      view.kind === 'pins' ? doc.pins : (doc.folders.find((folder) => folder.id === view.id)?.assets ?? []);
+
+    const entries: Entry[] = [];
+    for (const ref of refs) {
+      const tilesetIndex = doc.tilesets.findIndex((sheet) => sheet.id === ref.tilesetId);
+      const tileset = doc.tilesets[tilesetIndex];
+      if (!tileset) continue;
+      // A sticker whose sheet has since been re-split no longer exists as
+      // itself, so it drops off the page rather than placing the wrong thing.
+      const assetIndex = assetsOf(tileset).findIndex((rect) => sameAsset({ tilesetId: tileset.id, rect }, ref));
+      if (assetIndex === -1) continue;
+      entries.push({ tileset, tilesetIndex, rect: ref.rect, assetIndex });
+    }
+    return entries;
+  }
+
   layout(): void {
-    const tileset = this.activeTileset();
-    this.assets = tileset ? assetsOf(tileset) : [];
+    // A folder that has since been deleted falls back to the sheets, so the
+    // panel is never stuck on a page that no longer exists.
+    const view = this.view;
+    if (view.kind === 'folder' && !this.store.doc.folders.some((f) => f.id === view.id)) {
+      this.view = { kind: 'sheet' };
+    }
+    this.entries = this.buildEntries();
     // Indices are only meaningful against the list they were picked from.
-    for (const i of [...this.selected]) if (i >= this.assets.length) this.selected.delete(i);
-    const has = this.assets.length > 0;
+    for (const i of [...this.selected]) if (i >= this.entries.length) this.selected.delete(i);
+    const has = this.entries.length > 0;
     this.empty.style.display = this.store.doc.tilesets.length === 0 ? 'flex' : 'none';
     this.scroller.style.display = has ? 'block' : 'none';
     this.buildHeader();
-    if (!tileset || !has) return;
+    if (!has) return;
 
     const available = Math.max(160, this.scroller.clientWidth - 4);
     this.columns = Math.max(3, Math.floor(available / TARGET_CELL));
     this.cell = Math.floor(available / this.columns);
 
-    const rows = Math.ceil(this.assets.length / this.columns);
+    const rows = Math.ceil(this.entries.length / this.columns);
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const width = this.columns * this.cell;
     const height = rows * this.cell;
@@ -445,18 +675,17 @@ export class PalettePanel {
   }
 
   draw(): void {
-    const tileset = this.activeTileset();
-    if (!tileset?.image) return;
     const { ctx, cell } = this;
-    const rows = Math.ceil(this.assets.length / this.columns);
+    const rows = Math.ceil(this.entries.length / this.columns);
     ctx.clearRect(0, 0, this.columns * cell, rows * cell);
     ctx.imageSmoothingEnabled = false;
 
     const pick = this.store.libraryPick;
     const pad = 6;
 
-    for (let i = 0; i < this.assets.length; i++) {
-      const rect = this.assets[i];
+    for (let i = 0; i < this.entries.length; i++) {
+      const { tileset, rect, assetIndex } = this.entries[i];
+      if (!tileset.image) continue;
       const col = i % this.columns;
       const row = Math.floor(i / this.columns);
       const x = col * cell;
@@ -465,7 +694,7 @@ export class PalettePanel {
       // Editing shows its own selection in amber, so it is never confused
       // with the brush's blue "this is what you will place" highlight.
       const chosen = this.editing && this.selected.has(i);
-      const picked = !this.editing && pick?.tilesetId === tileset.id && pick.index === i;
+      const picked = !this.editing && pick?.tilesetId === tileset.id && pick.index === assetIndex;
       ctx.fillStyle = chosen
         ? 'rgba(255,214,102,0.2)'
         : picked
