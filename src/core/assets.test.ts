@@ -7,6 +7,7 @@ import {
   findGround,
   isGroundSheetName,
   sheetIsAllTiles,
+  assetIsGround,
   mergeAssets,
   type SheetGrid,
   type TileGrid,
@@ -260,5 +261,54 @@ describe('telling ground from props', () => {
     expect(isGroundSheetName('Area 51')).toBe(false);
     expect(sheetIsAllTiles('Paths 1')).toBe(true);
     expect(sheetIsAllTiles('Nature Park 1')).toBe(false);
+  });
+
+  it('treats a unique floor tile next to repeating ground as ground too', () => {
+    // Four grass squares and a slightly darker one beside them, like a
+    // parking line or a crosswalk sitting in the same paving.
+    const cells: [number, number, number][] = [];
+    for (let c = 0; c < 4; c++) cells.push([c, 0, 120]);
+    cells.push([0, 1, 128]);
+    const { ground } = splitSheet(painted(cells), W, H, grid, false);
+    expect(ground.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('cuts two props that only kiss at a grid line, like benches in a row', () => {
+    const rgba = new Uint8ClampedArray(W * H * 4);
+    const fill = (x0: number, y0: number, bw: number, bh: number, shade: number) => {
+      for (let y = y0; y < y0 + bh; y++) {
+        for (let x = x0; x < x0 + bw; x++) rgba.set([shade, shade, shade, 255], (y * W + x) * 4);
+      }
+    };
+    fill(0, 0, 9, 10, 50);
+    fill(11, 0, 9, 10, 200);
+    // They only share two pixels on the grid line, the way packed benches do.
+    rgba.set([50, 50, 50, 255], (4 * W + 9) * 4);
+    rgba.set([200, 200, 200, 255], (4 * W + 10) * 4);
+    const assets = assetsInImage(rgba, W, H, grid, false);
+    expect(assets.length).toBeGreaterThanOrEqual(2);
+    expect(assets.some((a) => a.x < 10 && a.x + a.w <= 10)).toBe(true);
+    expect(assets.some((a) => a.x >= 10)).toBe(true);
+  });
+
+  it('keeps a two-cell stall whole when the picture continues across the join', () => {
+    // Horizontal stripes that match across the seam: an awning or a table.
+    const rgba = new Uint8ClampedArray(W * H * 4);
+    for (let y = 0; y < 10; y++) {
+      const shade = y < 5 ? 40 : 210;
+      for (let x = 0; x < 20; x++) rgba.set([shade, shade, shade, 255], (y * W + x) * 4);
+    }
+    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([{ x: 0, y: 0, w: 20, h: 10 }]);
+  });
+
+  it('knows which library stickers are floor squares', () => {
+    const sheet = {
+      name: 'modern city 5',
+      groundAssets: [3, 7],
+      pathStride: undefined,
+    } as import('./doc').Tileset;
+    expect(assetIsGround(sheet, 3)).toBe(true);
+    expect(assetIsGround(sheet, 0)).toBe(false);
+    expect(assetIsGround({ ...sheet, name: 'Paths 2' }, 0)).toBe(true);
   });
 });

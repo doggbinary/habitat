@@ -7,22 +7,32 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 9;
+export const DETECT_VERSION = 10;
 
 /** A ground cell is drawn corner to corner; a prop leaves background showing. */
-const TERRAIN_FILL = 0.995;
+const TERRAIN_FILL = 0.92;
 /** Cells this close in average colour are the same ground. */
-const TERRAIN_MATCH = 10;
+const TERRAIN_MATCH = 12;
 /** ...and ground has to turn up this many times to count as a texture. */
 const TERRAIN_REPEATS = 3;
 /** How plain a square has to be: a cupboard door is patterned, grass is not. */
 const TERRAIN_FLAT = 8;
+/**
+ * A unique floor tile (a crosswalk, a parking line) is almost all ground
+ * colour. A tree on a sidewalk is not, and must not be swallowed.
+ */
+/**
+ * A unique floor tile (a parking line, a crosswalk) is almost all ground
+ * colour and still fairly flat. A boat on water is not flat.
+ */
+const TERRAIN_COVER_BUSY = 0.8;
+const TERRAIN_COVER_FLAT = 12;
 /** Each cell is averaged down to this many blocks a side before comparing. */
 const LOOK_SIZE = 8;
 /** Colour jump across a grid line that means two drawings meet there. */
-const SEAM_CUT = 18;
-/** ...and the stronger jump a row boundary needs, so a facade is not sliced. */
-const SEAM_CUT_ROW = 48;
+const SEAM_CUT = 36;
+/** A shared edge thinner than this is two props that merely touch: always cut. */
+const SEAM_THIN = 0.18;
 /** ...judged only where this share of the line has both sides drawn. */
 const SEAM_TOUCH = 0.3;
 /** A colour has to cover this much of the ground to count as a ground colour. */
@@ -69,6 +79,12 @@ export function isGroundSheetName(name: string): boolean {
 /** Paths pages are a grid of road and ground squares, one asset per square. */
 export function sheetIsAllTiles(name: string): boolean {
   return isGroundSheetName(name) || /^paths \d+$/i.test(name);
+}
+
+/** Whether this library sticker is a floor square, painted with a finger, not placed. */
+export function assetIsGround(tileset: Tileset, assetIndex: number): boolean {
+  if (sheetIsAllTiles(tileset.name) || tileset.pathStride) return true;
+  return (tileset.groundAssets ?? []).includes(assetIndex);
 }
 
 /**
@@ -440,7 +456,14 @@ function absorbFragments(islands: Island[], maxFragment: number): Island[] {
  * pixel-art strokes stay in one piece. Labels come from a mask widened by
  * `gap`, but each rectangle is fitted to the real pixels.
  */
-function findIslands(solid: Uint8Array, sheetW: number, region: AssetRect, gap: number, minArea: number): Island[] {
+function findIslands(
+  solid: Uint8Array,
+  sheetW: number,
+  region: AssetRect,
+  gap: number,
+  minArea: number,
+  ortho = false,
+): Island[] {
   const { x: rx, y: ry, w, h } = region;
   const local = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
@@ -479,18 +502,31 @@ function findIslands(solid: Uint8Array, sheetW: number, region: AssetRect, gap: 
         area += 1;
       }
 
-      for (let dy = -1; dy <= 1; dy++) {
+      const dirs = ortho
+        ? [
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1],
+          ]
+        : [
+            [-1, -1],
+            [0, -1],
+            [1, -1],
+            [-1, 0],
+            [1, 0],
+            [-1, 1],
+            [0, 1],
+            [1, 1],
+          ];
+      for (const [dx, dy] of dirs) {
+        const nx = x + dx;
         const ny = y + dy;
-        if (ny < 0 || ny >= h) continue;
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const nx = x + dx;
-          if (nx < 0 || nx >= w) continue;
-          const ni = ny * w + nx;
-          if (!grown[ni] || labels[ni]) continue;
-          labels[ni] = 1;
-          stack.push(ni);
-        }
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const ni = ny * w + nx;
+        if (!grown[ni] || labels[ni]) continue;
+        labels[ni] = 1;
+        stack.push(ni);
       }
     }
 
@@ -636,7 +672,12 @@ export function splitSheet(
   // amount of flood filling will separate, so the grass is taken out from
   // under them and what is left standing is found again.
   const palette = terrainPalette(rgba, alpha, w, h, grid, terrain);
-  const props = withoutInnerPieces(cut.flatMap((rect) => splitPanel(rect, rgba, alpha, w, grid, palette)));
+  const props = withoutInnerPieces(
+    cut
+      .flatMap((rect) => splitPanel(rect, rgba, alpha, w, grid, palette))
+      .flatMap((rect) => splitCellFloor(rect, rgba, alpha, w, grid, palette))
+      .flatMap((rect) => splitCellBlobs(rect, alpha, w, grid)),
+  );
 
   const assets = readingOrder([...props, ...squares]);
   const isGround = new Set(squares);
@@ -739,6 +780,72 @@ function splitPanel(
 }
 
 /**
+ * Lifts a prop off the floor tile it was drawn on.
+ *
+ * Object pages often paint a tree or a bench on top of the sidewalk in the
+ * same cell. The leftover island after neighbouring floor is punched out is
+ * only one or two cells, too small for the panel pass, so the dominant
+ * ground colour is taken out here and whatever is still standing is kept.
+ */
+function splitCellFloor(
+  rect: AssetRect,
+  rgba: Uint8ClampedArray,
+  alpha: Uint8Array,
+  w: number,
+  grid: SheetGrid,
+  palette: number[][],
+): AssetRect[] {
+  if (palette.length === 0) return [rect];
+  const cellArea = grid.w * grid.h;
+  if (rect.w * rect.h > cellArea * 4) return [rect];
+
+  const counts = new Map<number, number>();
+  let drawn = 0;
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      const i = y * w + x;
+      if (alpha[i] <= ALPHA_CUTOFF) continue;
+      const key = (rgba[i * 4] << 16) | (rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+      drawn += 1;
+    }
+  }
+  if (drawn === 0) return [rect];
+
+  let bestKey = 0;
+  let bestN = 0;
+  for (const [key, n] of counts) {
+    if (n > bestN) {
+      bestKey = key;
+      bestN = n;
+    }
+  }
+  if (bestN / drawn < 0.35) return [rect];
+  const colour = [(bestKey >> 16) & 255, (bestKey >> 8) & 255, bestKey & 255];
+  if (!isTerrainColour(Uint8ClampedArray.from(colour), 0, palette)) return [rect];
+
+  const mask = new Uint8Array(w * (rect.y + rect.h));
+  let kept = 0;
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      const i = y * w + x;
+      if (alpha[i] <= ALPHA_CUTOFF) continue;
+      if (Math.abs(rgba[i * 4] - colour[0]) + Math.abs(rgba[i * 4 + 1] - colour[1]) + Math.abs(rgba[i * 4 + 2] - colour[2]) <= 12) {
+        continue;
+      }
+      mask[i] = 1;
+      kept += 1;
+    }
+  }
+  if (kept === 0 || 1 - kept / drawn < 0.25) return [rect];
+
+  const pieces = absorbFragments(findIslands(mask, w, rect, 0, 1), cellArea * FRAGMENT_SHARE)
+    .filter((piece) => piece.area >= cellArea * PANEL_PIECE_SHARE)
+    .map(({ x, y, w: pw, h: ph }) => ({ x, y, w: pw, h: ph }));
+  return pieces.length > 0 ? pieces : [rect];
+}
+
+/**
  * Cuts one run of touching drawings apart at the grid lines where the
  * picture actually changes.
  *
@@ -756,13 +863,16 @@ function splitAtSeams(
   w: number,
   grid: SheetGrid,
 ): AssetRect[] {
-  const cutsX = seamCuts(rect.x, rect.w, grid.margin, grid.w + grid.spacing, SEAM_CUT, (at) =>
+  // A stall or a flower box is only a few cells wide. Colour jumps inside
+  // it (apples next to cabbages) are not a reason to clip it in half.
+  const short = rect.w <= (grid.w + grid.spacing) * 4.3;
+  const cutsX = seamCuts(rect.x, rect.w, grid.margin, grid.w + grid.spacing, short ? 70 : SEAM_CUT, (at) =>
     seamStrength(rgba, alpha, w, at, rect, true),
   );
-  // A row cut has to be a stronger jump than a sideways one: a building's
-  // roof, windows and doorway are bands that would otherwise read as a
-  // change and slice it into storeys.
-  const cutsY = seamCuts(rect.y, rect.h, grid.margin, grid.h + grid.spacing, SEAM_CUT_ROW, (at) =>
+  // Horizontal colour jumps are how a roof sits on its own shopfront.
+  // Cutting there slices every building into storeys. Only a thin touch
+  // (two props stacked, not one facade) is a real split.
+  const cutsY = seamCuts(rect.y, rect.h, grid.margin, grid.h + grid.spacing, Number.POSITIVE_INFINITY, (at) =>
     seamStrength(rgba, alpha, w, at, rect, false),
   );
   if (cutsX.length === 0 && cutsY.length === 0) return [rect];
@@ -798,7 +908,11 @@ function seamCuts(
     if (at <= start) continue;
     if (at >= start + size) break;
     const strength = strengthAt(at);
-    if (strength !== null && strength >= least) cuts.push(at);
+    if (strength === null) continue;
+    // A thin shared edge is two props that only kiss at a corner or a pole.
+    // Leaving them joined is how two trees or a row of benches become one tile.
+    if (strength < 0) cuts.push(at);
+    else if (strength >= least) cuts.push(at);
   }
   return cuts;
 }
@@ -830,8 +944,33 @@ function seamStrength(
       Math.abs(rgba[before * 4 + 2] - rgba[after * 4 + 2]);
     shared += 1;
   }
-  if (shared < (to - from) * SEAM_TOUCH) return null;
+  const span = to - from;
+  if (shared === 0 || shared < span * SEAM_THIN) return -1;
+  if (shared < span * SEAM_TOUCH) return null;
   return total / (shared * 3);
+}
+
+/**
+ * Two small props packed into one cell often only touch at a corner. The
+ * first pass is 8-connected, so they come out as one sticker. Splitting on
+ * 4-connected islands inside a single cell pulls them apart without
+ * touching a building that spans several cells.
+ */
+function splitCellBlobs(rect: AssetRect, alpha: Uint8Array, w: number, grid: SheetGrid): AssetRect[] {
+  if (rect.w > grid.w * 1.15 || rect.h > grid.h * 1.15) return [rect];
+  const mask = new Uint8Array(w * (rect.y + rect.h));
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      if (alpha[y * w + x] > ALPHA_CUTOFF) mask[y * w + x] = 1;
+    }
+  }
+  const found = findIslands(mask, w, rect, 0, 8, true);
+  if (found.length < 2) return [rect];
+  const areas = found.map((p) => p.area).sort((a, b) => b - a);
+  // An awning's poles, a tree's trunk, a lamp's post: much smaller than the
+  // body they hang from. Two benches in one cell are about the same size.
+  if (areas[1] < areas[0] * 0.35) return [rect];
+  return found.map(({ x, y, w: pw, h: ph }) => ({ x, y, w: pw, h: ph }));
 }
 
 /** The box of drawn pixels inside a region, or null when it is all background. */
@@ -871,23 +1010,26 @@ export function terrainCells(
 ): Uint8Array {
   const count = grid.cols * grid.rows;
   const cells = new Uint8Array(count);
+  const fill = new Float32Array(count);
+  const structure = new Float32Array(count);
   const kinds: { look: Float64Array; members: number[] }[] = [];
 
   forEachCell(grid, w, h, (index, x0, y0, cw, ch) => {
     let solid = 0;
     for (let y = y0; y < y0 + ch; y++) {
-      for (let x = x0; x < x0 + cw; x++) if (alpha[y * w + x] > ALPHA_CUTOFF) solid++;
+      for (let x = x0; x < x0 + cw; x++) if (alpha[y * w + x] > ALPHA_CUTOFF) solid += 1;
     }
-    // Ground covers its square completely; anything with a see-through
-    // corner is a drawing sitting on the background.
-    if (solid / (cw * ch) < TERRAIN_FILL) return;
-
+    fill[index] = solid / (cw * ch);
+    if (fill[index] === 0) return;
     const look = cellLook(rgba, w, x0, y0, cw, ch);
+    structure[index] = lookStructure(look);
+    if (fill[index] < TERRAIN_FILL) return;
+
     // Ground is a flat texture. A cupboard front or a window repeats just as
     // often and fills its square just as fully, but it has a design in it:
     // a frame, a handle, panes. Measuring how much the square varies within
-    // itself keeps those out of the ground.
-    if (lookStructure(look) > TERRAIN_FLAT) return;
+    // itself keeps those out of the seed set.
+    if (structure[index] > TERRAIN_FLAT) return;
 
     const kind = kinds.find((k) => lookDistance(k.look, look) < TERRAIN_MATCH);
     if (kind) kind.members.push(index);
@@ -896,8 +1038,42 @@ export function terrainCells(
 
   for (const kind of kinds) {
     if (kind.members.length < TERRAIN_REPEATS) continue;
-    for (const index of kind.members) cells[index] = 1;
+    for (const index of kind.members) {
+      // A flat roof sitting on a windowed facade is part of a building, not a floor.
+      const below = index + grid.cols;
+      const above = index - grid.cols;
+      const facade =
+        (below < count && fill[below] > 0.8 && structure[below] > TERRAIN_FLAT) ||
+        (above >= 0 && fill[above] > 0.8 && structure[above] > TERRAIN_FLAT);
+      if (!facade) cells[index] = 1;
+    }
   }
+
+  // Unique floor tiles (a crosswalk, a parking space with a line) sit next
+  // to the repeating ones. Once the repeating ground is known, any cell
+  // that is mostly those colours is ground too, even with a tree on it.
+  const palette = terrainPalette(rgba, alpha, w, h, grid, cells);
+  if (palette.length > 0) {
+    forEachCell(grid, w, h, (index, x0, y0, cw, ch) => {
+      if (cells[index] || fill[index] === 0) return;
+      let drawn = 0;
+      let matched = 0;
+      for (let y = y0; y < y0 + ch; y++) {
+        for (let x = x0; x < x0 + cw; x++) {
+          const i = y * w + x;
+          if (alpha[i] <= ALPHA_CUTOFF) continue;
+          drawn += 1;
+          if (isTerrainColour(rgba, i * 4, palette)) matched += 1;
+        }
+      }
+      const cover = drawn === 0 ? 0 : matched / drawn;
+      // Almost all ground colour means a unique floor tile (a crosswalk, a
+      // parking line). A tree sitting on a sidewalk is not this covered, and
+      // must stay so it can be lifted off the floor in a later pass.
+      if (cover >= TERRAIN_COVER_BUSY && structure[index] < TERRAIN_COVER_FLAT) cells[index] = 1;
+    });
+  }
+
   return cells;
 }
 

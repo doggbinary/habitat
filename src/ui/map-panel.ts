@@ -101,10 +101,10 @@ export class MapPanel {
             this.store.settings.fingerDraws = on;
             this.store.emit('ui');
           },
-          'Off keeps drawing to the Apple Pencil, so a finger only pans and zooms.',
+          'On, a finger paints only while a path or floor square is selected. Objects are still placed, not drawn.',
         ),
         el('div', { class: 'gesture-help' }, [
-          gesture('One finger', 'Pan the map'),
+          gesture('One finger', 'Pan, or paint a path if one is selected'),
           gesture('Two fingers', 'Pinch to zoom, drag to pan'),
           gesture('Two-finger tap', 'Undo'),
           gesture('Three-finger tap', 'Redo'),

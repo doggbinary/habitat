@@ -1,3 +1,4 @@
+import { assetIsGround } from '../core/assets';
 import { isMovableImage, type ImageLayer, type MapObject } from '../core/doc';
 import type { Shape, Store } from '../core/store';
 import { clampZoom, screenToCell, screenToWorld, zoomAt } from '../render/camera';
@@ -291,6 +292,24 @@ export class PointerInput {
     this.editor.beginImageTransform();
   }
 
+  /**
+   * A finger may paint only while a path square is the brush. Objects are
+   * placed, not stroked, so picking a bench must not turn the next touch
+   * into a draw. The eraser is the exception: a finger has to be able to
+   * rub out a mistake.
+   */
+  private fingerPaints(): boolean {
+    if (this.spaceHeld || this.store.tool === 'pan' || this.store.tool === 'select') return false;
+    if (this.store.tool === 'eraser') return true;
+    if (!this.store.settings.fingerDraws) return false;
+    const tool = this.store.tool;
+    if (tool !== 'brush' && tool !== 'fill' && tool !== 'rect' && tool !== 'line') return false;
+    const pick = this.store.libraryPick;
+    if (!pick) return false;
+    const sheet = this.store.doc.tilesets.find((tileset) => tileset.id === pick.tilesetId);
+    return !!sheet && assetIsGround(sheet, pick.index);
+  }
+
   /** The Pencil, a mouse, or a drawing finger has touched down. */
   private startDraw(pointer: TrackedPointer, penEraser: boolean): void {
     // Placing the scale-test character takes priority: while that mode is on,
@@ -503,17 +522,10 @@ export class PointerInput {
         this.grabHeldBlock(pointer);
         return;
       }
-      const paints = this.store.tool === 'brush' || this.store.tool === 'fill' || this.store.tool === 'rect' || this.store.tool === 'line';
-      // Painting has to reach the ground even where an asset is sitting.
-      if (!paints && this.pressAsset(pointer, false)) return;
-
-      // The eraser has to work from a finger even when drawing is reserved
-      // for the Pencil, otherwise a placed asset cannot be removed by touch.
-      const drawsWithFinger =
-        this.store.tool !== 'pan' &&
-        !this.spaceHeld &&
-        (this.store.settings.fingerDraws || this.store.tool === 'eraser' || paints);
-      if (drawsWithFinger && (paints || !this.tapObject)) this.startDraw(pointer, false);
+      // A finger only paints paths. After an object is placed, the next
+      // touch pans or moves that object — it must not start a brush stroke.
+      if (!this.fingerPaints() && this.pressAsset(pointer, false)) return;
+      if (this.fingerPaints()) this.startDraw(pointer, false);
       else this.beginPan(pointer);
       return;
     }

@@ -11,7 +11,7 @@ import {
   type Tileset,
 } from './core/doc';
 import { sameAsset, type AssetRef } from './ui/packs';
-import { DETECT_VERSION, assetsOf, deleteAssets, detectSheetSplit, mergeAssets, tileIndexOf } from './core/assets';
+import { DETECT_VERSION, assetIsGround, assetsOf, deleteAssets, detectSheetSplit, mergeAssets, tileIndexOf } from './core/assets';
 import { PATH_STRIDE, expandPathSheet, isRawPathSheet } from './core/autotile';
 import { applyTilesetMerge, pathMergePlan } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
@@ -636,18 +636,11 @@ export class App {
     this.store.toast(`Deleted ${folder.name}`);
   }
 
-  /** The tools that paint the grid, as opposed to placing or selecting. */
-  private get paintTool(): boolean {
-    const tool = this.store.tool;
-    return tool === 'brush' || tool === 'fill' || tool === 'rect' || tool === 'line';
-  }
-
   /**
-   * A tap on an asset. A floor square, picked while a painting tool is in
-   * hand, becomes the brush, because floors are painted, not placed one
-   * square at a time. Anything else is added to the middle of the view,
-   * selected and ready to move, which is the quickest route for anyone who
-   * has not discovered press-and-hold.
+   * A tap on an asset. A floor square becomes the brush so a finger can
+   * paint paths. Anything else is added to the middle of the view, selected
+   * and ready to move — and the brush is put away, so the next finger on
+   * the map pans or drags that asset instead of drawing.
    */
   private tapAsset(sheetIndex: number, assetIndex: number): void {
     const sheet = this.store.doc.tilesets[sheetIndex];
@@ -657,15 +650,17 @@ export class App {
     this.store.libraryPick = { tilesetId: sheet.id, index: assetIndex };
 
     const tile = tileIndexOf(sheet, rect);
-    if (tile !== -1 && this.paintTool) {
+    if (tile !== -1 && assetIsGround(sheet, assetIndex)) {
+      this.store.setTool('brush');
       this.store.setStamp(singleStamp(sheetIndex, tile), null);
       this.shell.palette.draw();
-      this.store.toast('Painting with this square. Drag it instead to place it as an asset.');
+      this.store.toast('Painting paths. A finger now draws this square.');
       return;
     }
 
     const centre = screenToWorld(this.store.camera, this.renderer.viewW / 2, this.renderer.viewH / 2);
     this.objects.place(sheet.id, rect, centre.x, centre.y);
+    this.store.setTool('select');
     this.shell.palette.draw();
     this.store.toast('Added. Drag it into place, or pinch to resize.');
   }
