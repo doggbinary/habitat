@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 13;
+export const DETECT_VERSION = 14;
 
 /** A ground cell is drawn corner to corner; a prop leaves background showing. */
 const TERRAIN_FILL = 0.92;
@@ -1066,7 +1066,22 @@ function splitAtSeams(
       if (box) pieces.push(box);
     }
   }
-  return pieces.length > 0 ? pieces : [rect];
+  if (pieces.length === 0) return [rect];
+  // What held a column of piles together may have been the drawing the cut
+  // just took away, so each piece is looked at again for separate drawings.
+  return pieces.flatMap((piece) => separateDrawings(piece, alpha, w, grid));
+}
+
+/** The separate drawings inside a rectangle, with stray specks kept on the drawing they belong to. */
+function separateDrawings(rect: AssetRect, alpha: Uint8Array, w: number, grid: SheetGrid): AssetRect[] {
+  const mask = new Uint8Array(w * (rect.y + rect.h));
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      if (alpha[y * w + x] > ALPHA_CUTOFF) mask[y * w + x] = 1;
+    }
+  }
+  const parts = absorbFragments(findIslands(mask, w, rect, 0, 1), grid.w * grid.h * FRAGMENT_SHARE);
+  return parts.length > 1 ? parts.map(({ x, y, w: pw, h: ph }) => ({ x, y, w: pw, h: ph })) : [rect];
 }
 
 /** Grid lines strictly inside a span, where the picture jumps. */
