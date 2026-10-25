@@ -90,9 +90,11 @@ export class MapPanel {
       section('Pencil and fingers', [
         el('div', { class: 'gesture-help' }, [
           gesture('Apple Pencil', 'Does the tool: paint, erase, box tiles, grab assets'),
-          gesture('One finger', 'Pans. Tap an asset to select it, then drag it'),
+          gesture('Tap an object in the library', 'Then tap the map to place it. Each tap adds another'),
+          gesture('One finger', 'Pans. Tap an object to select it, then drag it on the grid'),
+          gesture('Corner handle', 'Drag it to grow or shrink by whole squares'),
           gesture('Finger paints floors', 'When on, one finger paints with a floor square'),
-          gesture('Two fingers', 'Pinch to zoom, drag to pan, pinch an asset to resize'),
+          gesture('Two fingers', 'Pinch to zoom, drag to pan'),
           gesture('Two-finger tap', 'Undo'),
           gesture('Three-finger tap', 'Redo'),
         ]),

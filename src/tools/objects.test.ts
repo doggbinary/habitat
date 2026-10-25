@@ -33,9 +33,13 @@ describe('placing', () => {
     expect(top.objects).toHaveLength(1);
   });
 
-  it('selects what it placed, so it can be dragged straight away', () => {
+  it('selects what it placed, snapped onto a grid square', () => {
     tools.place('a', { x: 0, y: 0, w: 16, h: 16 }, 50, 60);
-    expect(tools.selected()?.obj.x).toBe(50);
+    const obj = tools.selected()?.obj;
+    expect(obj?.x).toBe(56);
+    expect(obj?.y).toBe(56);
+    expect(obj!.x - 8).toBe(48);
+    expect(obj!.y - 8).toBe(48);
   });
 
   it('sizes a prop to match the ground drawn from the same sheet', () => {
@@ -89,7 +93,7 @@ describe('resizing', () => {
     expect(obj.scale).toBeGreaterThanOrEqual(MIN_SCALE);
   });
 
-  it('only stops on half steps, where pixel art stays crisp', () => {
+  it('only stops on whole squares of the longer side', () => {
     const [obj] = withObjects(fakeObject());
     tools.scaleTo(obj, 2.04);
     expect(obj.scale).toBe(2);
@@ -293,7 +297,7 @@ describe('continuous gestures', () => {
     tools.beginGesture();
     for (let i = 0; i < 20; i++) tools.moveTo(obj, 40 + i, 40);
     tools.endGesture('Move');
-    expect(obj.x).toBe(59);
+    expect(obj.x).toBe(56);
 
     store.history.undo();
     const restored = (store.doc.layers.find((l) => l.id === layer.id) as ObjectLayer).objects[0];
@@ -328,7 +332,7 @@ describe('duplicate and delete', () => {
     tools.toggleLock();
     tools.moveTo(obj, 200, 200);
     expect(obj.x).toBe(200);
-    expect(obj.y).toBe(200);
+    expect(obj.y).toBe(208);
   });
 
   it('deletes the selected object and can be undone', () => {

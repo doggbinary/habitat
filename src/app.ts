@@ -40,7 +40,7 @@ import {
 } from './core/custom-tiles';
 import { isSolid, seamlessFloor } from './core/seamless';
 import { cropAsset } from './render/object-draw';
-import { ObjectTools } from './tools/objects';
+import { gridScale, ObjectTools } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
 import { hexToHsv, hsvToHex } from './ui/color-wheel';
 import { importSpriteSheet } from './character/import';
@@ -878,11 +878,8 @@ export class App {
       return;
     }
 
-    const centre = screenToWorld(this.store.camera, this.renderer.viewW / 2, this.renderer.viewH / 2);
-    this.objects.place(sheet.id, rect, centre.x, centre.y);
-    this.store.setTool('select');
     this.shell.palette.draw();
-    this.store.toast('Added. Drag it into place, or pinch to resize.');
+    this.store.toast('Tap the map to place it. Each tap adds another.');
   }
 
   private dragStart(tilesetId: string, rect: AssetRect): void {
@@ -898,7 +895,8 @@ export class App {
       this.store.alignLines = null;
     } else {
       const sheet = this.store.doc.tilesets.find((t) => t.id === drag.tilesetId);
-      const scale = sheet && sheet.tileW > 0 ? this.store.doc.tileSize / sheet.tileW : 1;
+      const base = sheet && sheet.tileW > 0 ? this.store.doc.tileSize / sheet.tileW : 1;
+      const scale = gridScale(drag.rect.w, drag.rect.h, base, this.store.doc.tileSize);
       drag.world = this.objects.aligned(drag.rect.w * scale, drag.rect.h * scale, at.x, at.y);
     }
     this.renderer.requestDraw();

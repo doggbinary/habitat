@@ -1,4 +1,4 @@
-import { tileIsGround } from '../core/assets';
+import { assetIsGround, assetsOf, tileIsGround } from '../core/assets';
 import { EMPTY, indexOf, tilesetOf } from '../core/tiles';
 import { isMovableImage, type ImageLayer, type MapObject } from '../core/doc';
 import type { Shape, Store } from '../core/store';
@@ -7,7 +7,7 @@ import type { Renderer } from '../render/renderer';
 import type { Editor } from '../tools/edit';
 import { lineCells } from '../tools/geometry';
 import { hitsHandle, scaleFromHandle, snapPlacement } from '../tools/image-transform';
-import { HANDLE_HIT, objectHandlePoint, objectScreenRect, type ObjectTools } from '../tools/objects';
+import { HANDLE_HIT, objectHandlePoint, type ObjectTools } from '../tools/objects';
 
 interface TrackedPointer {
   id: number;
@@ -39,8 +39,8 @@ const TAP_MAX_MS = 320;
 const TAP_MAX_MOVE = 12;
 /** Window for the second tap of a double-tap. */
 const DOUBLE_TAP_MS = 380;
-/** How far from a selected object a pinch may start and still resize it. */
-const PINCH_REACH = 90;
+/** Extra screen pixels a fingertip may miss an object by and still select it. */
+const FINGER_HIT = 18;
 
 /**
  * Translates pointer events into editing and navigation.
@@ -68,6 +68,8 @@ export class PointerInput {
   private lastTap: { time: number; cell: { x: number; y: number } } | null = null;
   /** The asset under a finger that went down, selected only if it was a tap. */
   private tapObject: MapObject | null = null;
+  /** A tap on empty map should drop another copy of the picked object. */
+  private placeArmed = false;
   private tapObjectLayer: string | null = null;
 
   /** Called when a placed ground tile is double-tapped. */
@@ -173,14 +175,6 @@ export class PointerInput {
     return Math.hypot(x - handle.x, y - handle.y) <= HANDLE_HIT;
   }
 
-  /** True when a screen point is on or near the selected asset. */
-  private nearSelected(x: number, y: number, reach: number): boolean {
-    const found = this.objects.selected();
-    if (!found) return false;
-    const r = objectScreenRect(this.store.camera, found.obj);
-    return x >= r.x - reach && x <= r.x + r.w + reach && y >= r.y - reach && y <= r.y + r.h + reach;
-  }
-
   private startObjectMove(pointer: TrackedPointer, obj: MapObject): void {
     const world = this.worldAt(pointer.x, pointer.y);
     this.mode = 'object-move';
@@ -219,7 +213,8 @@ export class PointerInput {
     }
 
     const world = this.worldAt(pointer.x, pointer.y);
-    const hit = this.objects.hitTest(world.x, world.y);
+    const pad = precise ? 0 : FINGER_HIT / Math.max(this.store.camera.zoom, 0.01);
+    const hit = this.objects.hitTest(world.x, world.y, pad);
     if (!hit) return false;
     this.editor.commitSelection();
 
@@ -353,6 +348,13 @@ export class PointerInput {
       this.store.emit('view');
       this.renderer.requestDraw();
       return;
+    }
+
+    // The picked object stays armed: a tap on empty map drops another copy,
+    // and a tap on one already there selects it instead of painting.
+    if (!penEraser && !this.spaceHeld && this.armedObject()) {
+      if (this.pressAsset(pointer, pointer.type !== 'touch')) return;
+      if (this.beginPlace(pointer, true)) return;
     }
 
     const paints =
@@ -497,15 +499,40 @@ export class PointerInput {
     this.pinchMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     this.activeId = null;
 
-    // Pinching over the selected asset resizes it; anywhere else zooms.
-    const found = this.objects.selected();
-    if (found && this.nearSelected(this.pinchMid.x, this.pinchMid.y, PINCH_REACH)) {
-      this.mode = 'object-pinch';
-      this.scaleStart = found.obj.scale;
-      this.objects.beginGesture();
-      return;
-    }
+    // A pinch always zooms the map. Resizing is the corner handle, so the
+    // two gestures cannot be mixed up.
     this.mode = 'gesture';
+  }
+
+  /** The library object waiting to be stamped, when the pick is not a floor. */
+  private armedObject(): { tilesetId: string; rect: { x: number; y: number; w: number; h: number } } | null {
+    const pick = this.store.libraryPick;
+    if (!pick) return null;
+    const sheet = this.store.doc.tilesets.find((t) => t.id === pick.tilesetId);
+    if (!sheet) return null;
+    const rect = assetsOf(sheet)[pick.index];
+    if (!rect || assetIsGround(sheet, pick.index)) return null;
+    return { tilesetId: sheet.id, rect };
+  }
+
+  /**
+   * Remembers that a still tap should place the armed object. A finger
+   * meanwhile pans, so a drag does not drop a copy.
+   */
+  private beginPlace(pointer: TrackedPointer, precise: boolean): boolean {
+    if (!this.armedObject()) return false;
+    this.placeArmed = true;
+    this.gestureStart = performance.now();
+    this.gestureMoved = false;
+    this.gestureMaxFingers = Math.max(this.gestureMaxFingers, 1);
+    this.tapStart = { clientX: 0, clientY: 0, x: pointer.x, y: pointer.y };
+    if (precise) {
+      this.mode = 'idle';
+      this.activeId = pointer.id;
+    } else {
+      this.beginPan(pointer);
+    }
+    return true;
   }
 
   // --- Event handlers ------------------------------------------------------
@@ -566,9 +593,13 @@ export class PointerInput {
         this.startDraw(pointer, false);
         return;
       }
-      // A finger only paints paths. After an object is placed, the next
-      // touch pans or moves that object — it must not start a brush stroke.
-      if (!this.fingerPaints() && this.pressAsset(pointer, false)) return;
+      // A finger can select an object even while it is allowed to paint floors.
+      if (!this.spaceHeld && this.pressAsset(pointer, false)) return;
+      if (this.tapObject) {
+        this.beginPan(pointer);
+        return;
+      }
+      if (this.beginPlace(pointer, false)) return;
       if (this.fingerPaints()) this.startDraw(pointer, false);
       else this.beginPan(pointer);
       return;
@@ -1001,6 +1032,19 @@ export class PointerInput {
     this.tapObjectLayer = null;
     this.store.preview = null;
     this.anchorCell = null;
+
+    if (this.placeArmed && wasTap && !tappedObject && this.tapStart) {
+      const armed = this.armedObject();
+      const cell = this.cellAt(this.tapStart.x, this.tapStart.y);
+      const doc = this.store.doc;
+      this.placeArmed = false;
+      if (armed && cell.x >= 0 && cell.y >= 0 && cell.x < doc.width && cell.y < doc.height) {
+        const tile = doc.tileSize;
+        this.objects.place(armed.tilesetId, armed.rect, (cell.x + 0.5) * tile, (cell.y + 0.5) * tile);
+      }
+      return;
+    }
+    this.placeArmed = false;
 
     if (!wasTap) return;
 

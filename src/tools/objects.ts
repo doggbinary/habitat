@@ -10,8 +10,6 @@ import {
 import { snapshot, type DocSnapshot } from '../core/history';
 import type { Camera, Store } from '../core/store';
 import type { Renderer } from '../render/renderer';
-import { snapAlign, type AlignBox } from './align';
-
 /** Smallest and largest an object may be scaled to. */
 export const MIN_SCALE = 0.1;
 export const MAX_SCALE = 16;
@@ -37,6 +35,31 @@ export function objectScreenRect(camera: Camera, obj: MapObject): { x: number; y
  */
 export function onWholePixels(w: number, h: number, x: number, y: number): { x: number; y: number } {
   return { x: Math.round(x - w / 2) + w / 2, y: Math.round(y - h / 2) + h / 2 };
+}
+
+/** How many map squares a length covers, and never fewer than one. */
+export function gridSquares(pixels: number, tile: number): number {
+  if (tile <= 0) return 1;
+  return Math.max(1, Math.round(pixels / tile));
+}
+
+/**
+ * Scale that makes the longer side of the art an exact number of map squares.
+ * A tree then grows from one square to two, then three, and never sits between them.
+ */
+export function gridScale(rectW: number, rectH: number, requested: number, tile: number): number {
+  const wide = Math.max(rectW, rectH, 1);
+  const squares = gridSquares(wide * Math.max(0, requested), tile);
+  const next = (squares * tile) / wide;
+  return Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
+}
+
+/** Centre of a box whose top-left corner sits on a grid line. */
+export function snapToGrid(w: number, h: number, x: number, y: number, tile: number): { x: number; y: number } {
+  if (tile <= 0) return { x, y };
+  const left = Math.round((x - w / 2) / tile) * tile;
+  const top = Math.round((y - h / 2) / tile) * tile;
+  return { x: left + w / 2, y: top + h / 2 };
 }
 
 /** True when two placed assets cover some of the same ground. */
@@ -83,7 +106,7 @@ export class ObjectTools {
   }
 
   /** Topmost object under a world point, searching front to back. */
-  hitTest(wx: number, wy: number): { layer: ObjectLayer; obj: MapObject } | null {
+  hitTest(wx: number, wy: number, pad = 0): { layer: ObjectLayer; obj: MapObject } | null {
     const layers = this.doc.layers;
     for (let li = layers.length - 1; li >= 0; li--) {
       const layer = layers[li];
@@ -91,7 +114,7 @@ export class ObjectTools {
       for (let oi = layer.objects.length - 1; oi >= 0; oi--) {
         const obj = layer.objects[oi];
         const { w, h } = objectSize(obj);
-        if (Math.abs(wx - obj.x) <= w / 2 && Math.abs(wy - obj.y) <= h / 2) return { layer, obj };
+        if (Math.abs(wx - obj.x) <= w / 2 + pad && Math.abs(wy - obj.y) <= h / 2 + pad) return { layer, obj };
       }
     }
     return null;
@@ -271,11 +294,12 @@ export class ObjectTools {
    */
   place(tilesetId: string, rect: AssetRect, wx: number, wy: number): void {
     const sheet = this.doc.tilesets.find((t) => t.id === tilesetId);
-    const scale = sheet && sheet.tileW > 0 ? this.doc.tileSize / sheet.tileW : 1;
+    const base = sheet && sheet.tileW > 0 ? this.doc.tileSize / sheet.tileW : 1;
+    const scale = gridScale(rect.w, rect.h, base, this.doc.tileSize);
 
     const before = snapshot(this.doc);
     const layer = this.targetLayer();
-    const at = this.aligned(rect.w * scale, rect.h * scale, wx, wy);
+    const at = snapToGrid(rect.w * scale, rect.h * scale, wx, wy, this.doc.tileSize);
     this.store.alignLines = null;
     const obj: MapObject = {
       id: uid('obj'),
@@ -340,56 +364,26 @@ export class ObjectTools {
   }
 
   /**
-   * Where a box of this size should sit. With guides on, it pulls onto the
-   * edge or centre of another asset, or onto the middle of the map.
+   * Where a box of this size should sit: its top-left corner on a grid line,
+   * so every object occupies whole squares.
    */
   aligned(w: number, h: number, x: number, y: number, ignoreId?: string): { x: number; y: number } {
-    if (!this.store.settings.alignGuides) {
-      this.store.alignLines = null;
-      return onWholePixels(w, h, x, y);
-    }
-    const targets: AlignBox[] = [];
-    for (const layer of this.doc.layers) {
-      if (!isObjectLayer(layer) || !layer.visible) continue;
-      for (const obj of layer.objects) {
-        if (obj.id === ignoreId) continue;
-        const size = objectSize(obj);
-        targets.push({
-          left: obj.x - size.w / 2,
-          right: obj.x + size.w / 2,
-          cx: obj.x,
-          top: obj.y - size.h / 2,
-          bottom: obj.y + size.h / 2,
-          cy: obj.y,
-        });
-      }
-    }
-    const mapW = this.doc.width * this.doc.tileSize;
-    const mapH = this.doc.height * this.doc.tileSize;
-    targets.push({ left: 0, right: mapW, cx: mapW / 2, top: 0, bottom: mapH, cy: mapH / 2 });
-    const snapped = snapAlign(w, h, x, y, targets, 8 / Math.max(this.store.camera.zoom, 0.01));
-    this.store.alignLines =
-      snapped.vertical.length || snapped.horizontal.length
-        ? { vertical: snapped.vertical, horizontal: snapped.horizontal }
-        : null;
-    return onWholePixels(w, h, snapped.x, snapped.y);
+    void ignoreId;
+    this.store.alignLines = null;
+    return snapToGrid(w, h, x, y, this.doc.tileSize);
   }
 
   /**
-   * Sets the size in steps of half the art's own size. In between, pixel art
-   * has to drop or double odd rows of pixels, which is what reads as warped.
+   * Grows or shrinks in whole map squares, measured on the longer side.
+   * The corner of the box stays on a grid line.
    */
   scaleTo(obj: MapObject, scale: number): void {
     if (obj.locked) return;
-    const sheet = this.doc.tilesets.find((t) => t.id === obj.tilesetId);
-    const base = sheet && sheet.tileW > 0 ? this.doc.tileSize / sheet.tileW : 1;
     const clamped = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
-    const steps = Math.max(1, Math.round((clamped / base) * 2));
-    const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, (steps / 2) * base));
+    const next = gridScale(obj.rect.w, obj.rect.h, clamped, this.doc.tileSize);
     if (next === obj.scale) return;
-    // Keep the edges on whole pixels at the new size.
     const size = objectSize({ ...obj, scale: next });
-    const at = onWholePixels(size.w, size.h, obj.x, obj.y);
+    const at = snapToGrid(size.w, size.h, obj.x, obj.y, this.doc.tileSize);
     obj.scale = next;
     obj.x = at.x;
     obj.y = at.y;
