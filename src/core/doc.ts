@@ -77,6 +77,10 @@ export interface MapObject {
   hueShift: number;
   saturation: number;
   brightness: number;
+  /** When set, the asset stays where it was dropped until it is unlocked. */
+  locked?: boolean;
+  /** Assets that share an id move and select together. */
+  groupId?: string;
 }
 
 interface LayerBase {

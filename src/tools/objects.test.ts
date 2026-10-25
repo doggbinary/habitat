@@ -276,6 +276,18 @@ describe('duplicate and delete', () => {
     expect(tools.selected()?.obj.id).toBe(copy.id);
   });
 
+  it('a locked asset does not move, until it is unlocked', () => {
+    const [obj] = withObjects(fakeObject({ id: 'fixed', x: 40, y: 40 }));
+    tools.toggleLock();
+    tools.moveTo(obj, 200, 200);
+    expect(obj.x).toBe(40);
+    expect(obj.y).toBe(40);
+    tools.toggleLock();
+    tools.moveTo(obj, 200, 200);
+    expect(obj.x).toBe(200);
+    expect(obj.y).toBe(200);
+  });
+
   it('deletes the selected object and can be undone', () => {
     withObjects(fakeObject({ id: 'gone' }));
     tools.remove();

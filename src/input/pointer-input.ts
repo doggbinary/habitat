@@ -207,6 +207,10 @@ export class PointerInput {
     if (this.spaceHeld || this.store.tool === 'pan' || this.store.tool === 'select') return false;
 
     if (this.onSelectedHandle(pointer.x, pointer.y)) {
+      if (this.objects.selected()?.obj.locked) {
+        this.store.toast('Unlock it to resize');
+        return true;
+      }
       this.startObjectScale(pointer);
       return true;
     }
@@ -219,7 +223,15 @@ export class PointerInput {
     // The eraser removes an asset outright rather than painting under it.
     if (this.store.tool === 'eraser') {
       this.objects.select(hit.layer, hit.obj);
-      this.objects.remove();
+      if (hit.obj.locked) this.store.toast('Unlock it to delete');
+      else this.objects.remove();
+      this.mode = 'idle';
+      this.activeId = pointer.id;
+      return true;
+    }
+
+    if (hit.obj.locked) {
+      this.objects.select(hit.layer, hit.obj);
       this.mode = 'idle';
       this.activeId = pointer.id;
       return true;
@@ -295,7 +307,9 @@ export class PointerInput {
       return;
     }
 
-    if (this.pressAsset(pointer, true)) return;
+    const paints =
+      this.store.tool === 'brush' || this.store.tool === 'fill' || this.store.tool === 'rect' || this.store.tool === 'line';
+    if (!paints && this.pressAsset(pointer, true)) return;
     // Pressing on bare map means you have moved on from the selected asset.
     this.objects.deselect();
 
@@ -393,6 +407,20 @@ export class PointerInput {
       this.grabHeldBlock(pointer);
       return;
     }
+    const world = this.worldAt(pointer.x, pointer.y);
+    const hit = this.objects.hitTest(world.x, world.y);
+    if (hit) {
+      this.editor.commitSelection();
+      this.objects.select(hit.layer, hit.obj);
+      if (hit.obj.locked) {
+        this.mode = 'idle';
+        this.activeId = pointer.id;
+        this.store.toast('Unlock it to move');
+        return;
+      }
+      this.startObjectMove(pointer, hit.obj);
+      return;
+    }
     this.editor.commitSelection();
     const cell = this.cellAt(pointer.x, pointer.y);
     this.mode = 'selection-rect';
@@ -475,15 +503,17 @@ export class PointerInput {
         this.grabHeldBlock(pointer);
         return;
       }
-      if (this.pressAsset(pointer, false)) return;
+      const paints = this.store.tool === 'brush' || this.store.tool === 'fill' || this.store.tool === 'rect' || this.store.tool === 'line';
+      // Painting has to reach the ground even where an asset is sitting.
+      if (!paints && this.pressAsset(pointer, false)) return;
 
       // The eraser has to work from a finger even when drawing is reserved
       // for the Pencil, otherwise a placed asset cannot be removed by touch.
       const drawsWithFinger =
         this.store.tool !== 'pan' &&
         !this.spaceHeld &&
-        (this.store.settings.fingerDraws || this.store.tool === 'eraser');
-      if (drawsWithFinger && !this.tapObject) this.startDraw(pointer, false);
+        (this.store.settings.fingerDraws || this.store.tool === 'eraser' || paints);
+      if (drawsWithFinger && (paints || !this.tapObject)) this.startDraw(pointer, false);
       else this.beginPan(pointer);
       return;
     }
@@ -535,7 +565,7 @@ export class PointerInput {
         if (!this.objectMoved && Math.hypot(x - tracked.startX, y - tracked.startY) <= slop) return;
         this.objectMoved = true;
         const world = this.worldAt(x, y);
-        this.objects.moveTo(found.obj, world.x - this.grab.dx, world.y - this.grab.dy);
+        this.objects.moveSelected(found.obj, world.x - this.grab.dx, world.y - this.grab.dy);
       }
       return;
     }
@@ -806,7 +836,18 @@ export class PointerInput {
     const preview = this.store.preview;
     this.store.preview = null;
     this.anchorCell = null;
-    if (preview) this.editor.liftSelection(preview);
+    if (!preview) return;
+    const assets = this.objects.inRect(preview);
+    if (assets.length > 1) {
+      this.objects.selectMany(assets);
+      this.store.toast(`${assets.length} selected. Drag one to move them, or Group to keep them together.`);
+      return;
+    }
+    if (assets.length === 1) {
+      this.objects.select(assets[0].layer, assets[0].obj);
+      return;
+    }
+    this.editor.liftSelection(preview);
   }
 
   private updatePinch(): void {

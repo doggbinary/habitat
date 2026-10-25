@@ -277,13 +277,18 @@ export class Renderer {
    * a Pencil can resize with, since a Pencil cannot pinch.
    */
   private drawObjectSelection(): void {
-    const sel = this.store.selectedObject;
-    if (!sel) return;
-    const layer = this.store.doc.layers.find((l) => l.id === sel.layerId);
-    if (layer?.kind !== 'objects') return;
-    const obj = layer.objects.find((o) => o.id === sel.objectId);
-    if (!obj) return;
+    const group = this.store.selectedGroup;
+    const ids = group.length > 0 ? group : this.store.selectedObject ? [this.store.selectedObject] : [];
+    if (ids.length === 0) return;
+    for (const sel of ids) {
+      const layer = this.store.doc.layers.find((l) => l.id === sel.layerId);
+      if (layer?.kind !== 'objects') continue;
+      const obj = layer.objects.find((o) => o.id === sel.objectId);
+      if (obj) this.strokeObject(obj);
+    }
+  }
 
+  private strokeObject(obj: import('../core/doc').MapObject): void {
     const { ctx } = this;
     const r = objectScreenRect(this.store.camera, obj);
 
@@ -291,11 +296,16 @@ export class Renderer {
     ctx.strokeStyle = 'rgba(0,0,0,0.5)';
     ctx.lineWidth = 4;
     ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
-    ctx.strokeStyle = COLOR_SELECT;
+    ctx.strokeStyle = obj.locked ? '#ffb020' : COLOR_SELECT;
     ctx.lineWidth = 2;
-    ctx.setLineDash([7, 5]);
+    ctx.setLineDash(obj.locked ? [] : [7, 5]);
     ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
     ctx.setLineDash([]);
+
+    if (obj.locked) {
+      ctx.restore();
+      return;
+    }
 
     const handle = objectHandlePoint(this.store.camera, obj);
     ctx.beginPath();

@@ -40,6 +40,8 @@ function readObject(raw: Partial<MapObject>): MapObject {
     hueShift: finite(raw.hueShift, 0),
     saturation: finite(raw.saturation, 1),
     brightness: finite(raw.brightness, 1),
+    ...(raw.locked ? { locked: true } : {}),
+    ...(typeof raw.groupId === 'string' && raw.groupId ? { groupId: raw.groupId } : {}),
   };
 }
 

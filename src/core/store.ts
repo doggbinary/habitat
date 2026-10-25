@@ -80,7 +80,7 @@ export class Store {
   settings: Settings = {
     showGrid: true,
     highlightActiveLayer: false,
-    fingerDraws: false,
+    fingerDraws: true,
     randomize: false,
     snapToStamp: false,
     showTileOutlines: false,
@@ -111,6 +111,8 @@ export class Store {
   preview: { x0: number; y0: number; x1: number; y1: number } | null = null;
   /** The placed asset whose options are showing. */
   selectedObject: { layerId: string; objectId: string } | null = null;
+  /** Every asset in the current selection, including `selectedObject`. */
+  selectedGroup: { layerId: string; objectId: string }[] = [];
   /** The library asset being dragged onto the map, and where it would land. */
   drag: {
     tilesetId: string;

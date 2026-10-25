@@ -350,8 +350,24 @@ export class Shell {
       const recolor: HTMLButtonElement = button('chip', 'Recolour', () => this.actions.recolorObject(recolor), [
         icon('palette', 17),
       ]);
+      const locked = !!found.obj.locked;
+      const guard = (node: HTMLButtonElement) => {
+        node.disabled = locked;
+        return node;
+      };
+      // Several assets picked at once can be joined, so they move as one.
+      const picked = this.store.selectedGroup.length;
+      const grouping =
+        picked > 1
+          ? this.selectionChip('layers', 'Group', () => this.objects.groupSelected(), '', `Group ${picked}`)
+          : found.obj.groupId
+            ? this.selectionChip('layers', 'Ungroup', () => this.objects.ungroupSelected(), '', 'Ungroup')
+            : null;
+
       this.optionsBar.append(
-        this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger', 'Delete'),
+        this.chipToggle(locked ? 'lock' : 'unlock', locked ? 'Unlock' : 'Lock', locked, () => this.objects.toggleLock()),
+        ...(grouping ? [grouping] : []),
+        guard(this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger', 'Delete')),
         this.chipToggle('grid', 'Guides', this.store.settings.alignGuides, () => {
           this.store.settings.alignGuides = !this.store.settings.alignGuides;
           if (!this.store.settings.alignGuides) this.store.alignLines = null;
@@ -361,14 +377,14 @@ export class Shell {
         el('div', { class: 'divider vertical' }),
         el('span', { class: 'chip-label', text: `${Math.round(found.obj.scale * 100)}%` }),
         el('div', { class: 'divider vertical' }),
-        this.selectionChip('rotate', 'Rotate', () => this.objects.rotate()),
-        this.selectionChip('flipH', 'Flip across', () => this.objects.flipAcross()),
-        this.selectionChip('flipV', 'Flip down', () => this.objects.flipDown()),
-        recolor,
+        guard(this.selectionChip('rotate', 'Rotate', () => this.objects.rotate())),
+        guard(this.selectionChip('flipH', 'Flip across', () => this.objects.flipAcross())),
+        guard(this.selectionChip('flipV', 'Flip down', () => this.objects.flipDown())),
+        guard(recolor),
         el('div', { class: 'divider vertical' }),
-        this.orderGroup(),
+        this.orderGroup(locked),
         el('div', { class: 'divider vertical' }),
-        this.selectionChip('copy', 'Duplicate', () => this.objects.duplicate()),
+        guard(this.selectionChip('copy', 'Duplicate', () => this.objects.duplicate())),
       );
       return;
     }
@@ -516,9 +532,9 @@ export class Shell {
    * it. A direction greys out when nothing overlaps on that side, because
    * moving past assets elsewhere on the map would change nothing you can see.
    */
-  private orderGroup(): HTMLElement {
-    const canBack = this.objects.canReorder(-1);
-    const canFront = this.objects.canReorder(1);
+  private orderGroup(locked = false): HTMLElement {
+    const canBack = !locked && this.objects.canReorder(-1);
+    const canFront = !locked && this.objects.canReorder(1);
     const chip = (name: IconName, text: string, label: string, enabled: boolean, run: () => void) => {
       const node = this.selectionChip(name, label, run, 'order-chip', text);
       node.disabled = !enabled;

@@ -101,21 +101,26 @@ function expandPaths(sheet: Tileset): void {
   sheet.splitMode = 'objects';
 }
 
-/** A short id for a sheet picture, so identical path pages can be told apart. */
-function fingerprint(image: CanvasImageSource, w: number, h: number): string {
+/** A small grayscale copy, so two sheets of the same floors compare as the same picture. */
+function thumbnail(image: CanvasImageSource, w: number, h: number): Uint8Array | null {
+  const tw = 32;
+  const th = 24;
   const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
+  canvas.width = tw;
+  canvas.height = th;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx || w === 0 || h === 0) return `${w}x${h}`;
-  ctx.drawImage(image, 0, 0);
-  const data = ctx.getImageData(0, 0, w, h).data;
-  let hash = 2166136261;
-  for (let i = 0; i < data.length; i++) {
-    hash ^= data[i];
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${w}x${h}:${hash >>> 0}`;
+  if (!ctx || w === 0 || h === 0) return null;
+  ctx.drawImage(image, 0, 0, w, h, 0, 0, tw, th);
+  const data = ctx.getImageData(0, 0, tw, th).data;
+  const gray = new Uint8Array(tw * th);
+  for (let i = 0; i < gray.length; i++) gray[i] = (data[i * 4] + data[i * 4 + 1] + data[i * 4 + 2]) / 3;
+  return gray;
+}
+
+function samePicture(a: Uint8Array, b: Uint8Array): boolean {
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
+  return diff / a.length < 8;
 }
 
 /**
@@ -123,17 +128,18 @@ function fingerprint(image: CanvasImageSource, w: number, h: number): string {
  * point anything already painted with a copy at that one.
  */
 function collapseDuplicatePaths(doc: Doc): void {
-  const seen = new Map<string, number>();
+  const seen: { thumb: Uint8Array; index: number }[] = [];
   const drop: number[] = [];
   const keepOf = new Map<number, number>();
   doc.tilesets.forEach((sheet, index) => {
     if (!/^paths \d+$/i.test(sheet.name) || !sheet.image) return;
-    const key = fingerprint(sheet.image, sheet.imgW, sheet.imgH);
-    const kept = seen.get(key);
-    if (kept === undefined) seen.set(key, index);
+    const thumb = thumbnail(sheet.image, sheet.imgW, sheet.imgH);
+    if (!thumb) return;
+    const kept = seen.find((item) => samePicture(item.thumb, thumb));
+    if (!kept) seen.push({ thumb, index });
     else {
       drop.push(index);
-      keepOf.set(index, kept);
+      keepOf.set(index, kept.index);
     }
   });
   drop.sort((a, b) => b - a);

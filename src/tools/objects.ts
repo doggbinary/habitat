@@ -90,17 +90,115 @@ export class ObjectTools {
   }
 
   select(layer: ObjectLayer, obj: MapObject): void {
+    const members = obj.groupId ? this.withGroup(obj.groupId) : [{ layer, obj }];
     this.store.selectedObject = { layerId: layer.id, objectId: obj.id };
+    this.store.selectedGroup = members.map((member) => ({ layerId: member.layer.id, objectId: member.obj.id }));
+    this.store.emit('ui');
+    this.renderer.requestDraw();
+  }
+
+  /** Box-select. Replaces whatever was selected. */
+  selectMany(hits: { layer: ObjectLayer; obj: MapObject }[]): void {
+    if (hits.length === 0) {
+      this.deselect();
+      return;
+    }
+    this.store.selectedObject = { layerId: hits[0].layer.id, objectId: hits[0].obj.id };
+    this.store.selectedGroup = hits.map((hit) => ({ layerId: hit.layer.id, objectId: hit.obj.id }));
     this.store.emit('ui');
     this.renderer.requestDraw();
   }
 
   deselect(): void {
-    if (!this.store.selectedObject) return;
+    if (!this.store.selectedObject && this.store.selectedGroup.length === 0) return;
     this.store.selectedObject = null;
+    this.store.selectedGroup = [];
     this.store.alignLines = null;
     this.store.emit('ui');
     this.renderer.requestDraw();
+  }
+
+  /** Placed assets whose boxes meet a tile rectangle. */
+  inRect(rect: { x0: number; y0: number; x1: number; y1: number }): { layer: ObjectLayer; obj: MapObject }[] {
+    const tile = this.doc.tileSize;
+    const left = Math.min(rect.x0, rect.x1) * tile;
+    const right = (Math.max(rect.x0, rect.x1) + 1) * tile;
+    const top = Math.min(rect.y0, rect.y1) * tile;
+    const bottom = (Math.max(rect.y0, rect.y1) + 1) * tile;
+    const hits: { layer: ObjectLayer; obj: MapObject }[] = [];
+    for (const layer of this.doc.layers) {
+      if (!isObjectLayer(layer) || !layer.visible || layer.locked) continue;
+      for (const obj of layer.objects) {
+        const { w, h } = objectSize(obj);
+        const overlaps =
+          obj.x + w / 2 > left && obj.x - w / 2 < right && obj.y + h / 2 > top && obj.y - h / 2 < bottom;
+        if (overlaps) hits.push({ layer, obj });
+      }
+    }
+    return hits;
+  }
+
+  selectedMany(): { layer: ObjectLayer; obj: MapObject }[] {
+    const out: { layer: ObjectLayer; obj: MapObject }[] = [];
+    for (const sel of this.store.selectedGroup) {
+      const layer = this.doc.layers.find((item) => item.id === sel.layerId);
+      if (!isObjectLayer(layer)) continue;
+      const obj = layer.objects.find((item) => item.id === sel.objectId);
+      if (obj) out.push({ layer, obj });
+    }
+    return out;
+  }
+
+  private withGroup(groupId: string): { layer: ObjectLayer; obj: MapObject }[] {
+    const out: { layer: ObjectLayer; obj: MapObject }[] = [];
+    for (const layer of this.doc.layers) {
+      if (!isObjectLayer(layer)) continue;
+      for (const obj of layer.objects) if (obj.groupId === groupId) out.push({ layer, obj });
+    }
+    return out;
+  }
+
+  /** Moves the asset under the finger and anything else in the selection by the same amount. */
+  moveSelected(anchor: MapObject, wx: number, wy: number): void {
+    if (anchor.locked) return;
+    const beforeX = anchor.x;
+    const beforeY = anchor.y;
+    const { w, h } = objectSize(anchor);
+    const next = this.aligned(w, h, wx, wy, anchor.id);
+    const dx = next.x - beforeX;
+    const dy = next.y - beforeY;
+    anchor.x = next.x;
+    anchor.y = next.y;
+    for (const { obj } of this.selectedMany()) {
+      if (obj === anchor || obj.locked) continue;
+      obj.x += dx;
+      obj.y += dy;
+    }
+    this.renderer.requestDraw();
+  }
+
+  groupSelected(): void {
+    const members = this.selectedMany().filter((member) => !member.obj.locked);
+    if (members.length < 2) return;
+    const before = snapshot(this.doc);
+    const groupId = uid('group');
+    for (const member of members) member.obj.groupId = groupId;
+    this.store.history.commitSnapshot('Group', before);
+    this.store.selectedGroup = members.map((member) => ({ layerId: member.layer.id, objectId: member.obj.id }));
+    this.store.changed();
+    this.renderer.requestDraw();
+    this.store.toast(`Grouped ${members.length}`);
+  }
+
+  ungroupSelected(): void {
+    const members = this.selectedMany();
+    if (members.length === 0) return;
+    const before = snapshot(this.doc);
+    for (const member of members) delete member.obj.groupId;
+    this.store.history.commitSnapshot('Ungroup', before);
+    this.store.changed();
+    this.renderer.requestDraw();
+    this.store.toast('Ungrouped');
   }
 
   // --- Placing -------------------------------------------------------------
@@ -179,7 +277,18 @@ export class ObjectTools {
     this.store.alignLines = null;
   }
 
+  toggleLock(): void {
+    const found = this.selected();
+    if (!found) return;
+    const locking = !found.obj.locked;
+    this.apply(locking ? 'Lock' : 'Unlock', (_, obj) => {
+      obj.locked = locking;
+    });
+    this.store.toast(locking ? 'Locked' : 'Unlocked');
+  }
+
   moveTo(obj: MapObject, wx: number, wy: number): void {
+    if (obj.locked) return;
     const { w, h } = objectSize(obj);
     const next = this.aligned(w, h, wx, wy, obj.id);
     obj.x = next.x;
@@ -228,6 +337,7 @@ export class ObjectTools {
    * Pixel art only looks crisp at those, so it is worth a gentle pull.
    */
   scaleTo(obj: MapObject, scale: number): void {
+    if (obj.locked) return;
     let next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
     const nearestHalf = Math.round(next * 2) / 2;
     if (nearestHalf > 0 && Math.abs(next - nearestHalf) / nearestHalf < 0.05) next = nearestHalf;
@@ -248,6 +358,7 @@ export class ObjectTools {
   private apply(label: string, mutate: (layer: ObjectLayer, obj: MapObject) => void): void {
     const found = this.selected();
     if (!found) return;
+    if (found.obj.locked && label !== 'Lock' && label !== 'Unlock') return;
     const before = snapshot(this.doc);
     mutate(found.layer, found.obj);
     this.store.history.commitSnapshot(label, before);
@@ -379,7 +490,13 @@ export class ObjectTools {
     const before = snapshot(this.doc);
     const { w } = objectSize(found.obj);
     // Offset the copy so it is visibly a second object, not hidden on top.
-    const copy: MapObject = { ...found.obj, id: uid('obj'), rect: { ...found.obj.rect }, x: found.obj.x + Math.max(8, w / 3) };
+    const copy: MapObject = {
+      ...found.obj,
+      id: uid('obj'),
+      rect: { ...found.obj.rect },
+      x: found.obj.x + Math.max(8, w / 3),
+      locked: false,
+    };
     const index = found.layer.objects.indexOf(found.obj);
     found.layer.objects.splice(index + 1, 0, copy);
     this.store.history.commitSnapshot('Duplicate', before);
