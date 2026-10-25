@@ -105,6 +105,7 @@ interface SerializedTileset {
   assets?: AssetRect[];
   assetsVersion?: number;
   assetsEdited?: boolean;
+  groundAssets?: number[];
   pathStride?: number;
 }
 
@@ -202,6 +203,7 @@ export function serializeProject(doc: Doc, characters: Character[] = []): Serial
       ...(t.assets ? { assets: t.assets.map((a) => ({ ...a })) } : {}),
       ...(t.assetsVersion ? { assetsVersion: t.assetsVersion } : {}),
       ...(t.assetsEdited ? { assetsEdited: true } : {}),
+      ...(t.groundAssets?.length ? { groundAssets: [...t.groundAssets] } : {}),
       ...(t.pathStride ? { pathStride: t.pathStride } : {}),
     })),
     layers: doc.layers.map((l): SerializedLayer => {
@@ -280,11 +282,14 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       if (Array.isArray(t.assets)) tileset.assets = t.assets.map((a) => ({ ...a }));
       if (t.assetsVersion) tileset.assetsVersion = t.assetsVersion;
       if (t.assetsEdited) tileset.assetsEdited = true;
+      if (Array.isArray(t.groundAssets)) tileset.groundAssets = [...t.groundAssets];
       if (t.pathStride) tileset.pathStride = t.pathStride;
       tilesets.push(tileset);
     } catch {
       // A tileset that fails to decode would otherwise shift every later
       // tileset index and silently corrupt the map, so insert a placeholder.
+      // How it was split is kept with it, so a picture that loads again
+      // later comes back whole rather than needing to be worked out afresh.
       tilesets.push({
         id: t.id,
         name: `${t.name} (missing)`,
@@ -299,6 +304,12 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
         cols: 0,
         rows: 0,
         count: 0,
+        ...(t.splitMode ? { splitMode: t.splitMode } : {}),
+        ...(Array.isArray(t.assets) ? { assets: t.assets.map((a) => ({ ...a })) } : {}),
+        ...(t.assetsVersion ? { assetsVersion: t.assetsVersion } : {}),
+        ...(t.assetsEdited ? { assetsEdited: true } : {}),
+        ...(Array.isArray(t.groundAssets) ? { groundAssets: [...t.groundAssets] } : {}),
+        ...(t.pathStride ? { pathStride: t.pathStride } : {}),
       });
     }
   }

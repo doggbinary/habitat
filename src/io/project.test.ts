@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createCharacter } from '../character/model';
 import { createDoc, createObjectLayer, type ObjectLayer, type TileLayer } from '../core/doc';
 import { EMPTY, pack } from '../core/tiles';
-import { fakeObject } from '../test-support/fakes';
+import { fakeObject, fakeTileset } from '../test-support/fakes';
 import { buildMapJson } from './export';
 import {
   deserializeCharacters,
@@ -43,6 +43,21 @@ describe('saving and loading a project', () => {
     expect(back.kind).toBe('objects');
     expect(back.name).toBe('Props');
     expect(back.objects).toEqual(objects.objects);
+  });
+
+  it('remembers which assets are ground, so the Ground page survives a reload', async () => {
+    const doc = createDoc(2, 2, 16);
+    const sheet = fakeTileset('a');
+    sheet.assets = [
+      { x: 0, y: 0, w: 16, h: 16 },
+      { x: 16, y: 0, w: 16, h: 16 },
+      { x: 32, y: 0, w: 16, h: 32 },
+    ];
+    sheet.groundAssets = [0, 1];
+    doc.tilesets = [sheet];
+
+    const loaded = await deserializeProject(throughJson(serializeProject(doc)));
+    expect(loaded.tilesets[0].groundAssets).toEqual([0, 1]);
   });
 
   it('loads a damaged object with neutral values instead of failing', async () => {

@@ -7,7 +7,32 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 8;
+export const DETECT_VERSION = 9;
+
+/** A ground cell is drawn corner to corner; a prop leaves background showing. */
+const TERRAIN_FILL = 0.995;
+/** Cells this close in average colour are the same ground. */
+const TERRAIN_MATCH = 10;
+/** ...and ground has to turn up this many times to count as a texture. */
+const TERRAIN_REPEATS = 3;
+/** Each cell is averaged down to this many blocks a side before comparing. */
+const LOOK_SIZE = 8;
+/** Colour jump across a grid line that means two drawings meet there. */
+const SEAM_CUT = 18;
+/** ...and the stronger jump a row boundary needs, so a facade is not sliced. */
+const SEAM_CUT_ROW = 48;
+/** ...judged only where this share of the line has both sides drawn. */
+const SEAM_TOUCH = 0.3;
+/** A colour has to cover this much of the ground to count as a ground colour. */
+const PALETTE_SHARE = 0.002;
+/** ...and a pixel this close to one of those colours is ground too. */
+const PALETTE_NEAR = 20;
+/** An island this many cells big may be a panel with things standing on it. */
+const PANEL_MIN_CELLS = 6;
+/** ...and is only treated as one when this much of it turns out to be ground. */
+const PANEL_BACKGROUND = 0.3;
+/** Whatever is left standing has to be this much of a cell to be a prop. */
+const PANEL_PIECE_SHARE = 0.25;
 
 /** A cell this solid reads as floor: ground texture runs edge to edge. */
 const FLOOR_FILL = 0.97;
@@ -534,35 +559,376 @@ export function sheetGrid(tileset: Tileset): SheetGrid {
  * square on its own. A ground sheet (A1 to A5) is all floor squares.
  */
 export function detectSheetAssets(tileset: Tileset): AssetRect[] {
-  if (!tileset.image) return [];
+  return detectSheetSplit(tileset).assets;
+}
+
+/** The sheet's assets along with which of them are paintable ground. */
+export function detectSheetSplit(tileset: Tileset): SheetSplit {
+  if (!tileset.image) return { assets: [], ground: [] };
   const { w, h } = alphaChannel(tileset.image);
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return [];
+  if (!ctx) return { assets: [], ground: [] };
   ctx.drawImage(tileset.image, 0, 0);
   const rgba = ctx.getImageData(0, 0, w, h).data;
-  return assetsInImage(rgba, w, h, sheetGrid(tileset), sheetIsAllTiles(tileset.name));
+  return splitSheet(rgba, w, h, sheetGrid(tileset), sheetIsAllTiles(tileset.name));
 }
 
 /**
- * Every asset on a sheet. A ground page is one square per cell. An object
- * page is one sticker per connected drawing: a building stays whole, and a
- * gap in the picture keeps the next building separate. Solid walls are not
- * cut into floor squares.
+ * Every asset on a sheet, and which of them are ground.
+ *
+ * A ground page is one square per cell. An object page is one sticker per
+ * connected drawing, with the terrain underneath lifted out first: a tree
+ * standing on grass is a tree, the grass is a paintable square, and a
+ * building, which is solid but does not repeat, stays one whole sticker.
  */
-export function assetsInImage(rgba: Uint8ClampedArray, w: number, h: number, grid: SheetGrid, groundSheet: boolean): AssetRect[] {
+export function assetsInImage(
+  rgba: Uint8ClampedArray,
+  w: number,
+  h: number,
+  grid: SheetGrid,
+  groundSheet: boolean,
+): AssetRect[] {
+  return splitSheet(rgba, w, h, grid, groundSheet).assets;
+}
+
+export interface SheetSplit {
+  assets: AssetRect[];
+  /** Places in `assets` that are a square of ground, ready for the brush. */
+  ground: number[];
+}
+
+export function splitSheet(
+  rgba: Uint8ClampedArray,
+  w: number,
+  h: number,
+  grid: SheetGrid,
+  groundSheet: boolean,
+): SheetSplit {
   const alpha = new Uint8Array(w * h);
   for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4 + 3];
-  if (!groundSheet) {
-    return readingOrder(withoutInnerPieces(detectAssetsInMask(alpha, w, h, { tile: grid })));
-  }
-  const ground = findGround(alpha, w, h, grid, true);
-  const floor: AssetRect[] = [];
   const count = grid.cols * grid.rows;
-  for (let i = 0; i < count; i++) if (ground.cells[i]) floor.push(cellsBox([i], grid));
-  return readingOrder(floor);
+
+  if (groundSheet) {
+    const whole = findGround(alpha, w, h, grid, true);
+    const floor: AssetRect[] = [];
+    for (let i = 0; i < count; i++) if (whole.cells[i]) floor.push(cellsBox([i], grid));
+    const assets = readingOrder(floor);
+    return { assets, ground: assets.map((_, i) => i) };
+  }
+
+  const terrain = terrainCells(rgba, alpha, w, h, grid);
+  const squares: AssetRect[] = [];
+  for (let i = 0; i < count; i++) if (terrain[i]) squares.push(cellsBox([i], grid));
+
+  // The terrain is held back while the props are found, so a bench on a
+  // path is a bench rather than part of the path.
+  const found = detectAssetsInMask(alpha, w, h, { tile: grid, ground: { grid, cells: terrain, props: [] } });
+  // Packs butt drawings right up against each other, with no background
+  // between them to split on, so touching ones are cut at the grid line
+  // where the picture changes.
+  const cut = found.flatMap((rect) => splitAtSeams(rect, rgba, alpha, w, grid));
+  // Trees arranged on a panel of grass are joined by the grass, which no
+  // amount of flood filling will separate, so the grass is taken out from
+  // under them and what is left standing is found again.
+  const palette = terrainPalette(rgba, alpha, w, h, grid, terrain);
+  const props = withoutInnerPieces(cut.flatMap((rect) => splitPanel(rect, rgba, alpha, w, grid, palette)));
+
+  const assets = readingOrder([...props, ...squares]);
+  const isGround = new Set(squares);
+  return { assets, ground: assets.flatMap((rect, i) => (isGround.has(rect) ? [i] : [])) };
+}
+
+/**
+ * The colours ground is made of on this sheet, taken from the cells already
+ * known to be ground. A sheet with no ground has an empty palette, so a page
+ * of buildings is never touched by the step that uses it.
+ */
+function terrainPalette(
+  rgba: Uint8ClampedArray,
+  alpha: Uint8Array,
+  w: number,
+  h: number,
+  grid: SheetGrid,
+  terrain: Uint8Array,
+): number[][] {
+  const counts = new Map<number, number>();
+  let total = 0;
+  forEachCell(grid, w, h, (index, x0, y0, cw, ch) => {
+    if (!terrain[index]) return;
+    for (let y = y0; y < y0 + ch; y++) {
+      for (let x = x0; x < x0 + cw; x++) {
+        const i = y * w + x;
+        if (alpha[i] <= ALPHA_CUTOFF) continue;
+        const key = (rgba[i * 4] << 16) | (rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+        total += 1;
+      }
+    }
+  });
+  if (total === 0) return [];
+
+  const palette: number[][] = [];
+  for (const [key, n] of counts) {
+    if (n / total < PALETTE_SHARE) continue;
+    palette.push([(key >> 16) & 255, (key >> 8) & 255, key & 255]);
+  }
+  return palette;
+}
+
+/** Whether a pixel is close enough to one of the ground colours to be background. */
+function isTerrainColour(rgba: Uint8ClampedArray, at: number, palette: number[][]): boolean {
+  const r = rgba[at];
+  const g = rgba[at + 1];
+  const b = rgba[at + 2];
+  for (const colour of palette) {
+    if (Math.abs(colour[0] - r) + Math.abs(colour[1] - g) + Math.abs(colour[2] - b) <= PALETTE_NEAR) return true;
+  }
+  return false;
+}
+
+/**
+ * Breaks up a panel of ground with things standing on it.
+ *
+ * Sheets often draw a block of grass and dot trees and bushes over it. The
+ * grass runs behind them all, so they come out as one island however the
+ * flood fill is tuned. Taking out the pixels that are the sheet's own ground
+ * colours leaves the trees standing alone, and they can then be found
+ * separately. Only large, solidly filled islands are treated this way, so an
+ * ordinary prop is never picked apart.
+ */
+function splitPanel(
+  rect: AssetRect,
+  rgba: Uint8ClampedArray,
+  alpha: Uint8Array,
+  w: number,
+  grid: SheetGrid,
+  palette: number[][],
+): AssetRect[] {
+  if (palette.length === 0) return [rect];
+  const cellArea = grid.w * grid.h;
+  if (rect.w * rect.h < cellArea * PANEL_MIN_CELLS) return [rect];
+
+  const mask = new Uint8Array(w * (rect.y + rect.h));
+  let drawn = 0;
+  let kept = 0;
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      const i = y * w + x;
+      if (alpha[i] <= ALPHA_CUTOFF) continue;
+      drawn += 1;
+      if (isTerrainColour(rgba, i * 4, palette)) continue;
+      mask[i] = 1;
+      kept += 1;
+    }
+  }
+
+  // Mostly background means this was a panel. Mostly left means the ground
+  // colours were incidental and the island is a drawing in its own right.
+  const removed = drawn === 0 ? 0 : 1 - kept / drawn;
+  if (removed < PANEL_BACKGROUND) return [rect];
+
+  const pieces = absorbFragments(findIslands(mask, w, rect, 0, 1), cellArea * FRAGMENT_SHARE)
+    .filter((piece) => piece.area >= cellArea * PANEL_PIECE_SHARE)
+    .map(({ x, y, w: pw, h: ph }) => ({ x, y, w: pw, h: ph }));
+  return pieces.length > 1 ? pieces : [rect];
+}
+
+/**
+ * Cuts one run of touching drawings apart at the grid lines where the
+ * picture actually changes.
+ *
+ * Sheets pack buildings and shopfronts edge to edge with no background
+ * between them, so they come out of the flood fill as one island. Along a
+ * grid line inside a single drawing the pixels either side match, because
+ * it is one continuous wall; between two drawings they jump. Cutting only
+ * at the jumps keeps a tower whole and still separates it from its
+ * neighbour.
+ */
+function splitAtSeams(
+  rect: AssetRect,
+  rgba: Uint8ClampedArray,
+  alpha: Uint8Array,
+  w: number,
+  grid: SheetGrid,
+): AssetRect[] {
+  const cutsX = seamCuts(rect.x, rect.w, grid.margin, grid.w + grid.spacing, SEAM_CUT, (at) =>
+    seamStrength(rgba, alpha, w, at, rect, true),
+  );
+  // A row cut has to be a stronger jump than a sideways one: a building's
+  // roof, windows and doorway are bands that would otherwise read as a
+  // change and slice it into storeys.
+  const cutsY = seamCuts(rect.y, rect.h, grid.margin, grid.h + grid.spacing, SEAM_CUT_ROW, (at) =>
+    seamStrength(rgba, alpha, w, at, rect, false),
+  );
+  if (cutsX.length === 0 && cutsY.length === 0) return [rect];
+
+  const spans = (start: number, size: number, cuts: number[]): number[] => [start, ...cuts, start + size];
+  const xs = spans(rect.x, rect.w, cutsX);
+  const ys = spans(rect.y, rect.h, cutsY);
+  const pieces: AssetRect[] = [];
+  for (let r = 0; r < ys.length - 1; r++) {
+    for (let c = 0; c < xs.length - 1; c++) {
+      const box = tightBox(alpha, w, xs[c], ys[r], xs[c + 1], ys[r + 1]);
+      if (box) pieces.push(box);
+    }
+  }
+  return pieces.length > 0 ? pieces : [rect];
+}
+
+/** Grid lines strictly inside a span, where the picture jumps. */
+function seamCuts(
+  start: number,
+  size: number,
+  margin: number,
+  step: number,
+  least: number,
+  strengthAt: (at: number) => number | null,
+): number[] {
+  // One cell wide or less has no line inside it to cut on.
+  if (size < step * 2) return [];
+  const cuts: number[] = [];
+  const first = Math.ceil((start - margin) / step);
+  for (let k = first; ; k++) {
+    const at = margin + k * step;
+    if (at <= start) continue;
+    if (at >= start + size) break;
+    const strength = strengthAt(at);
+    if (strength !== null && strength >= least) cuts.push(at);
+  }
+  return cuts;
+}
+
+/**
+ * How different the two sides of a line are, averaged over the pixels where
+ * both sides are drawn. Null when the sides barely touch, which means the
+ * flood fill joined them through a thin bridge and there is nothing to judge.
+ */
+function seamStrength(
+  rgba: Uint8ClampedArray,
+  alpha: Uint8Array,
+  w: number,
+  at: number,
+  rect: AssetRect,
+  sideways: boolean,
+): number | null {
+  const from = sideways ? rect.y : rect.x;
+  const to = sideways ? rect.y + rect.h : rect.x + rect.w;
+  let total = 0;
+  let shared = 0;
+  for (let t = from; t < to; t++) {
+    const before = sideways ? t * w + at - 1 : (at - 1) * w + t;
+    const after = sideways ? t * w + at : at * w + t;
+    if (alpha[before] <= ALPHA_CUTOFF || alpha[after] <= ALPHA_CUTOFF) continue;
+    total +=
+      Math.abs(rgba[before * 4] - rgba[after * 4]) +
+      Math.abs(rgba[before * 4 + 1] - rgba[after * 4 + 1]) +
+      Math.abs(rgba[before * 4 + 2] - rgba[after * 4 + 2]);
+    shared += 1;
+  }
+  if (shared < (to - from) * SEAM_TOUCH) return null;
+  return total / (shared * 3);
+}
+
+/** The box of drawn pixels inside a region, or null when it is all background. */
+function tightBox(alpha: Uint8Array, w: number, x0: number, y0: number, x1: number, y1: number): AssetRect | null {
+  let minX = x1;
+  let minY = y1;
+  let maxX = x0 - 1;
+  let maxY = y0 - 1;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      if (alpha[y * w + x] <= ALPHA_CUTOFF) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < minX) return null;
+  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+
+/**
+ * Which cells are ground: grass, water, brick, pavement.
+ *
+ * Ground is a texture that repeats. A building facade fills its cells just
+ * as solidly, but every cell of it is different, so counting look-alikes
+ * tells the two apart where counting solid pixels cannot. Cells are matched
+ * against the handful of looks found so far rather than against each other,
+ * which keeps a 16 by 16 sheet to a few thousand comparisons.
+ */
+export function terrainCells(
+  rgba: Uint8ClampedArray,
+  alpha: Uint8Array,
+  w: number,
+  h: number,
+  grid: SheetGrid,
+): Uint8Array {
+  const count = grid.cols * grid.rows;
+  const cells = new Uint8Array(count);
+  const kinds: { look: Float64Array; members: number[] }[] = [];
+
+  forEachCell(grid, w, h, (index, x0, y0, cw, ch) => {
+    let solid = 0;
+    for (let y = y0; y < y0 + ch; y++) {
+      for (let x = x0; x < x0 + cw; x++) if (alpha[y * w + x] > ALPHA_CUTOFF) solid++;
+    }
+    // Ground covers its square completely; anything with a see-through
+    // corner is a drawing sitting on the background.
+    if (solid / (cw * ch) < TERRAIN_FILL) return;
+
+    const look = cellLook(rgba, w, x0, y0, cw, ch);
+    const kind = kinds.find((k) => lookDistance(k.look, look) < TERRAIN_MATCH);
+    if (kind) kind.members.push(index);
+    else kinds.push({ look, members: [index] });
+  });
+
+  for (const kind of kinds) {
+    if (kind.members.length < TERRAIN_REPEATS) continue;
+    for (const index of kind.members) cells[index] = 1;
+  }
+  return cells;
+}
+
+/** A cell boiled down to a grid of average colours, so near-matches still match. */
+function cellLook(rgba: Uint8ClampedArray, w: number, x0: number, y0: number, cw: number, ch: number): Float64Array {
+  const look = new Float64Array(LOOK_SIZE * LOOK_SIZE * 3);
+  for (let by = 0; by < LOOK_SIZE; by++) {
+    for (let bx = 0; bx < LOOK_SIZE; bx++) {
+      const sx = x0 + Math.floor((bx * cw) / LOOK_SIZE);
+      const ex = x0 + Math.floor(((bx + 1) * cw) / LOOK_SIZE);
+      const sy = y0 + Math.floor((by * ch) / LOOK_SIZE);
+      const ey = y0 + Math.floor(((by + 1) * ch) / LOOK_SIZE);
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let n = 0;
+      for (let y = sy; y < ey; y++) {
+        for (let x = sx; x < ex; x++) {
+          const i = (y * w + x) * 4;
+          r += rgba[i];
+          g += rgba[i + 1];
+          b += rgba[i + 2];
+          n += 1;
+        }
+      }
+      if (n === 0) continue;
+      const at = (by * LOOK_SIZE + bx) * 3;
+      look[at] = r / n;
+      look[at + 1] = g / n;
+      look[at + 2] = b / n;
+    }
+  }
+  return look;
+}
+
+function lookDistance(a: Float64Array, b: Float64Array): number {
+  let total = 0;
+  for (let i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i]);
+  return total / a.length;
 }
 
 /** Drops any asset lying entirely inside another: it is a piece of that one, not an asset. */

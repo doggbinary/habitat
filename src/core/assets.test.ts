@@ -3,6 +3,7 @@ import {
   deleteAssets,
   detectAssetsInMask,
   assetsInImage,
+  splitSheet,
   findGround,
   isGroundSheetName,
   sheetIsAllTiles,
@@ -201,9 +202,22 @@ describe('telling ground from props', () => {
     return rgba;
   };
 
+  /**
+   * A drawing, as opposed to ground: solid, but every square of it is
+   * different, the way a facade's windows, doors and roof differ.
+   */
+  const drawing = (col: number, row: number, cols: number, rows: number, base: number) => {
+    const cells: [number, number, number][] = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) cells.push([col + c, row + r, base + (r * cols + c) * 17]);
+    }
+    return cells;
+  };
+
   it('keeps a solid building as one asset instead of cutting it into squares', () => {
-    const rgba = painted([[0, 0, 90], [1, 0, 90], [0, 1, 90], [1, 1, 90]]);
-    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([{ x: 0, y: 0, w: 20, h: 20 }]);
+    expect(assetsInImage(painted(drawing(0, 0, 2, 2, 40)), W, H, grid, false)).toEqual([
+      { x: 0, y: 0, w: 20, h: 20 },
+    ]);
   });
 
   it('keeps two drawings apart when the background shows between them', () => {
@@ -212,6 +226,30 @@ describe('telling ground from props', () => {
       { x: 0, y: 0, w: 10, h: 10 },
       { x: 30, y: 0, w: 10, h: 10 },
     ]);
+  });
+
+  it('cuts two touching drawings apart at the line where the picture changes', () => {
+    // A dark building beside a pale one, with no gap between them.
+    const rgba = painted([...drawing(0, 0, 2, 2, 30), ...drawing(2, 0, 2, 2, 190)]);
+    expect(assetsInImage(rgba, W, H, grid, false)).toEqual([
+      { x: 0, y: 0, w: 20, h: 20 },
+      { x: 20, y: 0, w: 20, h: 20 },
+    ]);
+  });
+
+  it('calls a texture that repeats ground, and offers it a square at a time', () => {
+    // The same shade over and over is grass or paving, not a drawing.
+    const cells: [number, number, number][] = [];
+    for (let c = 0; c < 4; c++) cells.push([c, 0, 120], [c, 1, 120]);
+    const { assets, ground } = splitSheet(painted(cells), W, H, grid, false);
+    expect(assets).toHaveLength(8);
+    expect(ground).toHaveLength(8);
+    expect(assets.every((a) => a.w === 10 && a.h === 10)).toBe(true);
+  });
+
+  it('leaves a drawing out of the ground, however solid it is', () => {
+    const { ground } = splitSheet(painted(drawing(0, 0, 2, 2, 40)), W, H, grid, false);
+    expect(ground).toEqual([]);
   });
 
   it('reads sheet kinds from RPG Maker style names', () => {

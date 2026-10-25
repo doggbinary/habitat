@@ -40,6 +40,11 @@ export interface Tileset {
   /** Set once the user merges, splits or deletes assets by hand. */
   assetsEdited?: boolean;
   /**
+   * Places in `assets` that are a square of ground rather than a prop:
+   * grass, water, brick, pavement. These are what the Ground page gathers.
+   */
+  groundAssets?: number[];
+  /**
    * Set on expanded path sheets. Tile index `row * pathStride + role` is one
    * shape of that ground, so painting can swap in the piece that meets its
    * neighbours.

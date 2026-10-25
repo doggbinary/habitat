@@ -11,7 +11,7 @@ import {
   type Tileset,
 } from './core/doc';
 import { sameAsset, type AssetRef } from './ui/packs';
-import { DETECT_VERSION, assetsOf, deleteAssets, detectSheetAssets, mergeAssets, tileIndexOf } from './core/assets';
+import { DETECT_VERSION, assetsOf, deleteAssets, detectSheetSplit, mergeAssets, tileIndexOf } from './core/assets';
 import { PATH_STRIDE, expandPathSheet, isRawPathSheet } from './core/autotile';
 import { applyTilesetMerge, pathMergePlan } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
@@ -65,7 +65,9 @@ function detectInto(sheet: Tileset): void {
     expandPaths(sheet);
     return;
   }
-  sheet.assets = detectSheetAssets(sheet);
+  const split = detectSheetSplit(sheet);
+  sheet.assets = split.assets;
+  sheet.groundAssets = split.ground;
   sheet.assetsVersion = DETECT_VERSION;
   sheet.splitMode = 'objects';
 }
@@ -559,6 +561,8 @@ export class App {
     this.editor.structural(label, () => {
       sheet.assets = next;
       sheet.assetsEdited = true;
+      // The places recorded as ground no longer line up with the new list.
+      sheet.groundAssets = undefined;
     });
     this.store.libraryPick = null;
     this.store.toast(`${label}: ${next.length} left`);
