@@ -76,7 +76,7 @@ describe('merging repeated ground pages', () => {
 
     applyTilesetMerge(doc, new Map([[1, 'a'], [2, 'a'], [3, 'a']]));
 
-    expect(doc.tilesets.map((s) => s.name)).toEqual(['Paths 1']);
+    expect(doc.tilesets.map((s) => s.name)).toEqual(['Floors 1']);
     expect(tilesetOf(layer.data[0])).toBe(0);
   });
 

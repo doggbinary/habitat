@@ -138,9 +138,9 @@ export function isGroundSheetName(name: string): boolean {
   return /(?:^|[^a-z0-9])a[1-5](?:[^0-9]|$)/i.test(name);
 }
 
-/** Paths pages are a grid of road and ground squares, one asset per square. */
+/** Floor pages are a grid of floor squares, one asset per square. */
 export function sheetIsAllTiles(name: string): boolean {
-  return isGroundSheetName(name) || /^paths \d+$/i.test(name);
+  return isGroundSheetName(name) || /^(?:paths|floors) \d+$/i.test(name);
 }
 
 /** Whether this library sticker is a floor square, painted with a finger, not placed. */

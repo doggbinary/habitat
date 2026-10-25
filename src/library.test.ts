@@ -17,7 +17,7 @@ describe('object-sheet library', () => {
     expect(isLibrarySheet(['restaurant', 'restaurant(2)'], '1.png')).toBe(false);
   });
 
-  it('puts every ground page into Paths 1, Paths 2, ahead of the object pages', () => {
+  it('puts every floor page into Floors 1, Floors 2, ahead of the object pages', () => {
     expect(isPathSheet(['Nature Park'], 'Tile_A2-1 (2).png')).toBe(true);
     expect(isPathSheet(['Nature Park'], 'Auto-tile-A4-walls-3.png')).toBe(false);
     expect(isPathSheet(['office(1)'], 'Tile_A2.png')).toBe(false);
@@ -27,7 +27,7 @@ describe('object-sheet library', () => {
         { folders: ['Modern Suburb Neighborhood'], file: 'Tile_A2-2.png' },
         { folders: ['Nature Park'], file: 'Tile_A2-1 (2).png' },
       ]).map((entry) => entry.name),
-    ).toEqual(['Paths 1', 'Paths 2', 'Nature Park 1']);
+    ).toEqual(['Floors 1', 'Floors 2', 'Nature Park 1']);
   });
 
   it('keeps one copy when the same ground page is in several packs', () => {
@@ -37,7 +37,7 @@ describe('object-sheet library', () => {
         { folders: ['Modern Hotel'], file: 'Tile_A2-2.png', id: 'same' },
         { folders: ['ground'], file: 'Tile_A2-3.png', id: 'other' },
       ]).map((entry) => entry.name),
-    ).toEqual(['Paths 1', 'Paths 2']);
+    ).toEqual(['Floors 1', 'Floors 2']);
   });
 
   it('recognises a finished scene, where one asset covers the page', () => {

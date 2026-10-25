@@ -10,9 +10,9 @@ export interface PathSheet {
   thumb: Uint8Array | null;
 }
 
-/** A ground page, including one saved before its picture left the library. */
+/** A floor page ("Paths" in older projects), including one whose picture is missing. */
 export function isPathsSheet(name: string): boolean {
-  return /^paths \d+(?: \(missing\))?$/i.test(name);
+  return /^(?:paths|floors) \d+(?: \(missing\))?$/i.test(name);
 }
 
 /** Two ground pages drawn the same way, allowing for a pack's small retouches. */
@@ -105,6 +105,6 @@ export function applyTilesetMerge(doc: Doc, plan: Map<number, string>): void {
 
   let number = 1;
   for (const sheet of doc.tilesets) {
-    if (isPathsSheet(sheet.name)) sheet.name = `Paths ${number++}`;
+    if (isPathsSheet(sheet.name)) sheet.name = `Floors ${number++}`;
   }
 }

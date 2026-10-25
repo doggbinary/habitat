@@ -25,7 +25,6 @@ import {
   type Stamp,
 } from '../core/stamp';
 import type { Store } from '../core/store';
-import { pathPieceAt } from '../core/path-tiles';
 import { patchTileAt } from '../core/assets';
 import { EMPTY, flagsOf, indexOf, pack, tilesetOf, type PackedTile } from '../core/tiles';
 import type { Renderer } from '../render/renderer';
@@ -369,8 +368,6 @@ export class Editor {
       if (erasing) this.erase(cell.x, cell.y);
       else this.paintStamp(cell.x, cell.y);
     }
-    const layer = this.targetLayer();
-    if (layer) this.retilePaths(layer, cells);
   }
 
   fillRect(rect: Rect, erasing: boolean): void {
@@ -391,33 +388,6 @@ export class Editor {
           if (tile !== EMPTY) this.write(layer, x, y, tile);
         }
       }
-    }
-    const covered: Cell[] = [];
-    for (let y = r.y0; y <= r.y1; y++) for (let x = r.x0; x <= r.x1; x++) covered.push({ x, y });
-    this.retilePaths(layer, covered);
-  }
-
-  /**
-   * After a path is painted or rubbed out, each square becomes the piece
-   * whose edges meet the same path beside it: centre, straight, or bend.
-   */
-  private retilePaths(layer: TileLayer, seeds: Cell[]): void {
-    const doc = this.doc;
-    const seen = new Set<number>();
-    const queue: Cell[] = [];
-    const push = (x: number, y: number) => {
-      if (!inBounds(doc, x, y)) return;
-      const id = cellIndex(doc, x, y);
-      if (seen.has(id)) return;
-      seen.add(id);
-      queue.push({ x, y });
-    };
-    for (const seed of seeds) {
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) push(seed.x + dx, seed.y + dy);
-    }
-    for (const cell of queue) {
-      const piece = pathPieceAt(doc, layer, cell.x, cell.y);
-      if (piece !== null) this.put(layer, cell.x, cell.y, piece, this.stroke);
     }
   }
 

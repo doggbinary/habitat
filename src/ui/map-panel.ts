@@ -67,7 +67,7 @@ export class MapPanel {
         ]),
         el('p', {
           class: 'hint',
-          text: 'Pick a drawing of a map. It becomes a locked background 32 squares wide, lined up with the grid, so paths and objects land on its squares.',
+          text: 'Pick a drawing of a map. It becomes a locked background 32 squares wide, lined up with the grid, so floors and objects land on its squares.',
         }),
         button('btn subtle full', 'New blank map', () => this.actions.newMap(), [el('span', { text: 'New blank map' })]),
         button('btn subtle full', 'Open project file', () => this.actions.openProject(), [
@@ -91,7 +91,7 @@ export class MapPanel {
         el('div', { class: 'gesture-help' }, [
           gesture('Apple Pencil', 'Does the tool: paint, erase, box tiles, grab assets'),
           gesture('One finger', 'Pans. Tap an asset to select it, then drag it'),
-          gesture('Finger paints paths', 'When on, one finger paints with a path or floor brush'),
+          gesture('Finger paints floors', 'When on, one finger paints with a floor square'),
           gesture('Two fingers', 'Pinch to zoom, drag to pan, pinch an asset to resize'),
           gesture('Two-finger tap', 'Undo'),
           gesture('Three-finger tap', 'Redo'),

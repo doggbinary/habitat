@@ -532,7 +532,7 @@ export class Shell {
         store.emit('ui');
         store.emit('doc');
       }),
-      this.chipToggle('pencilTip', 'Finger paints paths', store.settings.fingerDraws, () => {
+      this.chipToggle('pencilTip', 'Finger paints floors', store.settings.fingerDraws, () => {
         store.settings.fingerDraws = !store.settings.fingerDraws;
         store.emit('ui');
       }),

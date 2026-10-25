@@ -24,8 +24,7 @@ import {
   tileIndexOf,
   type AssetEdit,
 } from './core/assets';
-import { PATH_STRIDE, expandPathSheet, isRawPathSheet } from './core/autotile';
-import { repieceAllPaths, restridePaths } from './core/path-tiles';
+import { floorIndexFromPath, floorTiles, isRawFloorSheet } from './core/autotile';
 import { applyTilesetMerge, pathMergePlan } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
 import { dominantColor, recolorToCanvas } from './io/recolor';
@@ -75,11 +74,11 @@ function needsDetection(sheet: Tileset): boolean {
 
 /** Finds a sheet's assets and stamps them with the detector that found them. */
 function detectInto(sheet: Tileset): void {
-  // An expanded path page is already its pieces; splitting it again would
-  // treat them as a raw page.
-  if (sheet.pathStride && sheet.image instanceof HTMLCanvasElement) return;
-  if (sheet.image && isRawPathSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) {
-    expandPaths(sheet);
+  // A floor page already built is its squares; building it again would read
+  // them as a raw page.
+  if (isFloorPage(sheet) && sheet.image instanceof HTMLCanvasElement) return;
+  if (sheet.image && isRawFloorSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) {
+    buildFloors(sheet);
     return;
   }
   const split = detectSheetSplit(sheet);
@@ -90,8 +89,12 @@ function detectInto(sheet: Tileset): void {
   sheet.splitMode = 'objects';
 }
 
-/** Rebuilds a ground page into pieces whose edges meet. */
-function expandPaths(sheet: Tileset): void {
+function isFloorPage(sheet: Tileset): boolean {
+  return /^(?:paths|floors) \d+$/i.test(sheet.name);
+}
+
+/** Turns a pack's floor page into one seamless square per floor type. */
+function buildFloors(sheet: Tileset): void {
   const image = sheet.image;
   if (!image) return;
   const canvas = document.createElement('canvas');
@@ -101,27 +104,43 @@ function expandPaths(sheet: Tileset): void {
   if (!ctx) return;
   ctx.drawImage(image, 0, 0);
   const src = ctx.getImageData(0, 0, sheet.imgW, sheet.imgH).data;
-  const expanded = expandPathSheet(src, sheet.imgW, sheet.imgH, sheet.tileW);
+  const floors = floorTiles(src, sheet.imgW, sheet.imgH, sheet.tileW);
   const next = document.createElement('canvas');
-  next.width = expanded.width;
-  next.height = expanded.height;
+  next.width = floors.width;
+  next.height = floors.height;
   const out = next.getContext('2d');
   if (!out) return;
-  const pixels = new Uint8ClampedArray(expanded.width * expanded.height * 4);
-  pixels.set(expanded.rgba);
-  out.putImageData(new ImageData(pixels, expanded.width, expanded.height), 0, 0);
+  const pixels = new Uint8ClampedArray(floors.width * floors.height * 4);
+  pixels.set(floors.rgba);
+  out.putImageData(new ImageData(pixels, floors.width, floors.height), 0, 0);
   sheet.image = next;
-  sheet.imgW = expanded.width;
-  sheet.imgH = expanded.height;
-  sheet.cols = expanded.cols;
-  sheet.rows = expanded.rows;
-  sheet.count = expanded.cols * expanded.rows;
+  sheet.imgW = floors.width;
+  sheet.imgH = floors.height;
+  sheet.cols = floors.cols;
+  sheet.rows = floors.rows;
+  sheet.count = floors.cols * floors.rows;
   sheet.margin = 0;
   sheet.spacing = 0;
-  sheet.assets = expanded.assets;
-  sheet.pathStride = PATH_STRIDE;
+  sheet.assets = floors.assets;
+  sheet.groundAssets = floors.assets.map((_, i) => i);
+  sheet.groundBlocks = undefined;
   sheet.assetsVersion = DETECT_VERSION;
   sheet.splitMode = 'objects';
+}
+
+/**
+ * Older projects painted "Paths" with edge and corner pieces. Each painted
+ * square becomes the seamless square of the same floor type instead.
+ */
+function pathsToFloors(doc: Doc, sheetIndex: number, pathStride: number): void {
+  for (const layer of doc.layers) {
+    if (layer.kind !== 'tiles') continue;
+    for (let i = 0; i < layer.data.length; i++) {
+      const tile = layer.data[i];
+      if (tile === EMPTY || tilesetOf(tile) !== sheetIndex) continue;
+      layer.data[i] = pack(sheetIndex, floorIndexFromPath(indexOf(tile), pathStride), 0);
+    }
+  }
 }
 
 /** A small grayscale copy, so two sheets of the same floors compare as the same picture. */
@@ -371,8 +390,8 @@ export class App {
         // Show each page as it lands so the iPad is not empty for minutes.
         if (opened) {
           opened = false;
-          const firstPaths = this.store.doc.tilesets.findIndex((sheet) => sheet.name === 'Paths 1');
-          this.store.activeTileset = firstPaths >= 0 ? firstPaths : 0;
+          const firstFloors = this.store.doc.tilesets.findIndex((sheet) => sheet.name === 'Floors 1');
+          this.store.activeTileset = firstFloors >= 0 ? firstFloors : 0;
           this.selectFirstTile();
           this.shell.openTab('tiles');
         }
@@ -391,11 +410,11 @@ export class App {
     return added;
   }
 
-  /** Path pages stay at the front; everything else appends. */
+  /** Floor pages stay at the front; everything else appends. */
   private insertLibrarySheet(tileset: Tileset): void {
-    if (/^paths \d+$/i.test(tileset.name)) {
+    if (/^floors \d+$/i.test(tileset.name)) {
       let at = 0;
-      while (at < this.store.doc.tilesets.length && /^paths \d+$/i.test(this.store.doc.tilesets[at].name)) {
+      while (at < this.store.doc.tilesets.length && /^floors \d+$/i.test(this.store.doc.tilesets[at].name)) {
         at += 1;
       }
       this.store.doc.tilesets.splice(at, 0, tileset);
@@ -431,22 +450,19 @@ export class App {
     // there was a separate ground view, or by an older detector. Placed
     // assets keep the rectangle they were placed with, so the map is unchanged.
     collapseDuplicatePaths(doc);
-    let restrided = false;
     doc.tilesets.forEach((sheet, index) => {
-      // Path pages are expanded every load: the saved file keeps the original
-      // ground picture, and the pieces are built from it. Object pages that
-      // need a newer detector are redone after the first paint, not here.
-      if (!sheet.image || !isRawPathSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) return;
-      const oldStride = sheet.pathStride;
-      expandPaths(sheet);
-      // Maps painted with an older set of pieces keep each square's ground
-      // type and get the piece that meets its neighbours.
-      if (oldStride && oldStride !== PATH_STRIDE) {
-        restridePaths(doc, index, oldStride, PATH_STRIDE);
-        restrided = true;
+      // Floor pages are built every load: the saved file keeps the pack's
+      // original picture. Object pages that need a newer detector are redone
+      // after the first paint, not here.
+      if (!sheet.image || !isRawFloorSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) return;
+      const pathStride = sheet.pathStride;
+      buildFloors(sheet);
+      if (pathStride) {
+        pathsToFloors(doc, index, pathStride);
+        sheet.pathStride = undefined;
       }
+      sheet.name = sheet.name.replace(/^paths/i, 'Floors');
     });
-    if (restrided) repieceAllPaths(doc);
     // Maps made with 16 px squares shrank every library tile to a third,
     // which is what warped the pixels. They move onto the art's own size.
     const upgraded = upgradeTileSize(doc);
@@ -658,8 +674,8 @@ export class App {
     const label = {
       merge: 'Merge assets',
       delete: 'Delete assets',
-      toGround: 'Move to paths',
-      toObjects: 'Move back to objects',
+      toGround: 'Make floor',
+      toObjects: 'Not a floor',
     }[op];
     this.editor.structural(label, () => {
       sheet.assets = next.assets;
@@ -668,8 +684,8 @@ export class App {
       sheet.assetsEdited = true;
     });
     this.store.libraryPick = null;
-    if (op === 'toGround') this.store.toast('Moved to the Ground page. Pick it there and paint it like a path.');
-    else if (op === 'toObjects') this.store.toast('Back on its sheet as an object');
+    if (op === 'toGround') this.store.toast('Now a floor square, first on this page. Paint it with the brush or rectangle.');
+    else if (op === 'toObjects') this.store.toast('Back to an object you place');
     else this.store.toast(`${label}: ${next.assets.length} left`);
   }
 
@@ -712,7 +728,7 @@ export class App {
 
   /**
    * A tap on an asset. A floor square becomes the brush so a finger can
-   * paint paths. Anything else is added to the middle of the view, selected
+   * paint floors. Anything else is added to the middle of the view, selected
    * and ready to move — and the brush is put away, so the next finger on
    * the map pans or drags that asset instead of drawing.
    */
@@ -728,7 +744,7 @@ export class App {
       this.store.setTool('brush');
       this.store.setStamp(singleStamp(sheetIndex, tile), null);
       this.shell.palette.draw();
-      this.store.toast('Painting paths. A finger now draws this square.');
+      this.store.toast('Painting floor. Draw, or use Rectangle to fill an area.');
       return;
     }
 
@@ -1042,14 +1058,14 @@ export class App {
       const background = createImageLayer(src, baked, 'Background', placement);
       background.opacity = 1;
       background.locked = true;
-      const paths = doc.layers[0];
-      paths.name = 'Paths';
-      doc.layers = [background, paths];
+      const floors = doc.layers[0];
+      floors.name = 'Floors';
+      doc.layers = [background, floors];
       doc.activeLayer = 1;
 
       this.adoptDoc(doc);
       this.fit();
-      this.store.toast(`${doc.name}: ${width} x ${height} squares. Paint paths and add objects on top.`);
+      this.store.toast(`${doc.name}: ${width} x ${height} squares. Paint floors and add objects on top.`);
     } catch {
       this.store.toast('That picture could not be used');
     }

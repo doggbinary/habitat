@@ -2,14 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { packNames, packOf, sameAsset } from './packs';
 
 describe('asset packs', () => {
-  it('groups numbered pages of one pack, and every Paths page together', () => {
+  it('groups numbered pages of one pack, and every floor page together', () => {
     expect(packOf('Nature Park 1')).toBe('Nature Park');
-    expect(packOf('Paths 12')).toBe('Paths');
+    expect(packOf('Floors 12')).toBe('Floors');
+    expect(packOf('Paths 3')).toBe('Floors');
     expect(packOf('living room 3')).toBe('living room');
-    expect(packNames(['Nature Park 2', 'Paths 2', 'Nature Park 1', 'Paths 1'])).toEqual([
-      'Paths',
-      'Nature Park',
-    ]);
+    expect(packNames(['Nature Park 2', 'Floors 2', 'Nature Park 1', 'Floors 1'])).toEqual(['Floors', 'Nature Park']);
   });
 
   it('tells one sticker from another by its sheet and its place on it', () => {
@@ -20,9 +18,9 @@ describe('asset packs', () => {
   });
 
   it('keeps every pack, so no sheet becomes unreachable', () => {
-    const sheets = ['Paths 1', 'modern city 1', 'modern city 2', 'living room 1'];
+    const sheets = ['Floors 1', 'modern city 1', 'modern city 2', 'living room 1'];
     const names = packNames(sheets);
-    expect(names).toEqual(['Paths', 'living room', 'modern city']);
+    expect(names).toEqual(['Floors', 'living room', 'modern city']);
     for (const sheet of sheets) expect(names).toContain(packOf(sheet));
   });
 });

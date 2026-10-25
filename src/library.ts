@@ -8,7 +8,7 @@ export function isLibrarySheet(folders: string[], file: string): boolean {
   return /^tile-b-\d+\.png$/i.test(file) || /^\d+\.png$/i.test(file);
 }
 
-/** Ground pages (RPG Maker A2) are the road, grass, gravel and brick squares. */
+/** Floor pages (RPG Maker A2) are the road, grass, gravel and brick squares. */
 export function isPathSheet(folders: string[], file: string): boolean {
   if (folders.some((folder) => /\(\d+\)$/.test(folder))) return false;
   return /(?:^|[^a-z0-9])a2(?:[^0-9]|$)/i.test(file);
@@ -29,8 +29,9 @@ export interface LibraryFile {
 }
 
 /**
- * Object pages keep their pack names. Every ground page becomes Paths 1,
- * Paths 2, and so on, listed first so the corners are easy to find.
+ * Object pages keep their pack names. Packs repeat the same floor page, so
+ * each distinct one is kept once as Floors 1, Floors 2, and so on, listed
+ * first.
  */
 export function buildLibraryEntries(files: LibraryFile[]): LibraryEntry[] {
   const objects: LibraryEntry[] = [];
@@ -49,7 +50,7 @@ export function buildLibraryEntries(files: LibraryFile[]): LibraryEntry[] {
   objects.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   paths.sort((a, b) => a.url.localeCompare(b.url, undefined, { numeric: true }));
   paths.forEach((entry, index) => {
-    entry.name = `Paths ${index + 1}`;
+    entry.name = `Floors ${index + 1}`;
   });
   return [...paths, ...objects];
 }

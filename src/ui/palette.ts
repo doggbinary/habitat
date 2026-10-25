@@ -9,7 +9,7 @@ import { packNames, packOf, sameAsset, type AssetRef } from './packs';
  * Which page of the library is open. Pinned and folders gather stickers from
  * any number of sheets; a sheet page is one imported picture.
  */
-type View = { kind: 'sheet' } | { kind: 'pins' } | { kind: 'ground' } | { kind: 'folder'; id: string };
+type View = { kind: 'sheet' } | { kind: 'pins' } | { kind: 'folder'; id: string };
 
 /** One thumbnail: the sticker, and the sheet it has to be drawn from. */
 interface Entry {
@@ -30,23 +30,6 @@ const PEN_SLOP = 5;
 
 const FLING_MIN = 0.08;
 const FLING_DECAY = 0.94;
-
-/** Ground squares are compared as this many average colours a side. */
-const GROUND_LOOK = 4;
-/** Colours are binned this coarsely, so two shades of one grass match. */
-const GROUND_BIN = 24;
-
-/** A short description of how a ground square looks, for spotting repeats. */
-function groundLook(ctx: CanvasRenderingContext2D, image: CanvasImageSource, rect: AssetRect): string {
-  ctx.clearRect(0, 0, GROUND_LOOK, GROUND_LOOK);
-  ctx.drawImage(image, rect.x, rect.y, rect.w, rect.h, 0, 0, GROUND_LOOK, GROUND_LOOK);
-  const data = ctx.getImageData(0, 0, GROUND_LOOK, GROUND_LOOK).data;
-  let look = '';
-  for (let i = 0; i < GROUND_LOOK * GROUND_LOOK; i++) {
-    look += `${Math.round(data[i * 4] / GROUND_BIN)},${Math.round(data[i * 4 + 1] / GROUND_BIN)},${Math.round(data[i * 4 + 2] / GROUND_BIN)};`;
-  }
-  return look;
-}
 
 export interface PaletteActions {
   addTileset: () => void;
@@ -73,7 +56,7 @@ export interface PaletteActions {
 
 /**
  * The asset library: every thing on the current sheet, whole, laid out as
- * thumbnails. Props come first, then each floor square.
+ * thumbnails. The sheet's floor squares come first, then its props.
  *
  * Scrolling and picking up used to fight because both were "drag a finger".
  * They now follow the convention iPad apps already teach: a finger swipe
@@ -93,7 +76,6 @@ export class PalettePanel {
   private columns = 3;
   private entries: Entry[] = [];
   private view: View = { kind: 'sheet' };
-  private groundCache: { key: string; entries: Entry[] } | null = null;
 
   private mode: 'idle' | 'pending' | 'scroll' | 'drag' = 'idle';
   private activeId: number | null = null;
@@ -413,11 +395,8 @@ export class PalettePanel {
         el('span', { class: 'chip-text', text: count > 0 ? `${label} ${count}` : label }),
       ]);
 
-    const hasGround = doc.tilesets.some((sheet) => (sheet.groundAssets?.length ?? 0) > 0);
-
     return el('div', { class: 'palette-tabs' }, [
       tab({ kind: 'pins' }, 'star', 'Pinned', doc.pins.length),
-      ...(hasGround ? [tab({ kind: 'ground' }, 'tiles', 'Ground', this.groundEntries().length)] : []),
       ...doc.folders.map((folder) => tab({ kind: 'folder', id: folder.id }, 'layers', folder.name, folder.assets.length)),
       tab({ kind: 'sheet' }, 'image', 'Sheets', 0),
     ]);
@@ -475,11 +454,9 @@ export class PalettePanel {
     const title =
       view.kind === 'pins'
         ? 'Pinned'
-        : view.kind === 'ground'
-          ? 'Ground'
-          : view.kind === 'folder'
-            ? (doc.folders.find((f) => f.id === view.id)?.name ?? 'Folder')
-            : 'Assets';
+        : view.kind === 'folder'
+          ? (doc.folders.find((f) => f.id === view.id)?.name ?? 'Folder')
+          : 'Assets';
 
     this.header.append(
       this.pageTabs(),
@@ -513,9 +490,7 @@ export class PalettePanel {
                 ? view.kind === 'pins'
                   ? 'Nothing pinned yet. On a sheet, tap Edit, choose assets, then Pin.'
                   : 'This folder is empty. On a sheet, tap Edit, choose assets, then File.'
-                : view.kind === 'ground'
-                  ? 'Grass, water, brick and paving from every sheet. Tap one, then draw on the map to fill.'
-                  : 'Tap an asset to add it, or press and hold, then drag it onto the map. Floor squares paint with the brush.',
+                : 'Floor squares come first: tap one, then draw or use Rectangle. Tap any other asset to add it, or press and hold to drag it.',
           }),
     );
   }
@@ -543,18 +518,24 @@ export class PalettePanel {
     const view = this.view;
 
     if (view.kind === 'sheet') {
-      // Thumbnails skip the sheet's ground squares, so a thumbnail's place
-      // is not its asset number on the sheet.
+      // Floor squares are listed first, so a thumbnail's place is not its
+      // asset number on the sheet.
+      const indices = picked.flatMap((i) => (this.entries[i] ? [this.entries[i].assetIndex] : []));
       const run = (op: AssetEdit) => {
-        const indices = picked.flatMap((i) => (this.entries[i] ? [this.entries[i].assetIndex] : []));
         this.selected.clear();
         this.actions.editAssets(sheetIndex, op, indices);
       };
-      const toPaths = button('chip', 'Make these paintable floor squares on the Ground page', () => run('toGround'), [
-        icon('tiles', 16),
-        el('span', { text: 'Move to paths' }),
-      ]);
-      toPaths.disabled = picked.length === 0;
+      const floor = new Set(this.activeTileset()?.groundAssets ?? []);
+      const allFloor = indices.length > 0 && indices.every((i) => floor.has(i));
+      const floorChip = allFloor
+        ? button('chip', 'Turn these back into objects you place', () => run('toObjects'), [
+            el('span', { text: 'Not a floor' }),
+          ])
+        : button('chip', 'Make these floor squares you paint with the brush or rectangle', () => run('toGround'), [
+            icon('tiles', 16),
+            el('span', { text: 'Make floor' }),
+          ]);
+      floorChip.disabled = indices.length === 0;
       const merge = button('chip', 'Join the selected pieces into one asset', () => run('merge'), [
         el('span', { text: 'Merge' }),
       ]);
@@ -576,32 +557,7 @@ export class PalettePanel {
       }, [icon('layers', 16), el('span', { text: 'File' })]);
       file.disabled = refs.length === 0;
 
-      chips.push(toPaths, pin, file, merge, remove);
-    } else if (view.kind === 'ground') {
-      // Ground is gathered from many sheets, so a square can be pinned, filed,
-      // or sent back to its own sheet as an object.
-      const pin = button('chip', 'Keep these on the Pinned page', () => {
-        this.actions.setPinned(refs, true);
-        done();
-      }, [icon('star', 16), el('span', { text: 'Pin' })]);
-      const file = button('chip', 'Put these in a folder', () => {
-        this.chooseFolder(refs);
-        done();
-      }, [icon('layers', 16), el('span', { text: 'File' })]);
-      const back = button('chip', 'Put these back on their sheet as objects', () => {
-        const bySheet = new Map<number, number[]>();
-        for (const i of picked) {
-          const entry = this.entries[i];
-          if (!entry) continue;
-          bySheet.set(entry.tilesetIndex, [...(bySheet.get(entry.tilesetIndex) ?? []), entry.assetIndex]);
-        }
-        this.selected.clear();
-        for (const [sheet, indices] of bySheet) this.actions.editAssets(sheet, 'toObjects', indices);
-      }, [el('span', { text: 'Move back to objects' })]);
-      pin.disabled = refs.length === 0;
-      file.disabled = refs.length === 0;
-      back.disabled = picked.length === 0;
-      chips.push(pin, file, back);
+      chips.push(floorChip, pin, file, merge, remove);
     } else {
       const label = view.kind === 'pins' ? 'Unpin' : 'Take out';
       const take = button('chip danger', `${label} the selected assets`, () => {
@@ -629,10 +585,8 @@ export class PalettePanel {
         text:
           picked.length === 0
             ? view.kind === 'sheet'
-              ? 'Tap assets to select them. Move grass, floors or paving to paths, pin or file them, merge pieces that belong together, or delete stray marks.'
-              : view.kind === 'ground'
-                ? 'Tap ground squares to pin or file them, or move ones that are really objects back to their sheet.'
-                : 'Tap assets to select them, then take them off this page.'
+              ? 'Tap assets to select them. Make grass or paving a floor, pin or file them, merge pieces that belong together, or delete stray marks.'
+              : 'Tap assets to select them, then take them off this page.'
             : `${picked.length} selected`,
       }),
       el('div', { class: 'chip-row' }, chips),
@@ -668,56 +622,6 @@ export class PalettePanel {
     this.actions.fileAssets(folderId, folder.name, keep);
   }
 
-  /**
-   * The Ground page: one of each kind of ground, from every sheet.
-   *
-   * Packs repeat the same grass and paving endlessly, and a sheet draws the
-   * same square dozens of times, so the raw list runs to thousands. Each
-   * square is boiled down to a few average colours and only the first of
-   * each look is kept. The answer is cached, because it costs a pass over
-   * every ground square on every sheet.
-   */
-  private groundEntries(): Entry[] {
-    const doc = this.store.doc;
-    const key = doc.tilesets
-      .map((sheet) => `${sheet.id}:${sheet.groundAssets?.length ?? 0}:${sheet.groundBlocks?.length ?? 0}`)
-      .join('|');
-    if (this.groundCache?.key === key) return this.groundCache.entries;
-
-    const canvas = document.createElement('canvas');
-    canvas.width = GROUND_LOOK;
-    canvas.height = GROUND_LOOK;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
-    const entries: Entry[] = [];
-    const seen = new Set<string>();
-    doc.tilesets.forEach((tileset, tilesetIndex) => {
-      const assets = assetsOf(tileset);
-      const patches = tileset.groundBlocks ?? [];
-      for (const assetIndex of tileset.groundAssets ?? []) {
-        const rect = assets[assetIndex];
-        if (!rect) continue;
-        // A patch paints as a whole from any of its squares, so it needs
-        // only one thumbnail.
-        const patch = patches.findIndex(
-          (p) => rect.x >= p.x && rect.y >= p.y && rect.x + rect.w <= p.x + p.w && rect.y + rect.h <= p.y + p.h,
-        );
-        if (patch !== -1) {
-          const id = `${tileset.id}#${patch}`;
-          if (seen.has(id)) continue;
-          seen.add(id);
-        }
-        const look = ctx && tileset.image ? groundLook(ctx, tileset.image, rect) : String(entries.length);
-        if (seen.has(look)) continue;
-        seen.add(look);
-        entries.push({ tileset, tilesetIndex, rect, assetIndex });
-      }
-    });
-
-    this.groundCache = { key, entries };
-    return entries;
-  }
-
   // --- Rendering -----------------------------------------------------------
 
   /**
@@ -732,18 +636,12 @@ export class PalettePanel {
       const tileset = this.activeTileset();
       if (!tileset) return [];
       const index = this.store.activeTileset;
-      // The ground squares live on the Ground page. Leaving them here too
-      // would bury a page of buildings under a hundred bits of road.
-      const ground = new Set(tileset.groundAssets ?? []);
-      return assetsOf(tileset).flatMap((rect, assetIndex) =>
-        ground.has(assetIndex) ? [] : [{ tileset, tilesetIndex: index, rect, assetIndex }],
-      );
+      // Every asset on its own, with the sheet's floor squares first: a map
+      // starts with its floor, then the things standing on it.
+      const floor = new Set(tileset.groundAssets ?? []);
+      const entries = assetsOf(tileset).map((rect, assetIndex) => ({ tileset, tilesetIndex: index, rect, assetIndex }));
+      return [...entries.filter((e) => floor.has(e.assetIndex)), ...entries.filter((e) => !floor.has(e.assetIndex))];
     }
-
-    // Every square of grass, water, brick and pavement found on any sheet,
-    // gathered in one place instead of buried among that sheet's props, and
-    // with the many repeats between packs shown only once.
-    if (view.kind === 'ground') return this.groundEntries();
 
     const refs =
       view.kind === 'pins' ? doc.pins : (doc.folders.find((folder) => folder.id === view.id)?.assets ?? []);

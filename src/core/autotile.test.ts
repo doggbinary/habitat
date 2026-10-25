@@ -1,45 +1,46 @@
 import { describe, expect, it } from 'vitest';
-import { PATH_PREVIEW, PATH_STRIDE, pathShape, type Neighbours } from './autotile';
+import { floorIndexFromPath, floorTiles, isRawFloorSheet } from './autotile';
 
-const none: Neighbours = { n: false, ne: false, e: false, se: false, s: false, sw: false, w: false, nw: false };
-const all: Neighbours = { n: true, ne: true, e: true, se: true, s: true, sw: true, w: true, nw: true };
+const TILE = 12;
 
-describe('path pieces', () => {
-  it('uses the full centre when the path continues all round', () => {
-    expect(pathShape(all)).toBe(0);
-  });
-
-  it('draws an inner corner where only the diagonal is missing', () => {
-    // A wide road turning: everything continues except up and to the left.
-    expect(pathShape({ ...all, nw: false })).toBe(1);
-    expect(pathShape({ ...all, ne: false })).toBe(2);
-  });
-
-  it('uses straights for a one-square-wide road', () => {
-    expect(pathShape({ ...none, e: true, w: true })).toBe(33);
-    expect(pathShape({ ...none, n: true, s: true })).toBe(32);
-  });
-
-  it('joins a T-junction with inner corners on the side the road leaves from', () => {
-    // Road running east-west with a branch going south, no diagonals.
-    expect(pathShape({ ...none, e: true, w: true, s: true })).toBe(23);
-  });
-
-  it('uses the edge piece along the side of a two-wide road', () => {
-    // Top row of a road two squares tall: continues left, right and down.
-    expect(pathShape({ ...none, e: true, w: true, s: true, se: true, sw: true })).toBe(20);
-  });
-
-  it('uses the lone piece for a single square', () => {
-    expect(pathShape(none)).toBe(PATH_PREVIEW);
-  });
-
-  it('has a piece for every arrangement of neighbours', () => {
-    const shapes = new Set<number>();
-    for (let mask = 0; mask < 256; mask++) {
-      const [n, ne, e, se, s, sw, w, nw] = [...Array(8)].map((_, i) => (mask & (1 << i)) !== 0);
-      shapes.add(pathShape({ n, ne, e, se, s, sw, w, nw }));
+/** A floor page of two 2-by-3 blocks; each half square is one flat colour. */
+function floorPage(): Uint8ClampedArray {
+  const tile = TILE;
+  const width = tile * 4;
+  const height = tile * 3;
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const block = Math.floor(x / (tile * 2));
+      const hx = Math.floor((x % (tile * 2)) / (tile / 2));
+      const hy = Math.floor(y / (tile / 2));
+      rgba.set([block * 100 + hx * 10, hy * 10, 50, 255], (y * width + x) * 4);
     }
-    expect(shapes.size).toBe(PATH_STRIDE);
+  }
+  return rgba;
+}
+
+describe('floor pages', () => {
+  it('recognises a pack floor page, under its old or new name', () => {
+    expect(isRawFloorSheet('Floors 1', 768, 576, 48)).toBe(true);
+    expect(isRawFloorSheet('Paths 2', 768, 576, 48)).toBe(true);
+    expect(isRawFloorSheet('Modern Park 1', 768, 576, 48)).toBe(false);
+  });
+
+  it('makes one square per floor type, from the inside of the block', () => {
+    const floors = floorTiles(floorPage(), TILE * 4, TILE * 3, TILE);
+    expect(floors.assets).toEqual([
+      { x: 0, y: 0, w: TILE, h: TILE },
+      { x: TILE, y: 0, w: TILE, h: TILE },
+    ]);
+    // Top-left quarter is half square (2, 4) of the first block.
+    expect([...floors.rgba.subarray(0, 3)]).toEqual([20, 40, 50]);
+    // Top-left quarter of the second block's square.
+    expect([...floors.rgba.subarray(TILE * 4, TILE * 4 + 3)]).toEqual([120, 40, 50]);
+  });
+
+  it('turns an old painted path piece into its floor type', () => {
+    expect(floorIndexFromPath(2 * 47 + 30, 47)).toBe(2);
+    expect(floorIndexFromPath(3 * 15 + 9, 15)).toBe(3);
   });
 });
