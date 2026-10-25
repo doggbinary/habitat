@@ -1,4 +1,5 @@
 import { assetsOf, type AssetEdit } from '../core/assets';
+import { MY_FLOORS } from '../core/custom-tiles';
 import type { AssetRect, Tileset } from '../core/doc';
 import type { Store } from '../core/store';
 import { button, clear, el } from './dom';
@@ -443,6 +444,21 @@ export class PalettePanel {
     return el('div', { class: 'palette-picker' }, [packs, el('div', { class: 'palette-pager' }, [prev, pages, next])]);
   }
 
+  /**
+   * A page arrived from the library. Only the pack and page lists can have
+   * changed, so only they are replaced, and only when they did: rebuilding
+   * the buttons under a finger would swallow the tap.
+   */
+  libraryGrew(): void {
+    const picker = this.header.querySelector('.palette-picker');
+    if (this.view.kind !== 'sheet' || !picker || this.entries.length === 0) {
+      this.layout();
+      return;
+    }
+    const next = this.sheetPicker();
+    if (next.textContent !== picker.textContent) picker.replaceWith(next);
+  }
+
   private buildHeader(): void {
     clear(this.header);
     const doc = this.store.doc;
@@ -526,7 +542,8 @@ export class PalettePanel {
         this.actions.editAssets(sheetIndex, op, indices);
       };
       const floor = new Set(this.activeTileset()?.groundAssets ?? []);
-      const allFloor = indices.length > 0 && indices.every((i) => floor.has(i));
+      const mine = this.activeTileset()?.generated && this.activeTileset()?.name === MY_FLOORS;
+      const allFloor = indices.length > 0 && (mine || indices.every((i) => floor.has(i)));
       const floorChip = allFloor
         ? button('chip', 'Turn these back into objects you place', () => run('toObjects'), [
             el('span', { text: 'Not a floor' }),

@@ -29,7 +29,16 @@ import { clearWhiteBackdrop } from './core/background';
 import { applyTilesetMerge, pathMergePlan } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
 import { dominantColor, recolorToCanvas } from './io/recolor';
-import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
+import {
+  MY_FLOORS,
+  ensureFloorSheet,
+  ensureGeneratedSheet,
+  extractTile,
+  persistGeneratedSheet,
+  removeGeneratedTiles,
+  writeGeneratedTile,
+} from './core/custom-tiles';
+import { isSolid, seamlessFloor } from './core/seamless';
 import { cropAsset } from './render/object-draw';
 import { ObjectTools } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
@@ -106,6 +115,29 @@ function clearSheetBackdrop(sheet: Tileset): void {
   if (!clearWhiteBackdrop(pixels.data, sheet.imgW, sheet.imgH)) return;
   ctx.putImageData(pixels, 0, 0);
   sheet.image = canvas;
+}
+
+function sheetPixels(sheet: Tileset): ImageData | null {
+  if (!sheet.image) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = sheet.imgW;
+  canvas.height = sheet.imgH;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(sheet.image, 0, 0);
+  return ctx.getImageData(0, 0, sheet.imgW, sheet.imgH);
+}
+
+/** Whether an asset is whole grid squares painted edge to edge, so it can be painted as it is. */
+function fillsItsSquares(sheet: Tileset, pixels: ImageData, rect: AssetRect): boolean {
+  const stepX = sheet.tileW + sheet.spacing;
+  const stepY = sheet.tileH + sheet.spacing;
+  const aligned =
+    (rect.x - sheet.margin) % stepX === 0 &&
+    (rect.y - sheet.margin) % stepY === 0 &&
+    (rect.w + sheet.spacing) % stepX === 0 &&
+    (rect.h + sheet.spacing) % stepY === 0;
+  return aligned && isSolid(pixels.data, sheet.imgW, rect);
 }
 
 function isFloorPage(sheet: Tileset): boolean {
@@ -687,7 +719,26 @@ export class App {
    */
   private editAssets(sheetIndex: number, op: AssetEdit, indices: number[]): void {
     const sheet = this.store.doc.tilesets[sheetIndex];
-    if (!sheet?.assets || indices.length === 0) return;
+    if (!sheet || indices.length === 0) return;
+    if (sheet.generated && sheet.name === MY_FLOORS) {
+      if (op === 'toObjects' || op === 'delete') this.removeMyFloors(sheetIndex, indices);
+      return;
+    }
+    if (!sheet.assets) return;
+
+    // A shaped object, such as a dirt plot with rounded corners, would paint
+    // its corners and outline into every square; its middle is made into a
+    // seamless square instead, and the object itself stays.
+    if (op === 'toGround') {
+      const pixels = sheetPixels(sheet);
+      const rects = sheet.assets;
+      const shaped = pixels ? indices.filter((i) => !fillsItsSquares(sheet, pixels, rects[i])) : [];
+      if (shaped.length > 0) {
+        this.makeFloors(sheetIndex, shaped, pixels!);
+        indices = indices.filter((i) => !shaped.includes(i));
+        if (indices.length === 0) return;
+      }
+    }
 
     const next = editSheetAssets(sheet, op, indices);
     if (op === 'merge' && next.assets === sheet.assets) return;
@@ -707,6 +758,65 @@ export class App {
     if (op === 'toGround') this.store.toast('Now a floor square, first on this page. Paint it with the brush or rectangle.');
     else if (op === 'toObjects') this.store.toast('Back to an object you place');
     else this.store.toast(`${label}: ${next.assets.length} left`);
+  }
+
+  /** Adds a seamless floor square to My floors for each shaped object, and picks the first. */
+  private makeFloors(sheetIndex: number, indices: number[], pixels: ImageData): void {
+    const doc = this.store.doc;
+    const sheet = doc.tilesets[sheetIndex];
+    const rects = assetsOf(sheet);
+    const squares = indices.flatMap((i) => {
+      const square = seamlessFloor(pixels.data, sheet.imgW, rects[i], sheet.tileW);
+      return square ? [square] : [];
+    });
+    if (squares.length === 0) {
+      this.store.toast('Too small to make a floor from: it needs a solid middle at least one square wide');
+      return;
+    }
+
+    let floors = -1;
+    let first = 0;
+    this.editor.structural('Make floor', () => {
+      floors = ensureFloorSheet(doc, sheet.tileW, sheet.tileH);
+      const target = doc.tilesets[floors];
+      first = target.count;
+      for (const square of squares) {
+        const canvas = document.createElement('canvas');
+        canvas.width = sheet.tileW;
+        canvas.height = sheet.tileH;
+        canvas.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(square), sheet.tileW, sheet.tileH), 0, 0);
+        writeGeneratedTile(target, target.count, canvas);
+      }
+      persistGeneratedSheet(target);
+    });
+    this.store.activeTileset = floors;
+    this.store.libraryPick = { tilesetId: doc.tilesets[floors].id, index: first };
+    this.store.setTool('brush');
+    this.store.setStamp(singleStamp(floors, first), null);
+    this.shell.palette.layout();
+    this.store.toast('Made a seamless floor on My floors, in the Floors pack. Paint it with the brush or Rectangle.');
+  }
+
+  /** Takes squares off My floors, and off the map wherever they were painted. */
+  private removeMyFloors(sheetIndex: number, indices: number[]): void {
+    const doc = this.store.doc;
+    const sheet = doc.tilesets[sheetIndex];
+    this.editor.structural('Not a floor', () => {
+      const moved = removeGeneratedTiles(sheet, indices);
+      for (const layer of doc.layers) {
+        if (layer.kind !== 'tiles') continue;
+        for (let i = 0; i < layer.data.length; i++) {
+          const tile = layer.data[i];
+          if (tile === EMPTY || tilesetOf(tile) !== sheetIndex) continue;
+          const to = moved[indexOf(tile)] ?? -1;
+          layer.data[i] = to === -1 ? EMPTY : pack(sheetIndex, to, flagsOf(tile));
+        }
+      }
+      persistGeneratedSheet(sheet);
+    });
+    this.store.libraryPick = null;
+    this.store.setStamp(EMPTY_STAMP);
+    this.store.toast('Taken off My floors and the map. The object it came from is still on its page.');
   }
 
   /** Puts stickers on the Pinned page, or takes them off it. */

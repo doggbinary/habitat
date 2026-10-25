@@ -37,7 +37,20 @@ export function extractTile(doc: Doc, tile: PackedTile): HTMLCanvasElement | nul
  * are kept per size because every tile in a sheet must share dimensions.
  */
 export function ensureGeneratedSheet(doc: Doc, tileW: number, tileH: number): number {
-  const existing = doc.tilesets.findIndex((t) => t.generated && t.tileW === tileW && t.tileH === tileH);
+  return ensureSheet(doc, 'Edited tiles', tileW, tileH);
+}
+
+/** The page of seamless floor squares made from shaped objects. */
+export const MY_FLOORS = 'My floors';
+
+export function ensureFloorSheet(doc: Doc, tileW: number, tileH: number): number {
+  return ensureSheet(doc, MY_FLOORS, tileW, tileH);
+}
+
+function ensureSheet(doc: Doc, name: string, tileW: number, tileH: number): number {
+  const existing = doc.tilesets.findIndex(
+    (t) => t.generated && (t.name === MY_FLOORS) === (name === MY_FLOORS) && t.tileW === tileW && t.tileH === tileH,
+  );
   if (existing !== -1) return existing;
 
   const canvas = document.createElement('canvas');
@@ -45,7 +58,7 @@ export function ensureGeneratedSheet(doc: Doc, tileW: number, tileH: number): nu
   canvas.height = tileH;
   doc.tilesets.push({
     id: uid('ts'),
-    name: 'Edited tiles',
+    name,
     src: canvas.toDataURL('image/png'),
     tileW,
     tileH,
@@ -105,6 +118,46 @@ export function writeGeneratedTile(ts: Tileset, index: number, tile: HTMLCanvasE
   ts.cols = COLUMNS;
   ts.rows = Math.max(ts.rows, row + 1);
   ts.count = Math.max(ts.count, index + 1);
+}
+
+/**
+ * Takes squares out of a generated sheet, closing the gaps. Returns each
+ * old slot's new slot, or -1 for the ones removed.
+ */
+export function removeGeneratedTiles(ts: Tileset, indices: number[]): number[] {
+  const gone = new Set(indices);
+  const moved: number[] = [];
+  const source = editableCanvas(ts);
+  // A new canvas, as an undo snapshot may still hold the old one.
+  const canvas = document.createElement('canvas');
+  canvas.width = COLUMNS * ts.tileW;
+  canvas.height = Math.max(1, Math.ceil((ts.count - gone.size) / COLUMNS)) * ts.tileH;
+  const ctx = canvas.getContext('2d');
+  let next = 0;
+  for (let i = 0; i < ts.count; i++) {
+    if (gone.has(i)) {
+      moved.push(-1);
+      continue;
+    }
+    ctx?.drawImage(
+      source,
+      (i % COLUMNS) * ts.tileW,
+      Math.floor(i / COLUMNS) * ts.tileH,
+      ts.tileW,
+      ts.tileH,
+      (next % COLUMNS) * ts.tileW,
+      Math.floor(next / COLUMNS) * ts.tileH,
+      ts.tileW,
+      ts.tileH,
+    );
+    moved.push(next++);
+  }
+  ts.image = canvas;
+  ts.imgW = canvas.width;
+  ts.imgH = canvas.height;
+  ts.rows = canvas.height / ts.tileH;
+  ts.count = next;
+  return moved;
 }
 
 /** Bakes the sheet's current pixels into `src`, so it survives a reload. */

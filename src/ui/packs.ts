@@ -14,7 +14,7 @@ export interface AssetFolder {
 
 /** "Nature Park 1" belongs with "Nature Park 2". Floor pages share one pack. */
 export function packOf(name: string): string {
-  if (/^(?:paths|floors) \d+$/i.test(name)) return 'Floors';
+  if (/^(?:(?:paths|floors) \d+|my floors)$/i.test(name)) return 'Floors';
   return name.replace(/ \d+$/, '') || name;
 }
 

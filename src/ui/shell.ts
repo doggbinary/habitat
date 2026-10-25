@@ -163,7 +163,7 @@ export class Shell {
     // Pages arriving while the library loads must not rebuild the Map or
     // Layers panel under a finger that is about to tap a button there.
     store.on('library', () => {
-      if (this.mode === 'map' && this.tab === 'tiles') this.palette.layout();
+      if (this.mode === 'map' && this.tab === 'tiles') this.palette.libraryGrew();
     });
     store.on('toast', (message) => this.toast(String(message)));
     // The studio owns its own state, so mirror its changes into the chrome.
