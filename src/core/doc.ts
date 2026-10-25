@@ -40,6 +40,11 @@ export interface Tileset {
   /** Set once the user merges, splits or deletes assets by hand. */
   assetsEdited?: boolean;
   /**
+   * A page of whole objects only, such as houses whose solid roofs would
+   * otherwise read as floor squares. Nothing on it is split off as ground.
+   */
+  propsOnly?: boolean;
+  /**
    * Places in `assets` that are a square of ground rather than a prop:
    * grass, water, brick, pavement. These are what the Ground page gathers.
    */

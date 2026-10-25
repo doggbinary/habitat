@@ -17,10 +17,15 @@ function assetLibrary(): Plugin {
   const found: LibraryFile[] = [];
   const located = new Map<string, string>();
 
-  const walk = (dir: string, folders: string[]) => {
+  interface PackInfo {
+    tile?: number;
+    props?: string[];
+  }
+
+  const walk = (dir: string, folders: string[], pack: PackInfo) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        walk(path.join(dir, entry.name), [...folders, entry.name]);
+        walk(path.join(dir, entry.name), [...folders, entry.name], pack);
         continue;
       }
       if (!isLibrarySheet(folders, entry.name) && !isPathSheet(folders, entry.name)) continue;
@@ -28,14 +33,33 @@ function assetLibrary(): Plugin {
       const id = isPathSheet(folders, entry.name)
         ? crypto.createHash('sha1').update(fs.readFileSync(abs)).digest('hex')
         : undefined;
-      found.push({ folders, file: entry.name, id });
+      const props = pack.props?.includes(entry.name) ?? false;
+      found.push({ folders, file: entry.name, id, tile: pack.tile, ...(props ? { props } : {}) });
       located.set(libraryUrl(folders, entry.name), abs);
+    }
+  };
+
+  // A pack that is not 48 px squares, or has pages of whole objects only,
+  // says so in a pack.json beside its pages: { "tile": 32, "props": ["4.png"] }.
+  const packInfo = (dir: string): PackInfo => {
+    const file = path.join(dir, 'pack.json');
+    if (!fs.existsSync(file)) return {};
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as PackInfo;
+      return {
+        tile: typeof raw.tile === 'number' && raw.tile > 0 ? raw.tile : undefined,
+        props: Array.isArray(raw.props) ? raw.props.filter((name) => typeof name === 'string') : undefined,
+      };
+    } catch {
+      return {};
     }
   };
 
   if (fs.existsSync(root)) {
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (entry.isDirectory()) walk(path.join(root, entry.name), [entry.name]);
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(root, entry.name);
+      walk(dir, [entry.name], packInfo(dir));
     }
   }
   const entries = buildLibraryEntries(found);

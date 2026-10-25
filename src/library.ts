@@ -26,6 +26,10 @@ export interface LibraryFile {
    * copied into several packs, and only the first is kept.
    */
   id?: string;
+  /** Square size the pack was drawn on, when it is not 48 px. */
+  tile?: number;
+  /** The page holds only whole objects. */
+  props?: boolean;
 }
 
 /**
@@ -39,7 +43,14 @@ export function buildLibraryEntries(files: LibraryFile[]): LibraryEntry[] {
   const seenPath = new Set<string>();
   for (const item of files) {
     const url = libraryUrl(item.folders, item.file);
-    if (isLibrarySheet(item.folders, item.file)) objects.push({ name: librarySheetName(item.folders, item.file), url });
+    if (isLibrarySheet(item.folders, item.file)) {
+      objects.push({
+        name: librarySheetName(item.folders, item.file),
+        url,
+        ...(item.tile ? { tile: item.tile } : {}),
+        ...(item.props ? { props: true } : {}),
+      });
+    }
     else if (isPathSheet(item.folders, item.file)) {
       const id = item.id ?? url;
       if (seenPath.has(id)) continue;
@@ -80,4 +91,8 @@ export interface LibraryEntry {
   name: string;
   /** Path relative to the site, already safe to fetch. */
   url: string;
+  /** Square size the page was drawn on. Packs without it use 48 px. */
+  tile?: number;
+  /** A page of whole objects, with no floor squares to find on it. */
+  props?: boolean;
 }

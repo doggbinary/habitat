@@ -445,7 +445,9 @@ export class App {
       this.store.toast(`Loading ${entry.name}`);
       await new Promise((resolve) => setTimeout(resolve, 0));
       try {
-        const tileset = await makeTileset(new URL(entry.url, document.baseURI).href, entry.name, 48, 48);
+        const tile = typeof entry.tile === 'number' && entry.tile > 0 ? entry.tile : 48;
+        const tileset = await makeTileset(new URL(entry.url, document.baseURI).href, entry.name, tile, tile);
+        if (entry.props) tileset.propsOnly = true;
         detectInto(tileset);
         if (isSampleMap(tileset.imgW, tileset.imgH, tileset.assets ?? [])) {
           skipped.add(entry.name);

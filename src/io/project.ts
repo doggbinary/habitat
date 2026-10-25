@@ -105,6 +105,7 @@ interface SerializedTileset {
   assets?: AssetRect[];
   assetsVersion?: number;
   assetsEdited?: boolean;
+  propsOnly?: boolean;
   groundAssets?: number[];
   groundBlocks?: AssetRect[];
   pathStride?: number;
@@ -220,6 +221,7 @@ export function serializeProject(
       ...(t.assets ? { assets: t.assets.map((a) => ({ ...a })) } : {}),
       ...(t.assetsVersion ? { assetsVersion: t.assetsVersion } : {}),
       ...(t.assetsEdited ? { assetsEdited: true } : {}),
+      ...(t.propsOnly ? { propsOnly: true } : {}),
       ...(t.groundAssets?.length ? { groundAssets: [...t.groundAssets] } : {}),
       ...(t.groundBlocks?.length ? { groundBlocks: t.groundBlocks.map((b) => ({ ...b })) } : {}),
       ...(t.pathStride ? { pathStride: t.pathStride } : {}),
@@ -309,6 +311,7 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       if (Array.isArray(t.assets)) tileset.assets = t.assets.map((a) => ({ ...a }));
       if (t.assetsVersion) tileset.assetsVersion = t.assetsVersion;
       if (t.assetsEdited) tileset.assetsEdited = true;
+      if (t.propsOnly) tileset.propsOnly = true;
       if (Array.isArray(t.groundAssets)) tileset.groundAssets = [...t.groundAssets];
       if (Array.isArray(t.groundBlocks)) tileset.groundBlocks = t.groundBlocks.map((b) => ({ ...b }));
       if (t.pathStride) tileset.pathStride = t.pathStride;
@@ -336,6 +339,7 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
         ...(Array.isArray(t.assets) ? { assets: t.assets.map((a) => ({ ...a })) } : {}),
         ...(t.assetsVersion ? { assetsVersion: t.assetsVersion } : {}),
         ...(t.assetsEdited ? { assetsEdited: true } : {}),
+        ...(t.propsOnly ? { propsOnly: true } : {}),
         ...(Array.isArray(t.groundAssets) ? { groundAssets: [...t.groundAssets] } : {}),
         ...(Array.isArray(t.groundBlocks) ? { groundBlocks: t.groundBlocks.map((b) => ({ ...b })) } : {}),
         ...(t.pathStride ? { pathStride: t.pathStride } : {}),

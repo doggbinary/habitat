@@ -783,7 +783,7 @@ export function detectSheetSplit(tileset: Tileset): SheetSplit {
   if (!ctx) return { assets: [], ground: [] };
   ctx.drawImage(tileset.image, 0, 0);
   const rgba = ctx.getImageData(0, 0, w, h).data;
-  return splitSheet(rgba, w, h, sheetGrid(tileset), sheetIsAllTiles(tileset.name));
+  return splitSheet(rgba, w, h, sheetGrid(tileset), sheetIsAllTiles(tileset.name), !!tileset.propsOnly);
 }
 
 /**
@@ -818,6 +818,7 @@ export function splitSheet(
   h: number,
   grid: SheetGrid,
   groundSheet: boolean,
+  propsOnly = false,
 ): SheetSplit {
   const alpha = new Uint8Array(w * h);
   for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4 + 3];
@@ -832,7 +833,7 @@ export function splitSheet(
     return { assets, ground: assets.map((_, i) => i) };
   }
 
-  const terrain = terrainCells(rgba, alpha, w, h, grid);
+  const terrain = propsOnly ? new Uint8Array(count) : terrainCells(rgba, alpha, w, h, grid);
   const squares: AssetRect[] = [];
   for (let i = 0; i < count; i++) if (terrain[i]) squares.push(cellsBox([i], grid));
 
