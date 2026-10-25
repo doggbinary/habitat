@@ -137,6 +137,8 @@ export interface SerializedProject {
   layers: SerializedLayer[];
   /** Absent in version 1 files. */
   characters?: SerializedCharacter[];
+  /** Id of the character Play should walk. Absent in older files. */
+  lastPlayedCharacter?: string;
   pins?: AssetRef[];
   folders?: AssetFolder[];
 }
@@ -159,8 +161,9 @@ function fromBase64(value: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-export function serializeProject(doc: Doc, characters: Character[] = []): SerializedProject {
+export function serializeProject(doc: Doc, characters: Character[] = [], lastPlayedId?: string | null): SerializedProject {
   return {
+    ...(lastPlayedId ? { lastPlayedCharacter: lastPlayedId } : {}),
     characters: characters.map((c) => ({
       id: c.id,
       name: c.name,

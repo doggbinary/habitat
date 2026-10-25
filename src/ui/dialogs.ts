@@ -460,7 +460,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /** Export sheet: image, engine-ready map data, and a reopenable project file. */
-export function openExportDialog(store: Store, characters: Character[] = []): void {
+export function openExportDialog(store: Store, characters: Character[] = [], lastPlayedId: string | null = null): void {
   const doc = store.doc;
   const base = slugify(doc.name);
 
@@ -563,7 +563,7 @@ export function openExportDialog(store: Store, characters: Character[] = []): vo
 
     row('Project file', 'Everything, so you can reopen and keep editing.', 'Save', () =>
       void run('Saving project', async () => {
-        const blob = new Blob([JSON.stringify(serializeProject(doc, characters))], {
+        const blob = new Blob([JSON.stringify(serializeProject(doc, characters, lastPlayedId))], {
           type: 'application/json',
         });
         await saveFile(blob, `${base}.pixelfusion.json`);

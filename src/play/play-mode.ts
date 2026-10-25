@@ -71,6 +71,8 @@ export class PlayMode {
   private stickOrigin = { x: 0, y: 0 };
   private readonly stickBase: HTMLElement;
   private readonly stickKnob: HTMLElement;
+  private undoButton!: HTMLButtonElement;
+  private redoButton!: HTMLButtonElement;
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -114,6 +116,17 @@ export class PlayMode {
     exit.textContent = 'Done';
     exit.addEventListener('click', () => this.close());
 
+    const undo = element('button', 'play-history') as HTMLButtonElement;
+    undo.type = 'button';
+    undo.textContent = 'Undo';
+    undo.addEventListener('click', () => this.stepHistory(false));
+    const redo = element('button', 'play-history') as HTMLButtonElement;
+    redo.type = 'button';
+    redo.textContent = 'Redo';
+    redo.addEventListener('click', () => this.stepHistory(true));
+    this.undoButton = undo;
+    this.redoButton = redo;
+
     const zoomOut = element('button', 'play-zoom');
     zoomOut.textContent = '−';
     zoomOut.addEventListener('click', () => this.nudgeZoom(-1));
@@ -148,7 +161,7 @@ export class PlayMode {
       hint,
       this.stickBase,
       tools,
-      element('div', 'play-controls', [zoomOut, zoomIn, exit]),
+      element('div', 'play-controls', [undo, redo, zoomOut, zoomIn, exit]),
     ]);
 
     document.body.append(this.root);
@@ -543,6 +556,27 @@ export class PlayMode {
     const drawX = (this.x - this.character.w / 2 - camX) * zoom;
     const drawY = (this.y + (FOOT_H * this.doc.tileSize) / 2 - this.character.h - camY) * zoom;
     ctx.drawImage(this.spriteCanvas, drawX, drawY, this.character.w * zoom, this.character.h * zoom);
+    this.refreshHistory();
+  }
+
+  /** Undo and redo cover moves, resizes and collision painted in this session. */
+  private stepHistory(redo: boolean): void {
+    if (this.sizing || this.dragging) {
+      this.objects.endGesture(this.sizing ? 'Resize' : 'Move');
+      this.sizing = false;
+      this.dragging = false;
+      this.editId = null;
+    }
+    if (redo) this.store.history.redo();
+    else this.store.history.undo();
+    const next = buildCollision(this.doc);
+    this.solid.set(next.subarray(0, this.solid.length));
+    this.refreshHistory();
+  }
+
+  private refreshHistory(): void {
+    this.undoButton.disabled = !this.store.history.canUndo;
+    this.redoButton.disabled = !this.store.history.canRedo;
   }
 
   // --- Teardown ------------------------------------------------------------

@@ -108,6 +108,13 @@ describe('saving and loading a project', () => {
     expect(back.frames[5].data[0]).toBe(200);
   });
 
+  it('remembers which character Play should walk', () => {
+    const first = createCharacter(16, 1, 1, 1, 'One');
+    const second = createCharacter(16, 1, 1, 1, 'Two');
+    const saved = throughJson(serializeProject(createDoc(), [first, second], second.id));
+    expect(saved.lastPlayedCharacter).toBe(second.id);
+  });
+
   it('recognises its own files and rejects others', () => {
     expect(isProjectFile(serializeProject(createDoc()))).toBe(true);
     expect(isProjectFile({ layers: [] })).toBe(false);

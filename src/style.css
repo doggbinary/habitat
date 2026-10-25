@@ -1394,6 +1394,7 @@ textarea {
 }
 
 .play-exit,
+.play-history,
 .play-zoom {
   min-height: 44px;
   padding: 0 18px;
@@ -1405,6 +1406,10 @@ textarea {
   font: inherit;
   font-size: 15px;
   cursor: pointer;
+}
+
+.play-history:disabled {
+  opacity: 0.35;
 }
 
 .play-zoom {

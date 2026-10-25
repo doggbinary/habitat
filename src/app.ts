@@ -63,7 +63,7 @@ import {
   pickFile,
   readFileAsDataUrl,
 } from './ui/dialogs';
-import { deserializeCharacters, deserializeProject, isProjectFile, serializeProject } from './io/project';
+import { deserializeCharacters, deserializeProject, isProjectFile, serializeProject, type SerializedProject } from './io/project';
 import { createAutosave, loadProject } from './io/storage';
 import { fitToView, screenToCell, screenToWorld } from './render/camera';
 import { Renderer, type CharacterPreviewSource } from './render/renderer';
@@ -268,7 +268,7 @@ export class App {
       openProject: () => void this.openProject(),
       exportMap: () => {
         this.editor.commitSelection();
-        openExportDialog(this.store, this.studio.characters);
+        openExportDialog(this.store, this.studio.characters, this.studio.lastPlayedId);
       },
       fitToView: () => this.fit(),
       playTest: () => this.startPlayTest(),
@@ -276,7 +276,9 @@ export class App {
 
     // Tiles held up with the select tool are saved where they float, so
     // closing the app mid-move never loses them.
-    this.autosave = createAutosave(() => serializeProject(this.editor.settledDoc(), this.studio.characters));
+    this.autosave = createAutosave(() =>
+      serializeProject(this.editor.settledDoc(), this.studio.characters, this.studio.lastPlayedId),
+    );
 
     // Held tiles belong to the select tool; picking up any other tool sets them down.
     this.store.on('ui', () => {
@@ -339,9 +341,7 @@ export class App {
       if (saved && isProjectFile(saved)) {
         try {
           const doc = await deserializeProject(saved);
-          this.studio.characters = deserializeCharacters(saved);
-          this.studio.activeCharacter = 0;
-          this.studio.clearHistory();
+          this.adoptCharacters(saved);
           this.adoptDoc(doc);
         } catch {
           this.adoptDoc(createDoc());
@@ -383,9 +383,7 @@ export class App {
       const data = (await response.json()) as unknown;
       if (!isProjectFile(data)) return false;
       const doc = await deserializeProject(data);
-      this.studio.characters = deserializeCharacters(data);
-      this.studio.activeCharacter = 0;
-      this.studio.clearHistory();
+      this.adoptCharacters(data);
       this.adoptDoc(doc);
       this.renderer.resize();
       this.fit();
@@ -610,17 +608,28 @@ export class App {
     requestAnimationFrame(step);
   }
 
+  /** Restores saved characters and which one Play should walk. */
+  private adoptCharacters(data: SerializedProject): void {
+    this.studio.characters = deserializeCharacters(data);
+    this.studio.activeCharacter = 0;
+    const id = data.lastPlayedCharacter;
+    this.studio.lastPlayedId =
+      id && this.studio.characters.some((character) => character.id === id) ? id : (this.studio.characters[0]?.id ?? null);
+    this.studio.clearHistory();
+  }
+
   /**
    * Full-screen play test. Starts the character wherever the scale preview is
    * standing, so what you were looking at is where you begin.
    */
   startPlayTest(): void {
     this.editor.commitSelection();
-    const character = this.studio.character;
+    const character = this.studio.characterForPlay();
     if (!character) {
       this.store.toast('Make a character first');
       return;
     }
+    this.studio.rememberPlayed(character);
     const preview = this.store.characterPreview;
     const tile = preview.enabled
       ? { x: preview.tx, y: preview.ty }
@@ -1210,9 +1219,7 @@ export class App {
         return;
       }
       const doc = await deserializeProject(parsed);
-      this.studio.characters = deserializeCharacters(parsed);
-      this.studio.activeCharacter = 0;
-      this.studio.clearHistory();
+      this.adoptCharacters(parsed);
       this.adoptDoc(doc);
       this.fit();
       void this.refreshStaleAssets();

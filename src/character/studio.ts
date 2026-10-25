@@ -30,6 +30,8 @@ type Listener = () => void;
 export class Studio {
   characters: Character[] = [];
   activeCharacter = 0;
+  /** The character Play walks, remembered across reloads. */
+  lastPlayedId: string | null = null;
   /** Index into `DIRECTIONS`. */
   direction = 0;
   frame = 0;
@@ -63,6 +65,18 @@ export class Studio {
     return this.characters[this.activeCharacter] ?? null;
   }
 
+  /** Play keeps using the character you walked last, even if another is open for drawing. */
+  characterForPlay(): Character | null {
+    const remembered = this.characters.find((character) => character.id === this.lastPlayedId);
+    return remembered ?? this.character;
+  }
+
+  rememberPlayed(character: Character): void {
+    if (this.lastPlayedId === character.id) return;
+    this.lastPlayedId = character.id;
+    this.emit();
+  }
+
   get currentFrame(): Frame | null {
     const character = this.character;
     if (!character) return null;
@@ -90,7 +104,9 @@ export class Studio {
   }
 
   removeCharacter(index: number): void {
+    const removed = this.characters[index];
     this.characters.splice(index, 1);
+    if (removed && this.lastPlayedId === removed.id) this.lastPlayedId = this.characters[0]?.id ?? null;
     this.activeCharacter = Math.max(0, Math.min(this.activeCharacter, this.characters.length - 1));
     this.clearHistory();
     this.emit();
