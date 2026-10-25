@@ -292,7 +292,10 @@ export class App {
     });
     this.store.on('structure', () => this.autosave.schedule());
     // Sprite edits live outside the document, so the studio schedules its own.
-    this.studio.on(() => this.autosave.schedule());
+    this.studio.on((immediate) => {
+      this.autosave.schedule();
+      if (immediate) void this.autosave.flush();
+    });
 
     bindKeyboard({
       store: this.store,
@@ -556,7 +559,7 @@ export class App {
           this.studio.direction = 0;
           this.studio.frame = 0;
           this.studio.clearHistory();
-          this.studio.emit();
+          this.studio.rememberPlayed(character);
           this.shell.setMode('character');
           this.characterView.fit();
           this.store.toast(`Imported ${name}`);
@@ -611,10 +614,10 @@ export class App {
   /** Restores saved characters and which one Play should walk. */
   private adoptCharacters(data: SerializedProject): void {
     this.studio.characters = deserializeCharacters(data);
-    this.studio.activeCharacter = 0;
     const id = data.lastPlayedCharacter;
-    this.studio.lastPlayedId =
-      id && this.studio.characters.some((character) => character.id === id) ? id : (this.studio.characters[0]?.id ?? null);
+    const index = this.studio.characters.findIndex((character) => character.id === id);
+    this.studio.activeCharacter = index >= 0 ? index : 0;
+    this.studio.lastPlayedId = this.studio.characters[this.studio.activeCharacter]?.id ?? null;
     this.studio.clearHistory();
   }
 
@@ -624,12 +627,14 @@ export class App {
    */
   startPlayTest(): void {
     this.editor.commitSelection();
-    const character = this.studio.characterForPlay();
+    const character = this.studio.character;
     if (!character) {
       this.store.toast('Make a character first');
       return;
     }
     this.studio.rememberPlayed(character);
+    this.autosave.schedule();
+    void this.autosave.flush();
     const preview = this.store.characterPreview;
     const tile = preview.enabled
       ? { x: preview.tx, y: preview.ty }

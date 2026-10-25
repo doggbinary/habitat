@@ -25,7 +25,7 @@ interface PixelEdit {
  * correct undo and cost far less than tracking individual pixels. */
 const MAX_HISTORY = 80;
 
-type Listener = () => void;
+type Listener = (immediate?: boolean) => void;
 
 export class Studio {
   characters: Character[] = [];
@@ -57,24 +57,18 @@ export class Studio {
     return () => this.listeners.delete(listener);
   }
 
-  emit(): void {
-    for (const listener of [...this.listeners]) listener();
+  emit(immediate = false): void {
+    for (const listener of [...this.listeners]) listener(immediate);
   }
 
   get character(): Character | null {
     return this.characters[this.activeCharacter] ?? null;
   }
 
-  /** Play keeps using the character you walked last, even if another is open for drawing. */
-  characterForPlay(): Character | null {
-    const remembered = this.characters.find((character) => character.id === this.lastPlayedId);
-    return remembered ?? this.character;
-  }
-
   rememberPlayed(character: Character): void {
     if (this.lastPlayedId === character.id) return;
     this.lastPlayedId = character.id;
-    this.emit();
+    this.emit(true);
   }
 
   get currentFrame(): Frame | null {
@@ -99,17 +93,20 @@ export class Studio {
     this.direction = 0;
     this.frame = 0;
     this.clearHistory();
-    this.emit();
+    this.rememberPlayed(character);
     return character;
   }
 
   removeCharacter(index: number): void {
+    const currentId = this.characters[this.activeCharacter]?.id;
     const removed = this.characters[index];
     this.characters.splice(index, 1);
     if (removed && this.lastPlayedId === removed.id) this.lastPlayedId = this.characters[0]?.id ?? null;
-    this.activeCharacter = Math.max(0, Math.min(this.activeCharacter, this.characters.length - 1));
+    const keepId = currentId !== removed?.id ? currentId : this.lastPlayedId;
+    const kept = this.characters.findIndex((character) => character.id === keepId);
+    this.activeCharacter = kept >= 0 ? kept : 0;
     this.clearHistory();
-    this.emit();
+    this.emit(true);
   }
 
   select(direction: number, frame: number): void {

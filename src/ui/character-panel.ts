@@ -105,6 +105,8 @@ export class CharacterPanel {
       this.studio.activeCharacter = ((next % total) + total) % total;
       this.studio.frame = 0;
       this.studio.clearHistory();
+      const picked = this.studio.character;
+      if (picked) this.studio.rememberPlayed(picked);
       this.view.fit();
       this.refresh();
     };
