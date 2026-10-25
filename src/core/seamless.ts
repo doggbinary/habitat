@@ -25,13 +25,18 @@ export function isSolid(rgba: Uint8ClampedArray, width: number, rect: AssetRect)
   return true;
 }
 
+/** The smallest piece of texture worth repeating. */
+const MIN_PIECE = 12;
+
 /**
  * A floor square that repeats without seams, made from the middle of a
  * shaped object such as a dirt plot with rounded corners and an outline.
- * The middle is cut out clear of the rim, and the square's left and top
+ * The middle is cut out clear of the rim, and the piece's left and top
  * edges are woven, pixel by pixel, into what lies just past its right and
- * bottom edges, so the last column runs straight on into the first.
- * Null when the object has no solid middle big enough for a square.
+ * bottom edges, so the last column runs straight on into the first. An
+ * object too small to hold a whole square, such as a dirt pile, gives a
+ * half, third or quarter square, repeated to fill it.
+ * Null when the object has no solid middle at all.
  */
 export function seamlessFloor(
   rgba: Uint8ClampedArray,
@@ -41,25 +46,32 @@ export function seamlessFloor(
 ): Uint8ClampedArray | null {
   const cx = rect.x + rect.w / 2;
   const cy = rect.y + rect.h / 2;
+  const smallest = MIN_PIECE + Math.ceil(MIN_PIECE / 4) + RIM * 2;
   let size = Math.min(rect.w, rect.h);
   let x0 = 0;
   let y0 = 0;
-  for (; size >= tile; size--) {
+  for (; size >= smallest; size--) {
     x0 = Math.round(cx - size / 2);
     y0 = Math.round(cy - size / 2);
     if (solidSquare(rgba, width, x0, y0, size)) break;
   }
   const inner = size - RIM * 2;
-  if (inner < tile) return null;
+  // The biggest whole fraction of a square that fits with room to weave its edges.
+  const piece = [1, 2, 3, 4]
+    .map((n) => tile / n)
+    .find((p) => Number.isInteger(p) && p >= MIN_PIECE && inner - p >= Math.min(BLEND, Math.ceil(p / 4)));
+  if (piece === undefined) return null;
 
-  const blend = Math.min(BLEND, inner - tile);
-  const ox = x0 + RIM + Math.floor((inner - tile - blend) / 2);
-  const oy = y0 + RIM + Math.floor((inner - tile - blend) / 2);
+  const blend = Math.min(BLEND, inner - piece);
+  const ox = x0 + RIM + Math.floor((inner - piece - blend) / 2);
+  const oy = y0 + RIM + Math.floor((inner - piece - blend) / 2);
   const out = new Uint8ClampedArray(tile * tile * 4);
   for (let y = 0; y < tile; y++) {
     for (let x = 0; x < tile; x++) {
-      const sx = x < blend && BAYER[(y % 4) * 4 + (x % 4)] >= x / blend ? x + tile : x;
-      const sy = y < blend && BAYER[(x % 4) * 4 + (y % 4)] >= y / blend ? y + tile : y;
+      const px = x % piece;
+      const py = y % piece;
+      const sx = px < blend && BAYER[(py % 4) * 4 + (px % 4)] >= px / blend ? px + piece : px;
+      const sy = py < blend && BAYER[(px % 4) * 4 + (py % 4)] >= py / blend ? py + piece : py;
       const from = ((oy + sy) * width + ox + sx) * 4;
       out.set(rgba.subarray(from, from + 4), (y * tile + x) * 4);
     }

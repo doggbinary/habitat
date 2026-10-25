@@ -41,8 +41,17 @@ describe('seamlessFloor', () => {
     expect(jump / 48).toBeLessThan(8);
   });
 
-  it('gives up on objects too small to hold a square', () => {
-    expect(seamlessFloor(plot(), W, { x: 30, y: 30, w: 40, h: 40 }, 48)).toBeNull();
+  it('fills a square from a pile too small to hold one, by repeating a smaller piece', () => {
+    const square = seamlessFloor(plot(), W, { x: 30, y: 30, w: 44, h: 40 }, 48)!;
+    expect(square).not.toBeNull();
+    for (let i = 0; i < 48 * 48; i++) expect(square[i * 4 + 3]).toBe(255);
+    // A 16 px piece, three times across.
+    expect(at(square, 48, 5, 7)).toEqual(at(square, 48, 21, 7));
+    expect(at(square, 48, 5, 7)).toEqual(at(square, 48, 37, 39));
+  });
+
+  it('gives up on a speck with no middle to speak of', () => {
+    expect(seamlessFloor(plot(), W, { x: 30, y: 30, w: 20, h: 20 }, 48)).toBeNull();
   });
 });
 
