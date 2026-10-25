@@ -240,27 +240,34 @@ export class App {
 
   async start(): Promise<void> {
     // `?map=name` opens a map published with the site, so one link is enough
-    // to hand someone a finished map on a tablet.
+    // to hand someone a finished map on a tablet. The library still loads
+    // afterwards: that link must not leave the rest of the packs missing.
     const wanted = new URLSearchParams(location.search).get('map');
-    if (wanted && (await this.openPublishedMap(wanted))) return;
+    const opened = wanted ? await this.openPublishedMap(wanted) : false;
 
-    const saved = await loadProject();
-    if (saved && isProjectFile(saved)) {
-      try {
-        const doc = await deserializeProject(saved);
-        this.studio.characters = deserializeCharacters(saved);
-        this.studio.activeCharacter = 0;
-        this.studio.clearHistory();
-        this.adoptDoc(doc);
-      } catch {
+    if (!opened) {
+      const saved = await loadProject();
+      if (saved && isProjectFile(saved)) {
+        try {
+          const doc = await deserializeProject(saved);
+          this.studio.characters = deserializeCharacters(saved);
+          this.studio.activeCharacter = 0;
+          this.studio.clearHistory();
+          this.adoptDoc(doc);
+        } catch {
+          this.adoptDoc(createDoc());
+        }
+      } else {
         this.adoptDoc(createDoc());
       }
-    } else {
-      this.adoptDoc(createDoc());
     }
 
     this.renderer.resize();
     this.fit();
+
+    // Old projects keep their sheets; redo them in the background so the
+    // iPad is not frozen while every page is split again.
+    await this.refreshStaleAssets();
 
     const added = await this.loadObjectLibrary();
     // Packs repeat ground pages, so a freshly loaded library is merged down
@@ -327,7 +334,8 @@ export class App {
     }
 
     const have = new Set(this.store.doc.tilesets.map((sheet) => sheet.name));
-    const fresh: Tileset[] = [];
+    let added = 0;
+    let opened = this.store.doc.tilesets.length === 0;
     for (const entry of entries) {
       if (have.has(entry.name) || skipped.has(entry.name)) continue;
       this.store.toast(`Loading ${entry.name}`);
@@ -339,8 +347,18 @@ export class App {
           skipped.add(entry.name);
           continue;
         }
-        fresh.push(tileset);
         have.add(entry.name);
+        this.insertLibrarySheet(tileset);
+        added += 1;
+        // Show each page as it lands so the iPad is not empty for minutes.
+        if (opened) {
+          opened = false;
+          const firstPaths = this.store.doc.tilesets.findIndex((sheet) => sheet.name === 'Paths 1');
+          this.store.activeTileset = firstPaths >= 0 ? firstPaths : 0;
+          this.selectFirstTile();
+          this.shell.openTab('tiles');
+        }
+        this.store.restructured();
       } catch {
         /* one unreadable page should not drop the rest */
       }
@@ -350,25 +368,42 @@ export class App {
     } catch {
       /* the pages still loaded for this visit */
     }
-    if (fresh.length === 0) return 0;
+    if (added === 0) return 0;
+    this.store.toast(`${added} asset ${added === 1 ? 'page' : 'pages'} ready`);
+    return added;
+  }
 
-    const empty = this.store.doc.tilesets.length === 0;
-    const paths = fresh.filter((sheet) => /^paths \d+$/i.test(sheet.name));
-    const others = fresh.filter((sheet) => !/^paths \d+$/i.test(sheet.name));
-    this.editor.structural('Add asset library', () => {
-      // Path pages sit at the front of the list. Shift the selection with
-      // them so the page someone was already on stays open.
-      this.store.doc.tilesets.unshift(...paths);
-      this.store.activeTileset += paths.length;
-      this.store.doc.tilesets.push(...others);
-    });
-    if (empty) {
-      const firstPaths = this.store.doc.tilesets.findIndex((sheet) => sheet.name === 'Paths 1');
-      this.store.activeTileset = firstPaths >= 0 ? firstPaths : 0;
-      this.selectFirstTile();
+  /** Path pages stay at the front; everything else appends. */
+  private insertLibrarySheet(tileset: Tileset): void {
+    if (/^paths \d+$/i.test(tileset.name)) {
+      let at = 0;
+      while (at < this.store.doc.tilesets.length && /^paths \d+$/i.test(this.store.doc.tilesets[at].name)) {
+        at += 1;
+      }
+      this.store.doc.tilesets.splice(at, 0, tileset);
+      if (this.store.activeTileset >= at) this.store.activeTileset += 1;
+      return;
     }
-    this.store.toast(`${fresh.length} asset ${fresh.length === 1 ? 'page' : 'pages'} ready`);
-    return fresh.length;
+    this.store.doc.tilesets.push(tileset);
+  }
+
+  /**
+   * Re-splits sheets found by an older detector, one page at a time so the
+   * editor stays usable on a tablet while that runs.
+   */
+  private async refreshStaleAssets(): Promise<void> {
+    const stale = this.store.doc.tilesets.filter((sheet) => needsDetection(sheet));
+    if (stale.length === 0) return;
+    for (const sheet of stale) {
+      this.store.toast(`Updating ${sheet.name}`);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      try {
+        detectInto(sheet);
+      } catch {
+        /* one bad sheet must not block the rest */
+      }
+      this.store.restructured();
+    }
   }
 
   /** Installs a document and resets everything derived from the old one. */
@@ -379,9 +414,9 @@ export class App {
     collapseDuplicatePaths(doc);
     for (const sheet of doc.tilesets) {
       // Path pages are expanded every load: the saved file keeps the original
-      // ground picture, and the pieces are built from it.
+      // ground picture, and the pieces are built from it. Object pages that
+      // need a newer detector are redone after the first paint, not here.
       if (sheet.image && isRawPathSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) expandPaths(sheet);
-      else if (needsDetection(sheet)) detectInto(sheet);
     }
 
     this.store.doc = doc;
@@ -914,6 +949,7 @@ export class App {
       this.studio.clearHistory();
       this.adoptDoc(doc);
       this.fit();
+      void this.refreshStaleAssets();
       const extra = this.studio.characters.length;
       this.store.toast(
         extra > 0

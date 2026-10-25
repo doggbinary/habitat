@@ -128,10 +128,10 @@ export class PalettePanel {
     this.header = el('div', { class: 'palette-header' });
     this.empty = el('div', { class: 'panel-empty' }, [
       icon('image', 34),
-      el('p', { text: 'No assets yet' }),
+      el('p', { text: 'Loading the library…' }),
       el('p', {
         class: 'muted',
-        text: 'Import a sprite sheet. Trees, props and buildings are split apart automatically.',
+        text: 'Packs appear here as each page is ready. You can also import your own sheet.',
       }),
       button('btn primary', 'Import assets', () => this.actions.addTileset(), [
         icon('upload', 18),
