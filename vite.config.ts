@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,8 +24,12 @@ function assetLibrary(): Plugin {
         continue;
       }
       if (!isLibrarySheet(folders, entry.name) && !isPathSheet(folders, entry.name)) continue;
-      found.push({ folders, file: entry.name });
-      located.set(libraryUrl(folders, entry.name), path.join(dir, entry.name));
+      const abs = path.join(dir, entry.name);
+      const id = isPathSheet(folders, entry.name)
+        ? crypto.createHash('sha1').update(fs.readFileSync(abs)).digest('hex')
+        : undefined;
+      found.push({ folders, file: entry.name, id });
+      located.set(libraryUrl(folders, entry.name), abs);
     }
   };
 

@@ -30,6 +30,16 @@ describe('object-sheet library', () => {
     ).toEqual(['Paths 1', 'Paths 2', 'Nature Park 1']);
   });
 
+  it('keeps one copy when the same ground page is in several packs', () => {
+    expect(
+      buildLibraryEntries([
+        { folders: ['apartment-2'], file: 'Tile_A2-2.png', id: 'same' },
+        { folders: ['Modern Hotel'], file: 'Tile_A2-2.png', id: 'same' },
+        { folders: ['ground'], file: 'Tile_A2-3.png', id: 'other' },
+      ]).map((entry) => entry.name),
+    ).toEqual(['Paths 1', 'Paths 2']);
+  });
+
   it('recognises a finished scene, where one asset covers the page', () => {
     expect(isSampleMap(1000, 1000, [{ w: 900, h: 800 }])).toBe(true);
     expect(isSampleMap(1000, 1000, [{ w: 80, h: 40 }, { w: 30, h: 30 }])).toBe(false);

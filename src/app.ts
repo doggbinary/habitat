@@ -10,6 +10,7 @@ import {
   type Tileset,
 } from './core/doc';
 import { DETECT_VERSION, assetsOf, deleteAssets, detectSheetAssets, mergeAssets, tileIndexOf } from './core/assets';
+import { PATH_STRIDE, expandPathSheet, isRawPathSheet } from './core/autotile';
 import { isSampleMap, type LibraryEntry } from './library';
 import { dominantColor, recolorToCanvas } from './io/recolor';
 import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
@@ -57,9 +58,114 @@ function needsDetection(sheet: Tileset): boolean {
 
 /** Finds a sheet's assets and stamps them with the detector that found them. */
 function detectInto(sheet: Tileset): void {
+  if (sheet.image && isRawPathSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) {
+    expandPaths(sheet);
+    return;
+  }
   sheet.assets = detectSheetAssets(sheet);
   sheet.assetsVersion = DETECT_VERSION;
   sheet.splitMode = 'objects';
+}
+
+/** Rebuilds a ground page into pieces whose edges meet. */
+function expandPaths(sheet: Tileset): void {
+  const image = sheet.image;
+  if (!image) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = sheet.imgW;
+  canvas.height = sheet.imgH;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return;
+  ctx.drawImage(image, 0, 0);
+  const src = ctx.getImageData(0, 0, sheet.imgW, sheet.imgH).data;
+  const expanded = expandPathSheet(src, sheet.imgW, sheet.imgH, sheet.tileW);
+  const next = document.createElement('canvas');
+  next.width = expanded.width;
+  next.height = expanded.height;
+  const out = next.getContext('2d');
+  if (!out) return;
+  const pixels = new Uint8ClampedArray(expanded.width * expanded.height * 4);
+  pixels.set(expanded.rgba);
+  out.putImageData(new ImageData(pixels, expanded.width, expanded.height), 0, 0);
+  sheet.image = next;
+  sheet.imgW = expanded.width;
+  sheet.imgH = expanded.height;
+  sheet.cols = expanded.cols;
+  sheet.rows = expanded.rows;
+  sheet.count = expanded.cols * expanded.rows;
+  sheet.margin = 0;
+  sheet.spacing = 0;
+  sheet.assets = expanded.assets;
+  sheet.pathStride = PATH_STRIDE;
+  sheet.assetsVersion = DETECT_VERSION;
+  sheet.splitMode = 'objects';
+}
+
+/** A short id for a sheet picture, so identical path pages can be told apart. */
+function fingerprint(image: CanvasImageSource, w: number, h: number): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx || w === 0 || h === 0) return `${w}x${h}`;
+  ctx.drawImage(image, 0, 0);
+  const data = ctx.getImageData(0, 0, w, h).data;
+  let hash = 2166136261;
+  for (let i = 0; i < data.length; i++) {
+    hash ^= data[i];
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${w}x${h}:${hash >>> 0}`;
+}
+
+/**
+ * Packs repeat the same ground pages. Keep the first of each picture and
+ * point anything already painted with a copy at that one.
+ */
+function collapseDuplicatePaths(doc: Doc): void {
+  const seen = new Map<string, number>();
+  const drop: number[] = [];
+  const keepOf = new Map<number, number>();
+  doc.tilesets.forEach((sheet, index) => {
+    if (!/^paths \d+$/i.test(sheet.name) || !sheet.image) return;
+    const key = fingerprint(sheet.image, sheet.imgW, sheet.imgH);
+    const kept = seen.get(key);
+    if (kept === undefined) seen.set(key, index);
+    else {
+      drop.push(index);
+      keepOf.set(index, kept);
+    }
+  });
+  drop.sort((a, b) => b - a);
+  for (const index of drop) {
+    const removed = doc.tilesets[index];
+    const keep = keepOf.get(index) ?? 0;
+    const keptSheet = doc.tilesets[keep];
+    doc.tilesets.splice(index, 1);
+    for (const layer of doc.layers) {
+      if (layer.kind === 'objects') {
+        for (const obj of layer.objects) if (obj.tilesetId === removed.id) obj.tilesetId = keptSheet.id;
+        continue;
+      }
+      if (layer.kind !== 'tiles') continue;
+      const data = layer.data;
+      for (let i = 0; i < data.length; i++) {
+        const tile = data[i];
+        if (tile === EMPTY) continue;
+        const owner = tilesetOf(tile);
+        if (owner === index) data[i] = pack(keep, indexOf(tile), flagsOf(tile));
+        else if (owner > index) data[i] = pack(owner - 1, indexOf(tile), flagsOf(tile));
+      }
+    }
+    for (const pin of doc.pins ?? []) if (pin.tilesetId === removed.id) pin.tilesetId = keptSheet.id;
+    for (const folder of doc.folders ?? []) {
+      for (const asset of folder.assets) if (asset.tilesetId === removed.id) asset.tilesetId = keptSheet.id;
+    }
+  }
+  let number = 1;
+  for (const sheet of doc.tilesets) {
+    if (/^paths \d+$/i.test(sheet.name)) sheet.name = `Paths ${number++}`;
+  }
 }
 
 export class App {
@@ -265,8 +371,12 @@ export class App {
     // Every sheet is a list of whole assets now, including sheets saved when
     // there was a separate ground view, or by an older detector. Placed
     // assets keep the rectangle they were placed with, so the map is unchanged.
+    collapseDuplicatePaths(doc);
     for (const sheet of doc.tilesets) {
-      if (needsDetection(sheet)) detectInto(sheet);
+      // Path pages are expanded every load: the saved file keeps the original
+      // ground picture, and the pieces are built from it.
+      if (sheet.image && isRawPathSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) expandPaths(sheet);
+      else if (needsDetection(sheet)) detectInto(sheet);
     }
 
     this.store.doc = doc;

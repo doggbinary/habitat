@@ -21,6 +21,11 @@ export function libraryUrl(folders: string[], file: string): string {
 export interface LibraryFile {
   folders: string[];
   file: string;
+  /**
+   * Identity of the picture. Path pages with the same id are the same sheet
+   * copied into several packs, and only the first is kept.
+   */
+  id?: string;
 }
 
 /**
@@ -30,10 +35,16 @@ export interface LibraryFile {
 export function buildLibraryEntries(files: LibraryFile[]): LibraryEntry[] {
   const objects: LibraryEntry[] = [];
   const paths: LibraryEntry[] = [];
+  const seenPath = new Set<string>();
   for (const item of files) {
     const url = libraryUrl(item.folders, item.file);
     if (isLibrarySheet(item.folders, item.file)) objects.push({ name: librarySheetName(item.folders, item.file), url });
-    else if (isPathSheet(item.folders, item.file)) paths.push({ name: url, url });
+    else if (isPathSheet(item.folders, item.file)) {
+      const id = item.id ?? url;
+      if (seenPath.has(id)) continue;
+      seenPath.add(id);
+      paths.push({ name: url, url });
+    }
   }
   objects.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   paths.sort((a, b) => a.url.localeCompare(b.url, undefined, { numeric: true }));
