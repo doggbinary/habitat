@@ -27,7 +27,9 @@ for (const name of ['gesturestart', 'gesturechange']) {
  */
 if ('serviceWorker' in navigator && import.meta.env.PROD && !isNative()) {
   window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('./sw.js').catch(() => {
+    // The query keeps an already-installed worker from handing back its own
+    // cached copy of this file, which would freeze the app on an old version.
+    void navigator.serviceWorker.register('./sw.js?v=2').catch(() => {
       /* offline support is a bonus, not a requirement */
     });
   });

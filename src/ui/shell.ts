@@ -286,6 +286,17 @@ export class Shell {
       if (redoLabel) redo.title = `Redo ${redoLabel.toLowerCase()}`;
     }
 
+    const selectedAsset = !character && this.objects.selected();
+    const heldTiles = !character && this.store.selection;
+    if (selectedAsset || heldTiles) {
+      this.topActions.append(
+        button('top-delete', 'Delete', () => {
+          if (this.objects.selected()) this.objects.remove();
+          else this.editor.deleteSelection();
+        }, [icon('trash', 18), el('span', { text: 'Delete' })]),
+      );
+    }
+
     this.topActions.append(
       undo,
       redo,
@@ -340,6 +351,14 @@ export class Shell {
         icon('palette', 17),
       ]);
       this.optionsBar.append(
+        this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger', 'Delete'),
+        this.chipToggle('grid', 'Guides', this.store.settings.alignGuides, () => {
+          this.store.settings.alignGuides = !this.store.settings.alignGuides;
+          if (!this.store.settings.alignGuides) this.store.alignLines = null;
+          this.refreshChrome();
+          this.renderer.requestDraw();
+        }),
+        el('div', { class: 'divider vertical' }),
         el('span', { class: 'chip-label', text: `${Math.round(found.obj.scale * 100)}%` }),
         el('div', { class: 'divider vertical' }),
         this.selectionChip('rotate', 'Rotate', () => this.objects.rotate()),
@@ -350,8 +369,6 @@ export class Shell {
         this.orderGroup(),
         el('div', { class: 'divider vertical' }),
         this.selectionChip('copy', 'Duplicate', () => this.objects.duplicate()),
-        el('div', { class: 'divider vertical' }),
-        this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger', 'Delete'),
       );
       return;
     }

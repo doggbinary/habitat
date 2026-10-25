@@ -10,6 +10,7 @@ import {
 import { snapshot, type DocSnapshot } from '../core/history';
 import type { Camera, Store } from '../core/store';
 import type { Renderer } from '../render/renderer';
+import { snapAlign, type AlignBox } from './align';
 
 /** Smallest and largest an object may be scaled to. */
 export const MIN_SCALE = 0.1;
@@ -97,6 +98,7 @@ export class ObjectTools {
   deselect(): void {
     if (!this.store.selectedObject) return;
     this.store.selectedObject = null;
+    this.store.alignLines = null;
     this.store.emit('ui');
     this.renderer.requestDraw();
   }
@@ -132,12 +134,14 @@ export class ObjectTools {
 
     const before = snapshot(this.doc);
     const layer = this.targetLayer();
+    const at = this.aligned(rect.w * scale, rect.h * scale, wx, wy);
+    this.store.alignLines = null;
     const obj: MapObject = {
       id: uid('obj'),
       tilesetId,
       rect: { ...rect },
-      x: Math.round(wx),
-      y: Math.round(wy),
+      x: at.x,
+      y: at.y,
       scale,
       rotation: 0,
       flipX: false,
@@ -164,6 +168,7 @@ export class ObjectTools {
   endGesture(label: string): void {
     const before = this.gestureBefore;
     this.gestureBefore = null;
+    this.store.alignLines = null;
     if (!before) return;
     this.store.history.commitSnapshot(label, before);
     this.store.changed();
@@ -171,12 +176,51 @@ export class ObjectTools {
 
   cancelGesture(): void {
     this.gestureBefore = null;
+    this.store.alignLines = null;
   }
 
   moveTo(obj: MapObject, wx: number, wy: number): void {
-    obj.x = Math.round(wx);
-    obj.y = Math.round(wy);
+    const { w, h } = objectSize(obj);
+    const next = this.aligned(w, h, wx, wy, obj.id);
+    obj.x = next.x;
+    obj.y = next.y;
     this.renderer.requestDraw();
+  }
+
+  /**
+   * Where a box of this size should sit. With guides on, it pulls onto the
+   * edge or centre of another asset, or onto the middle of the map.
+   */
+  aligned(w: number, h: number, x: number, y: number, ignoreId?: string): { x: number; y: number } {
+    if (!this.store.settings.alignGuides) {
+      this.store.alignLines = null;
+      return { x: Math.round(x), y: Math.round(y) };
+    }
+    const targets: AlignBox[] = [];
+    for (const layer of this.doc.layers) {
+      if (!isObjectLayer(layer) || !layer.visible) continue;
+      for (const obj of layer.objects) {
+        if (obj.id === ignoreId) continue;
+        const size = objectSize(obj);
+        targets.push({
+          left: obj.x - size.w / 2,
+          right: obj.x + size.w / 2,
+          cx: obj.x,
+          top: obj.y - size.h / 2,
+          bottom: obj.y + size.h / 2,
+          cy: obj.y,
+        });
+      }
+    }
+    const mapW = this.doc.width * this.doc.tileSize;
+    const mapH = this.doc.height * this.doc.tileSize;
+    targets.push({ left: 0, right: mapW, cx: mapW / 2, top: 0, bottom: mapH, cy: mapH / 2 });
+    const snapped = snapAlign(w, h, x, y, targets, 8 / Math.max(this.store.camera.zoom, 0.01));
+    this.store.alignLines =
+      snapped.vertical.length || snapped.horizontal.length
+        ? { vertical: snapped.vertical, horizontal: snapped.horizontal }
+        : null;
+    return snapped;
   }
 
   /**

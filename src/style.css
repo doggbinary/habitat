@@ -123,6 +123,21 @@ textarea {
   flex: none;
 }
 
+.top-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 10px;
+  background: var(--danger);
+  color: #fff;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
 /* --- Workspace ---------------------------------------------------------- */
 
 .workspace {

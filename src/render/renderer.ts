@@ -144,6 +144,7 @@ export class Renderer {
     this.drawHeldBlock(doc, originX, originY, zoom);
     this.drawDragPreview(doc, originX, originY, zoom);
     this.drawObjectSelection();
+    this.drawAlignLines();
 
     // A selected reference image takes over the canvas interaction, so show
     // its handles instead of a brush cursor that would not do anything.
@@ -243,6 +244,32 @@ export class Renderer {
       layer.h * zoom,
     );
     ctx.imageSmoothingEnabled = previous;
+  }
+
+  /** Pink Canva-style lines while an asset is lining up with another. */
+  private drawAlignLines(): void {
+    const lines = this.store.alignLines;
+    if (!lines || !this.store.settings.alignGuides) return;
+    const { ctx, store } = this;
+    const { camera } = store;
+    ctx.save();
+    ctx.strokeStyle = '#ff4f9a';
+    ctx.lineWidth = 1;
+    for (const x of lines.vertical) {
+      const sx = (x - camera.x) * camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(sx, 0);
+      ctx.lineTo(sx, this.viewH);
+      ctx.stroke();
+    }
+    for (const y of lines.horizontal) {
+      const sy = (y - camera.y) * camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(0, sy);
+      ctx.lineTo(this.viewW, sy);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /**

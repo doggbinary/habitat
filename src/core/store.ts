@@ -53,6 +53,8 @@ export interface Settings {
   showTileOutlines: boolean;
   /** Round a dragged reference image onto the tile grid when you let go. */
   snapImageToGrid: boolean;
+  /** Pink lines, and a gentle pull, when a moved asset lines up with another. */
+  alignGuides: boolean;
 }
 
 /** `view` covers anything that only moves the viewport or the hovered cell. */
@@ -83,7 +85,11 @@ export class Store {
     snapToStamp: false,
     showTileOutlines: false,
     snapImageToGrid: false,
+    alignGuides: true,
   };
+
+  /** Lines showing while an asset is being dragged into line with another. */
+  alignLines: { vertical: number[]; horizontal: number[] } | null = null;
 
   /**
    * A character dropped onto the map purely to judge scale. It is never part

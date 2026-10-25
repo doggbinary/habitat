@@ -75,6 +75,16 @@ export class MapPanel {
           this.store.settings.showGrid = on;
           this.store.emit('doc');
         }),
+        this.switchRow(
+          'Alignment guides',
+          this.store.settings.alignGuides,
+          (on) => {
+            this.store.settings.alignGuides = on;
+            if (!on) this.store.alignLines = null;
+            this.store.emit('doc');
+          },
+          'Pink lines appear when an asset lines up with another, and it eases onto that line.',
+        ),
         this.switchRow('Dim inactive layers', this.store.settings.highlightActiveLayer, (on) => {
           this.store.settings.highlightActiveLayer = on;
           this.store.emit('doc');

@@ -521,14 +521,24 @@ export class App {
   }
 
   private dragMove(clientX: number, clientY: number): void {
-    if (!this.store.drag) return;
-    this.store.drag.world = this.worldUnder(clientX, clientY);
+    const drag = this.store.drag;
+    if (!drag) return;
+    const at = this.worldUnder(clientX, clientY);
+    if (!at) {
+      drag.world = null;
+      this.store.alignLines = null;
+    } else {
+      const sheet = this.store.doc.tilesets.find((t) => t.id === drag.tilesetId);
+      const scale = sheet && sheet.tileW > 0 ? this.store.doc.tileSize / sheet.tileW : 1;
+      drag.world = this.objects.aligned(drag.rect.w * scale, drag.rect.h * scale, at.x, at.y);
+    }
     this.renderer.requestDraw();
   }
 
   private dragEnd(clientX: number, clientY: number, dropped: boolean): void {
     const drag = this.store.drag;
     this.store.drag = null;
+    this.store.alignLines = null;
     this.renderer.requestDraw();
     if (!drag || !dropped) return;
     const at = this.worldUnder(clientX, clientY);
