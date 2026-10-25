@@ -19,6 +19,10 @@ const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
 /** Movement under this many pixels is still a tap. */
 const TAP_SLOP = 6;
+/** Fingers that land and lift within this long, without moving, are a tap. */
+const TAP_MS = 350;
+/** Several fingers wobble more than one, so their taps get a looser slop. */
+const MULTI_TAP_SLOP = 14;
 
 type Gesture = 'idle' | 'move' | 'size' | 'pinch';
 
@@ -54,6 +58,10 @@ export class PlayMode {
   private scaleStartSize = { w: 1, h: 1 };
   private pinchDistance = 1;
   private pinchZoom = 1;
+  /** Bookkeeping for two- and three-finger taps, which undo and redo. */
+  private touchStart = 0;
+  private touchMost = 0;
+  private touchWandered = false;
   /** The corner grip only shows once Size is chosen for the tapped object. */
   private sizeOpen = false;
 
@@ -100,7 +108,8 @@ export class PlayMode {
     private readonly objects: ObjectTools,
     private readonly character: Character,
     startTile: { x: number; y: number },
-    private readonly onExit: () => void,
+    /** Called with the square the character's feet ended on. */
+    private readonly onExit: (tile: { x: number; y: number }) => void,
   ) {
     this.doc = store.doc;
     this.mapCanvas = composeMap(this.doc);
@@ -146,7 +155,8 @@ export class PlayMode {
     this.menu.addEventListener('pointerdown', (e) => e.stopPropagation());
 
     const hint = element('div', 'play-hint');
-    hint.textContent = 'Walk with the stick. Tap an object to move it, size it, or make it block. Pinch to zoom.';
+    hint.textContent =
+      'Walk with the stick. Tap an object to move, size or block it. Pinch to zoom. Two-finger tap undoes, three redoes.';
 
     this.root = element('div', 'play-root', [
       this.canvas,
@@ -247,7 +257,13 @@ export class PlayMode {
       (e) => {
         e.preventDefault();
         const local = this.local(e);
+        if (this.pointers.size === 0) {
+          this.touchStart = performance.now();
+          this.touchMost = 0;
+          this.touchWandered = false;
+        }
         this.pointers.set(e.pointerId, { ...local, startX: local.x, startY: local.y });
+        this.touchMost = Math.max(this.touchMost, this.pointers.size);
         canvas.setPointerCapture?.(e.pointerId);
         if (this.pointers.size >= 2) {
           this.startPinch();
@@ -266,6 +282,7 @@ export class PlayMode {
         const local = this.local(e);
         tracked.x = local.x;
         tracked.y = local.y;
+        if (Math.hypot(local.x - tracked.startX, local.y - tracked.startY) > MULTI_TAP_SLOP) this.touchWandered = true;
         if (this.gesture === 'pinch') {
           this.updatePinch();
           return;
@@ -280,7 +297,10 @@ export class PlayMode {
     const release = (e: PointerEvent) => {
       if (!this.pointers.delete(e.pointerId)) return;
       if (this.gesture === 'pinch') {
-        if (this.pointers.size === 0) this.gesture = 'idle';
+        if (this.pointers.size === 0) {
+          this.gesture = 'idle';
+          this.multiFingerTap(e.type === 'pointerup');
+        }
         return;
       }
       if (e.pointerId !== this.activeId) return;
@@ -373,6 +393,16 @@ export class PlayMode {
     if (!a || !b) return;
     const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
     this.zoom = clamp(this.pinchZoom * (distance / this.pinchDistance), MIN_ZOOM, MAX_ZOOM);
+  }
+
+  /** Two fingers tapped together undo, three redo, as in the map editor. */
+  private multiFingerTap(lifted: boolean): void {
+    const quick = performance.now() - this.touchStart < TAP_MS;
+    if (!lifted || !quick || this.touchWandered || this.touchMost < 2) return;
+    // The fingers barely moved, but enough to nudge the zoom; put it back.
+    this.zoom = this.pinchZoom;
+    if (this.touchMost === 2) this.stepHistory(false);
+    else this.stepHistory(true);
   }
 
   private stepSize(squares: number): void {
@@ -653,7 +683,11 @@ export class PlayMode {
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('resize', this.onResize);
     this.root.remove();
-    this.onExit();
+    const size = this.doc.tileSize;
+    this.onExit({
+      x: clamp(Math.floor(this.x / size), 0, this.doc.width - 1),
+      y: clamp(Math.floor(this.y / size), 0, this.doc.height - 1),
+    });
   }
 }
 

@@ -74,6 +74,10 @@ export class PointerInput {
 
   /** Called when a placed ground tile is double-tapped. */
   onDoubleTap: ((cell: { x: number; y: number }, clientX: number, clientY: number) => void) | null = null;
+  /** True when a world point is on the character standing on the map. */
+  characterAt: ((wx: number, wy: number) => boolean) | null = null;
+  /** A press on that character, which opens its menu. */
+  onCharacterTap: ((clientX: number, clientY: number) => void) | null = null;
 
   /** Captured when a stroke starts so a mid-stroke tool change cannot confuse it. */
   private strokeShape: Shape = 'brush';
@@ -328,6 +332,39 @@ export class PointerInput {
     return this.stampIsGround();
   }
 
+  /** The character left standing on the map opens its menu instead of painting under it. */
+  private pressCharacter(pointer: TrackedPointer, e: PointerEvent): boolean {
+    const preview = this.store.characterPreview;
+    if (!preview.enabled || preview.placing || this.spaceHeld || !this.characterAt || !this.onCharacterTap) return false;
+    if (e.pointerType === 'mouse' && e.button !== 0) return false;
+    const world = this.worldAt(pointer.x, pointer.y);
+    if (!this.characterAt(world.x, world.y)) return false;
+    this.mode = 'idle';
+    this.activeId = pointer.id;
+    this.onCharacterTap(e.clientX, e.clientY);
+    return true;
+  }
+
+  private lastPanHint = 0;
+
+  /**
+   * A finger on a painting tool pans when the brush is not a floor square.
+   * Say so, at most every few seconds, so it does not look like the tool broke.
+   */
+  private explainFingerPan(): void {
+    const tool = this.store.tool;
+    if (tool !== 'brush' && tool !== 'fill' && tool !== 'rect' && tool !== 'line') return;
+    const now = performance.now();
+    if (now - this.lastPanHint < 5000) return;
+    this.lastPanHint = now;
+    const name = tool === 'rect' ? 'Rectangle' : tool === 'line' ? 'Line' : tool === 'fill' ? 'Fill' : 'The brush';
+    this.store.toast(
+      this.store.settings.fingerDraws
+        ? `${name} paints floor squares with a finger. Pick a floor square, or use the Pencil.`
+        : `Turn on Finger paints floors to use ${name.toLowerCase()} with a finger.`,
+    );
+  }
+
   /** True when every square of the brush is a path or floor square. */
   private stampIsGround(): boolean {
     const { stamp, doc } = this.store;
@@ -564,6 +601,8 @@ export class PointerInput {
     this.pointers.set(e.pointerId, pointer);
     this.canvas.setPointerCapture?.(e.pointerId);
 
+    if (this.pointers.size === 1 && this.pressCharacter(pointer, e)) return;
+
     if (e.pointerType === 'pen') {
       this.penDown = true;
       // Drop any finger navigation that was underway: the Pencil wins.
@@ -607,8 +646,16 @@ export class PointerInput {
         return;
       }
       if (this.beginPlace(pointer, false)) return;
+      // Select boxes tiles with a finger too; two fingers still pan and zoom.
+      if (this.store.tool === 'select' && !this.spaceHeld) {
+        this.startSelect(pointer);
+        return;
+      }
       if (this.fingerPaints()) this.startDraw(pointer, false);
-      else this.beginPan(pointer);
+      else {
+        this.explainFingerPan();
+        this.beginPan(pointer);
+      }
       return;
     }
 
@@ -770,7 +817,11 @@ export class PointerInput {
         if (this.objectMoved) this.objects.endGesture('Move');
         else this.objects.cancelGesture();
       } else if (this.mode === 'object-scale') this.objects.endGesture('Resize');
-      else if (this.mode === 'selection-rect') this.finishSelectRect();
+      else if (this.mode === 'selection-rect') {
+        // A still finger tap is a tap (it deselects), not a one-square box.
+        if (tracked.type === 'touch' && !this.gestureMoved) this.store.preview = null;
+        else this.finishSelectRect();
+      }
       else if (this.mode === 'selection-move') this.store.changed();
       this.mode = 'idle';
       this.activeId = null;

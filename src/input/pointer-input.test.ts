@@ -29,9 +29,9 @@ function fakeCanvas(): HTMLCanvasElement {
 }
 
 /** A Pencil event at a screen point. One map square is 16 px at zoom 1. */
-function touch(x: number, y: number) {
+function touch(x: number, y: number, pointerId = 1) {
   return {
-    pointerId: 1,
+    pointerId,
     pointerType: 'touch',
     clientX: x,
     clientY: y,
@@ -93,6 +93,49 @@ describe('fingers and placed objects', () => {
     const objectsLayer = store.doc.layers.find((l) => l.kind === 'objects') as ObjectLayer;
     expect(objectsLayer.objects).toHaveLength(2);
     expect(objectsLayer.objects[0].x).not.toBe(objectsLayer.objects[1].x);
+  });
+});
+
+describe('tools with a finger', () => {
+  it('boxes tiles with Select', () => {
+    layer.data.fill(pack(0, 1));
+    store.setTool('select');
+    handlers.pointerdown(touch(4, 4));
+    handlers.pointermove(touch(40, 40));
+    handlers.pointerup(touch(40, 40));
+    expect(store.selection?.w).toBe(3);
+    expect(store.selection?.h).toBe(3);
+  });
+
+  it('does not lift a square on a plain tap with Select', () => {
+    layer.data.fill(pack(0, 1));
+    store.setTool('select');
+    handlers.pointerdown(touch(4, 4));
+    handlers.pointerup(touch(4, 4));
+    expect(store.selection).toBeNull();
+  });
+
+  it('draws a rectangle of floor squares', () => {
+    store.doc.tilesets[0].name = 'Floors 1';
+    store.settings.fingerDraws = true;
+    store.setTool('rect');
+    handlers.pointerdown(touch(2, 2));
+    handlers.pointermove(touch(50, 50));
+    handlers.pointerup(touch(50, 50));
+    expect(painted()).toBe(16);
+  });
+
+  it('undoes with a two-finger tap', () => {
+    store.setTool('rect');
+    handlers.pointerdown(pen(2, 2));
+    handlers.pointermove(pen(50, 50));
+    handlers.pointerup(pen(50, 50));
+    expect(painted()).toBe(16);
+    handlers.pointerdown(touch(200, 200, 2));
+    handlers.pointerdown(touch(260, 200, 3));
+    handlers.pointerup(touch(200, 200, 2));
+    handlers.pointerup(touch(260, 200, 3));
+    expect(painted()).toBe(0);
   });
 });
 

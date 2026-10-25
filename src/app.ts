@@ -45,6 +45,7 @@ import { openColorPopover } from './ui/color-popover';
 import { hexToHsv, hsvToHex } from './ui/color-wheel';
 import { importSpriteSheet } from './character/import';
 import { frameIndex, framePixels } from './character/model';
+import { addCharacterArt } from './character/sheet';
 import { Studio } from './character/studio';
 import { CharacterView } from './character/view';
 import { EMPTY_STAMP, singleStamp } from './core/stamp';
@@ -68,7 +69,7 @@ import { createAutosave, loadProject } from './io/storage';
 import { fitToView, screenToCell, screenToWorld } from './render/camera';
 import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
-import { el } from './ui/dom';
+import { button, el } from './ui/dom';
 import { openModal } from './ui/modal';
 import { Shell } from './ui/shell';
 
@@ -306,6 +307,11 @@ export class App {
     });
 
     this.input.onDoubleTap = (cell, x, y) => this.openAssetMenuAt(cell, x, y);
+    this.input.characterAt = (wx, wy) => {
+      const box = this.characterBox();
+      return !!box && wx >= box.x && wx < box.x + box.w && wy >= box.y && wy < box.y + box.h;
+    };
+    this.input.onCharacterTap = (x, y) => this.openCharacterMenu(x, y);
     this.renderer.setCharacterSource(() => this.characterFrame());
     this.animatePreview();
 
@@ -657,11 +663,102 @@ export class App {
       ? { x: preview.tx, y: preview.ty }
       : screenToCell(this.store.camera, this.store.doc, this.renderer.viewW / 2, this.renderer.viewH / 2);
 
-    new PlayMode(this.store, this.objects, character, tile, () => {
-      // Returning from the test should not look like anything moved.
+    new PlayMode(this.store, this.objects, character, tile, (end) => {
+      // The character stays where you walked it, so the map picks up from there.
+      preview.tx = end.x;
+      preview.ty = end.y;
+      preview.enabled = true;
+      preview.placing = false;
       this.renderer.resize();
       this.renderer.requestDraw();
+      this.store.emit('ui');
     });
+  }
+
+  /** The box the standing character covers, in world pixels. */
+  private characterBox(): { x: number; y: number; w: number; h: number } | null {
+    const character = this.studio.character;
+    const preview = this.store.characterPreview;
+    if (!character || !preview.enabled) return null;
+    const tile = this.store.doc.tileSize;
+    const tilesW = character.w / tile;
+    return {
+      x: (preview.tx - (tilesW - 1) / 2) * tile,
+      y: (preview.ty + 1) * tile - character.h,
+      w: character.w,
+      h: character.h,
+    };
+  }
+
+  /** Tapping the character on the map: stick any character there as an asset, move it, or play. */
+  private openCharacterMenu(clientX: number, clientY: number): void {
+    document.querySelector('.size-menu')?.remove();
+    const preview = this.store.characterPreview;
+    const menu = el('div', { class: 'size-menu', role: 'menu' });
+    const close = () => {
+      menu.remove();
+      document.removeEventListener('pointerdown', outside, true);
+    };
+    const outside = (e: Event) => {
+      if (!menu.contains(e.target as Node)) close();
+    };
+    const item = (label: string, note: string, run: () => void) => {
+      const node = button('size-menu-item', label, () => {
+        close();
+        run();
+      }, [el('span', { class: 'size-menu-tiles', text: label }), note ? el('span', { class: 'size-menu-px', text: note }) : null]);
+      node.setAttribute('role', 'menuitem');
+      return node;
+    };
+
+    menu.append(el('div', { class: 'size-menu-title', text: 'Stick on the map' }));
+    this.studio.characters.forEach((character, index) => {
+      const current = index === this.studio.activeCharacter;
+      menu.append(
+        item(character.name, current ? 'Playing' : `${character.tilesW} x ${character.tilesH}`, () =>
+          this.stickCharacter(index, preview.tx, preview.ty),
+        ),
+      );
+    });
+    menu.append(
+      el('div', { class: 'size-menu-title', text: 'Your character' }),
+      item('Play from here', '', () => this.startPlayTest()),
+      item('Move', '', () => {
+        preview.placing = true;
+        this.store.toast('Tap the map to move your character');
+        this.store.emit('ui');
+      }),
+      item('Hide', '', () => {
+        preview.enabled = false;
+        preview.placing = false;
+        this.renderer.requestDraw();
+        this.store.emit('ui');
+      }),
+    );
+
+    document.body.append(menu);
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+    menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, clientX - width / 2))}px`;
+    menu.style.top = `${Math.max(8, Math.min(window.innerHeight - height - 8, clientY + 12))}px`;
+    // Wait for this press to finish, or it would count as a press outside.
+    setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
+  }
+
+  /** Places a character's standing pose as an asset, feet on the given square. */
+  private stickCharacter(index: number, tx: number, ty: number): void {
+    const character = this.studio.characters[index];
+    if (!character) return;
+    const art = addCharacterArt(this.store.doc, character);
+    if (!art) {
+      this.store.toast('Draw something first: that character is empty');
+      return;
+    }
+    const tile = this.store.doc.tileSize;
+    this.objects.place(art.tilesetId, art.rect, (tx + 0.5) * tile, (ty + 1) * tile - art.rect.h / 2);
+    this.renderer.invalidateAll();
+    this.store.restructured();
+    this.store.toast(`${character.name} is on the map. Find them in Assets under Characters.`);
   }
 
   /** Drops the character onto the middle of the current view and shows the map. */
