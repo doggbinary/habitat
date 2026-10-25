@@ -15,6 +15,8 @@ const TERRAIN_FILL = 0.995;
 const TERRAIN_MATCH = 10;
 /** ...and ground has to turn up this many times to count as a texture. */
 const TERRAIN_REPEATS = 3;
+/** How plain a square has to be: a cupboard door is patterned, grass is not. */
+const TERRAIN_FLAT = 8;
 /** Each cell is averaged down to this many blocks a side before comparing. */
 const LOOK_SIZE = 8;
 /** Colour jump across a grid line that means two drawings meet there. */
@@ -881,6 +883,12 @@ export function terrainCells(
     if (solid / (cw * ch) < TERRAIN_FILL) return;
 
     const look = cellLook(rgba, w, x0, y0, cw, ch);
+    // Ground is a flat texture. A cupboard front or a window repeats just as
+    // often and fills its square just as fully, but it has a design in it:
+    // a frame, a handle, panes. Measuring how much the square varies within
+    // itself keeps those out of the ground.
+    if (lookStructure(look) > TERRAIN_FLAT) return;
+
     const kind = kinds.find((k) => lookDistance(k.look, look) < TERRAIN_MATCH);
     if (kind) kind.members.push(index);
     else kinds.push({ look, members: [index] });
@@ -891,6 +899,28 @@ export function terrainCells(
     for (const index of kind.members) cells[index] = 1;
   }
   return cells;
+}
+
+/** How much a square varies within itself: near zero for a flat texture. */
+function lookStructure(look: Float64Array): number {
+  const blocks = look.length / 3;
+  let mr = 0;
+  let mg = 0;
+  let mb = 0;
+  for (let i = 0; i < blocks; i++) {
+    mr += look[i * 3];
+    mg += look[i * 3 + 1];
+    mb += look[i * 3 + 2];
+  }
+  mr /= blocks;
+  mg /= blocks;
+  mb /= blocks;
+
+  let spread = 0;
+  for (let i = 0; i < blocks; i++) {
+    spread += Math.abs(look[i * 3] - mr) + Math.abs(look[i * 3 + 1] - mg) + Math.abs(look[i * 3 + 2] - mb);
+  }
+  return spread / (blocks * 3);
 }
 
 /** A cell boiled down to a grid of average colours, so near-matches still match. */

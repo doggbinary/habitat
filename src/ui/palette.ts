@@ -31,6 +31,23 @@ const PEN_SLOP = 5;
 const FLING_MIN = 0.08;
 const FLING_DECAY = 0.94;
 
+/** Ground squares are compared as this many average colours a side. */
+const GROUND_LOOK = 4;
+/** Colours are binned this coarsely, so two shades of one grass match. */
+const GROUND_BIN = 24;
+
+/** A short description of how a ground square looks, for spotting repeats. */
+function groundLook(ctx: CanvasRenderingContext2D, image: CanvasImageSource, rect: AssetRect): string {
+  ctx.clearRect(0, 0, GROUND_LOOK, GROUND_LOOK);
+  ctx.drawImage(image, rect.x, rect.y, rect.w, rect.h, 0, 0, GROUND_LOOK, GROUND_LOOK);
+  const data = ctx.getImageData(0, 0, GROUND_LOOK, GROUND_LOOK).data;
+  let look = '';
+  for (let i = 0; i < GROUND_LOOK * GROUND_LOOK; i++) {
+    look += `${Math.round(data[i * 4] / GROUND_BIN)},${Math.round(data[i * 4 + 1] / GROUND_BIN)},${Math.round(data[i * 4 + 2] / GROUND_BIN)};`;
+  }
+  return look;
+}
+
 export interface PaletteActions {
   addTileset: () => void;
   editTileset: (index: number) => void;
@@ -76,6 +93,7 @@ export class PalettePanel {
   private columns = 3;
   private entries: Entry[] = [];
   private view: View = { kind: 'sheet' };
+  private groundCache: { key: string; entries: Entry[] } | null = null;
 
   private mode: 'idle' | 'pending' | 'scroll' | 'drag' = 'idle';
   private activeId: number | null = null;
@@ -395,11 +413,11 @@ export class PalettePanel {
         el('span', { class: 'chip-text', text: count > 0 ? `${label} ${count}` : label }),
       ]);
 
-    const groundCount = doc.tilesets.reduce((total, sheet) => total + (sheet.groundAssets?.length ?? 0), 0);
+    const hasGround = doc.tilesets.some((sheet) => (sheet.groundAssets?.length ?? 0) > 0);
 
     return el('div', { class: 'palette-tabs' }, [
       tab({ kind: 'pins' }, 'star', 'Pinned', doc.pins.length),
-      ...(groundCount > 0 ? [tab({ kind: 'ground' }, 'tiles', 'Ground', groundCount)] : []),
+      ...(hasGround ? [tab({ kind: 'ground' }, 'tiles', 'Ground', this.groundEntries().length)] : []),
       ...doc.folders.map((folder) => tab({ kind: 'folder', id: folder.id }, 'layers', folder.name, folder.assets.length)),
       tab({ kind: 'sheet' }, 'image', 'Sheets', 0),
     ]);
@@ -631,6 +649,43 @@ export class PalettePanel {
     this.actions.fileAssets(folderId, folder.name, keep);
   }
 
+  /**
+   * The Ground page: one of each kind of ground, from every sheet.
+   *
+   * Packs repeat the same grass and paving endlessly, and a sheet draws the
+   * same square dozens of times, so the raw list runs to thousands. Each
+   * square is boiled down to a few average colours and only the first of
+   * each look is kept. The answer is cached, because it costs a pass over
+   * every ground square on every sheet.
+   */
+  private groundEntries(): Entry[] {
+    const doc = this.store.doc;
+    const key = doc.tilesets.map((sheet) => `${sheet.id}:${sheet.groundAssets?.length ?? 0}`).join('|');
+    if (this.groundCache?.key === key) return this.groundCache.entries;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = GROUND_LOOK;
+    canvas.height = GROUND_LOOK;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    const entries: Entry[] = [];
+    const seen = new Set<string>();
+    doc.tilesets.forEach((tileset, tilesetIndex) => {
+      const assets = assetsOf(tileset);
+      for (const assetIndex of tileset.groundAssets ?? []) {
+        const rect = assets[assetIndex];
+        if (!rect) continue;
+        const look = ctx && tileset.image ? groundLook(ctx, tileset.image, rect) : String(entries.length);
+        if (seen.has(look)) continue;
+        seen.add(look);
+        entries.push({ tileset, tilesetIndex, rect, assetIndex });
+      }
+    });
+
+    this.groundCache = { key, entries };
+    return entries;
+  }
+
   // --- Rendering -----------------------------------------------------------
 
   /**
@@ -645,22 +700,18 @@ export class PalettePanel {
       const tileset = this.activeTileset();
       if (!tileset) return [];
       const index = this.store.activeTileset;
-      return assetsOf(tileset).map((rect, assetIndex) => ({ tileset, tilesetIndex: index, rect, assetIndex }));
+      // The ground squares live on the Ground page. Leaving them here too
+      // would bury a page of buildings under a hundred bits of road.
+      const ground = new Set(tileset.groundAssets ?? []);
+      return assetsOf(tileset).flatMap((rect, assetIndex) =>
+        ground.has(assetIndex) ? [] : [{ tileset, tilesetIndex: index, rect, assetIndex }],
+      );
     }
 
     // Every square of grass, water, brick and pavement found on any sheet,
-    // gathered in one place instead of buried among that sheet's props.
-    if (view.kind === 'ground') {
-      const entries: Entry[] = [];
-      doc.tilesets.forEach((tileset, tilesetIndex) => {
-        const assets = assetsOf(tileset);
-        for (const assetIndex of tileset.groundAssets ?? []) {
-          const rect = assets[assetIndex];
-          if (rect) entries.push({ tileset, tilesetIndex, rect, assetIndex });
-        }
-      });
-      return entries;
-    }
+    // gathered in one place instead of buried among that sheet's props, and
+    // with the many repeats between packs shown only once.
+    if (view.kind === 'ground') return this.groundEntries();
 
     const refs =
       view.kind === 'pins' ? doc.pins : (doc.folders.find((folder) => folder.id === view.id)?.assets ?? []);
