@@ -447,7 +447,8 @@ export class App {
   private async loadObjectLibrary(): Promise<number> {
     let entries: LibraryEntry[];
     try {
-      const response = await fetch(new URL('library/manifest.json', document.baseURI));
+      // Always ask the server: a cached list would hide packs added since.
+      const response = await fetch(new URL('library/manifest.json', document.baseURI), { cache: 'no-cache' });
       if (!response.ok) return 0;
       entries = (await response.json()) as LibraryEntry[];
     } catch {
