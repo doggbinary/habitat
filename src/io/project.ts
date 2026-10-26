@@ -133,7 +133,7 @@ interface SerializedCharacter {
   /** Base64 RGBA buffers, direction-major like `Character.frames`. */
   frames: string[];
   /** Picture traced over, absent when there is none. */
-  reference?: { src: string; opacity: number; visible: boolean; scale?: number; x?: number; y?: number };
+  reference?: { src: string; opacity: number; visible: boolean; scale?: number; x?: number; y?: number; locked?: boolean };
 }
 
 export interface SerializedProject {
@@ -211,6 +211,7 @@ export function serializeProject(
               ...(c.reference.scale !== undefined ? { scale: c.reference.scale } : {}),
               ...(c.reference.x !== undefined ? { x: c.reference.x } : {}),
               ...(c.reference.y !== undefined ? { y: c.reference.y } : {}),
+              locked: c.reference.locked === true,
             },
           }
         : {}),
@@ -315,6 +316,8 @@ export function deserializeCharacters(data: SerializedProject): Character[] {
               ...(Number.isFinite(c.reference.scale) && c.reference.scale! > 0 ? { scale: c.reference.scale } : {}),
               ...(Number.isFinite(c.reference.x) ? { x: c.reference.x } : {}),
               ...(Number.isFinite(c.reference.y) ? { y: c.reference.y } : {}),
+              // Saved before pictures could be unlocked, fingers drew over them: keep it that way.
+              locked: c.reference.locked !== false,
             },
           }
         : {}),

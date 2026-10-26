@@ -1,4 +1,11 @@
-import { framePixels, referenceImage, referencePlacement, type Character, type Frame } from './model';
+import {
+  framePixels,
+  pinchReference,
+  referenceImage,
+  referencePlacement,
+  type Character,
+  type Frame,
+} from './model';
 import type { Studio } from './studio';
 
 const BACKDROP = '#0e0f13';
@@ -25,19 +32,31 @@ export class CharacterView {
   offsetX = 0;
   offsetY = 0;
 
+  /** Runs when a finger has finished moving or sizing the traced picture. */
+  onPictureChanged: (() => void) | null = null;
+
   private dpr = 1;
   private viewW = 0;
   private viewH = 0;
   private frameHandle = 0;
 
   private hover: { x: number; y: number } | null = null;
-  private readonly pointers = new Map<number, { type: string }>();
-  private mode: 'idle' | 'draw' | 'blocked' | 'move' = 'idle';
+  private readonly pointers = new Map<number, { type: string; x: number; y: number }>();
+  private mode: 'idle' | 'draw' | 'blocked' | 'move' | 'pinch' = 'idle';
   private activeId: number | null = null;
   private penDown = false;
   private last: { x: number; y: number } | null = null;
   /** Where a drag of the traced picture began: the screen point and the picture's nudge then. */
   private moveFrom: { sx: number; sy: number; x: number; y: number } | null = null;
+  /** The two fingers pinching the traced picture, and the picture as it was when they landed. */
+  private pinchFrom: {
+    ids: [number, number];
+    mid: { x: number; y: number };
+    distance: number;
+    scale?: number;
+    x?: number;
+    y?: number;
+  } | null = null;
 
   /** Scratch canvas a frame is written into before being scaled up. */
   private readonly scratch = document.createElement('canvas');
@@ -275,12 +294,14 @@ export class CharacterView {
         if (e.pointerType === 'touch' && this.penDown) return;
         e.preventDefault();
         const { x, y } = this.local(e);
-        this.pointers.set(e.pointerId, { type: e.pointerType });
+        this.pointers.set(e.pointerId, { type: e.pointerType, x, y });
         canvas.setPointerCapture?.(e.pointerId);
 
         if (e.pointerType === 'pen') {
           this.penDown = true;
           for (const [id, p] of [...this.pointers]) if (p.type === 'touch') this.pointers.delete(id);
+          this.moveFrom = null;
+          this.pinchFrom = null;
           this.startDraw(e.pointerId, x, y);
           return;
         }
@@ -289,15 +310,21 @@ export class CharacterView {
           return;
         }
 
+        // An unlocked picture belongs to the fingers: one drags it, two pinch
+        // it. The Pencil still draws over it.
+        if (this.pictureFollowsFingers()) {
+          if (this.touchCount() === 1) this.startMove(e.pointerId, x, y);
+          else if (this.touchCount() === 2 && this.mode !== 'draw') this.startPinch();
+          return;
+        }
+
         // The canvas is locked, so fingers never pan or zoom it. A second
-        // finger is a palm or a slip: take back what the first one drew.
+        // finger is a palm or a slip: take back only what the first one is
+        // drawing right now, never a stroke finished earlier.
         if (this.touchCount() === 1) {
           this.startDraw(e.pointerId, x, y);
         } else if (this.touchCount() > 1) {
-          if (this.mode === 'draw') {
-            this.studio.endStroke();
-            this.studio.undo();
-          }
+          if (this.mode === 'draw') this.studio.cancelStroke();
           this.mode = 'blocked';
           this.activeId = null;
           this.last = null;
@@ -318,12 +345,18 @@ export class CharacterView {
           return;
         }
         e.preventDefault();
+        tracked.x = x;
+        tracked.y = y;
         if (this.mode === 'draw' && e.pointerId === this.activeId) {
           this.continueDraw(e, x, y);
           return;
         }
         if (this.mode === 'move' && e.pointerId === this.activeId) {
           this.dragReference(x, y);
+          return;
+        }
+        if (this.mode === 'pinch') {
+          this.pinchReference();
           return;
         }
         this.setHover(x, y);
@@ -342,10 +375,25 @@ export class CharacterView {
         if (this.pointers.size === 0) this.mode = 'idle';
         return;
       }
+      if (this.mode === 'pinch') {
+        if (!this.pinchFrom?.ids.includes(e.pointerId)) return;
+        // The finger left behind carries on dragging from where it is.
+        this.pinchFrom = null;
+        this.studio.emit();
+        this.onPictureChanged?.();
+        const rest = [...this.pointers].find(([, p]) => p.type === 'touch');
+        if (rest) this.startMove(rest[0], rest[1].x, rest[1].y);
+        else this.mode = 'idle';
+        this.requestDraw();
+        return;
+      }
       if (e.pointerId === this.activeId) {
         if (this.mode === 'draw') this.studio.endStroke();
         // The picture's new place is saved with the character.
-        if (this.mode === 'move') this.studio.emit();
+        if (this.mode === 'move') {
+          this.studio.emit();
+          this.onPictureChanged?.();
+        }
         this.moveFrom = null;
         this.mode = 'idle';
         this.activeId = null;
@@ -368,17 +416,80 @@ export class CharacterView {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
-  private startDraw(id: number, x: number, y: number): void {
+  /** True while the traced picture is showing and unlocked, so fingers move it instead of drawing. */
+  private pictureFollowsFingers(): boolean {
     const reference = this.studio.character?.reference;
-    if (this.studio.movingReference && reference) {
-      this.mode = 'move';
-      this.activeId = id;
-      this.moveFrom = { sx: x, sy: y, x: reference.x ?? 0, y: reference.y ?? 0 };
+    return !!reference && reference.visible && !reference.locked;
+  }
+
+  private startMove(id: number, x: number, y: number): void {
+    const reference = this.studio.character?.reference;
+    if (!reference) return;
+    this.mode = 'move';
+    this.activeId = id;
+    this.moveFrom = { sx: x, sy: y, x: reference.x ?? 0, y: reference.y ?? 0 };
+  }
+
+  private startPinch(): void {
+    const reference = this.studio.character?.reference;
+    const touches = [...this.pointers].filter(([, p]) => p.type === 'touch').slice(0, 2);
+    if (!reference || touches.length < 2) return;
+    const [[idA, a], [idB, b]] = touches;
+    this.mode = 'pinch';
+    this.activeId = null;
+    this.moveFrom = null;
+    this.pinchFrom = {
+      ids: [idA, idB],
+      mid: this.toSprite((a.x + b.x) / 2, (a.y + b.y) / 2),
+      distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      scale: reference.scale,
+      x: reference.x,
+      y: reference.y,
+    };
+  }
+
+  /** Sizes the picture by how far the fingers have spread, keeping it under them. */
+  private pinchReference(): void {
+    const character = this.studio.character;
+    const reference = character?.reference;
+    const picture = reference?.image;
+    const from = this.pinchFrom;
+    if (!character || !reference || !picture || !from) return;
+    const a = this.pointers.get(from.ids[0]);
+    const b = this.pointers.get(from.ids[1]);
+    if (!a || !b) return;
+    const next = pinchReference(
+      picture.naturalWidth,
+      picture.naturalHeight,
+      character.w,
+      character.h,
+      from,
+      from.mid,
+      this.toSprite((a.x + b.x) / 2, (a.y + b.y) / 2),
+      Math.hypot(a.x - b.x, a.y - b.y) / from.distance,
+    );
+    reference.scale = next.scale;
+    reference.x = next.x;
+    reference.y = next.y;
+    this.requestDraw();
+  }
+
+  /** A screen point in sprite pixels, not rounded to a cell. */
+  private toSprite(sx: number, sy: number): { x: number; y: number } {
+    return { x: (sx - this.offsetX) / this.zoom, y: (sy - this.offsetY) / this.zoom };
+  }
+
+  private startDraw(id: number, x: number, y: number): void {
+    const cell = this.toPixel(x, y);
+    const character = this.studio.character;
+    // A touch beside the drawing is not a stroke: nothing to record or take back.
+    if (!character || cell.x < 0 || cell.y < 0 || cell.x >= character.w || cell.y >= character.h) {
+      this.mode = 'idle';
+      this.activeId = null;
       return;
     }
     this.mode = 'draw';
     this.activeId = id;
-    const cell = this.toPixel(x, y);
     this.studio.beginStroke();
     this.studio.paint(cell.x, cell.y);
     this.last = cell;

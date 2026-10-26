@@ -489,6 +489,76 @@ textarea {
   font-size: 11px;
 }
 
+.frame-readout {
+  min-width: 88px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.studio-bar {
+  position: absolute;
+  z-index: 5;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  background: rgba(22, 24, 31, 0.92);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.studio-bar[hidden] {
+  display: none;
+}
+
+.studio-bar .studio-bar-color {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+.studio-bar-tool {
+  position: relative;
+}
+
+.studio-bar-size {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.studio-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.popover-title {
+  font-weight: 600;
+}
+
+.size-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.swatch.swatch-add {
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  background: var(--panel-2, rgba(255, 255, 255, 0.06));
+  border: 2px dashed var(--border);
+  box-shadow: inset 0 0 0 4px var(--stamp, transparent);
+}
+
 .status-bar {
   position: absolute;
   z-index: 4;

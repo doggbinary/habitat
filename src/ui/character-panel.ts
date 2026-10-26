@@ -15,6 +15,7 @@ import { openColorPopover } from './color-popover';
 import { pickFile, readFileAsDataUrl } from './dialogs';
 import { button, clear, el } from './dom';
 import { icon, type IconName } from './icons';
+import { paletteGrid } from './studio-bar';
 
 const TOOLS: { id: PixelTool; icon: IconName; label: string }[] = [
   { id: 'pencil', icon: 'brush', label: 'Draw' },
@@ -46,6 +47,7 @@ export class CharacterPanel {
   ) {
     this.previewCanvas = el('canvas', { class: 'sprite-preview' });
     this.element = el('div', { class: 'character-panel' });
+    this.view.onPictureChanged = () => this.refresh();
     this.startPreview();
   }
 
@@ -79,12 +81,19 @@ export class CharacterPanel {
     this.element.append(
       this.characterPager(character),
       this.toolsSection(),
-      this.paletteSection(character),
+      this.paletteSection(),
       this.framesSection(character),
       this.traceSection(character),
       this.previewSection(character),
       this.templateSection(character),
     );
+  }
+
+  /** Colour or palette changed: redraw, rebuild, and let the studio bar catch up. */
+  private changed(): void {
+    this.view.requestDraw();
+    this.refresh();
+    this.studio.emit();
   }
 
   private createCharacter(withTemplate: boolean): void {
@@ -144,8 +153,6 @@ export class CharacterPanel {
       const active = this.studio.tool === tool.id;
       const node = button(`chip${active ? ' active' : ''}`, tool.label, () => {
         this.studio.tool = tool.id;
-        // Choosing a tool means drawing, not moving the traced picture.
-        this.studio.movingReference = false;
         this.refresh();
       }, [icon(tool.icon, 17), el('span', { class: 'chip-text', text: tool.label })]);
       node.setAttribute('aria-pressed', String(active));
@@ -218,26 +225,7 @@ export class CharacterPanel {
     return node;
   }
 
-  private paletteSection(character: Character): HTMLElement {
-    const swatches = character.palette.map((hex) => {
-      const active = this.studio.color.toLowerCase() === hex.toLowerCase();
-      const node = el('button', {
-        class: `swatch${active ? ' active' : ''}`,
-        type: 'button',
-        title: hex,
-        style: { background: hex },
-        on: {
-          click: () => {
-            this.studio.color = hex;
-            // Choosing a colour means you intend to paint with it.
-            if (this.studio.tool === 'eraser' || this.studio.tool === 'picker') this.studio.tool = 'pencil';
-            this.refresh();
-          },
-        },
-      });
-      return node;
-    });
-
+  private paletteSection(): HTMLElement {
     // The current colour doubles as the button that opens the wheel, so the
     // picker stays out of the way until it is wanted.
     const current = el('button', {
@@ -255,11 +243,7 @@ export class CharacterPanel {
           if (this.studio.tool !== 'pencil') this.studio.tool = 'pencil';
           current.style.background = hex;
         },
-        onClose: () => {
-          // Mixing a colour you then drew with is worth keeping.
-          if (!character.palette.includes(this.studio.color)) character.palette.push(this.studio.color);
-          this.refresh();
-        },
+        onClose: () => this.changed(),
       });
     });
 
@@ -268,10 +252,10 @@ export class CharacterPanel {
         current,
         el('div', { class: 'color-row-text' }, [
           el('span', { text: this.studio.color.toUpperCase() }),
-          el('span', { class: 'hint', text: 'Tap to open the wheel' }),
+          el('span', { class: 'hint', text: 'Tap to open the wheel. + adds it to the palette; hold a colour to remove it.' }),
         ]),
       ]),
-      el('div', { class: 'swatches' }, swatches),
+      paletteGrid(this.studio, () => this.changed()),
     ]);
   }
 
@@ -438,7 +422,7 @@ export class CharacterPanel {
     });
     size.addEventListener('change', () => this.studio.emit());
 
-    const moving = this.studio.movingReference;
+    const locked = reference.locked === true;
     return section('Trace a picture', [
       el('label', { class: 'field' }, [
         el('span', { class: 'field-label', text: 'Fade' }),
@@ -449,8 +433,9 @@ export class CharacterPanel {
         el('div', { class: 'slider-row' }, [size, sizeReadout]),
       ]),
       el('div', { class: 'chip-row' }, [
-        this.toggleChip('move', moving ? 'Moving picture' : 'Move picture', moving, 'Drag on the canvas to move the picture instead of drawing', () => {
-          this.studio.movingReference = !this.studio.movingReference;
+        this.toggleChip(locked ? 'lock' : 'unlock', locked ? 'Picture locked' : 'Lock picture', locked, 'Lock the picture so fingers draw instead of moving it', () => {
+          reference.locked = !locked;
+          this.studio.emit();
           this.refresh();
         }),
         button('chip', 'Put the picture back to its fitted size and place', () => {
@@ -462,7 +447,14 @@ export class CharacterPanel {
           this.refresh();
         }, [el('span', { class: 'chip-text', text: 'Reset size' })]),
       ]),
-      ...(moving ? [el('p', { class: 'hint', text: 'Drag on the canvas to move the picture. Tap Moving picture again to draw.' })] : []),
+      el('p', {
+        class: 'hint',
+        text: locked
+          ? 'Fingers and the Pencil draw. Unlock to move the picture.'
+          : reference.visible
+            ? 'Drag with a finger to move the picture, pinch to size it. The Pencil draws. Lock it to draw with a finger.'
+            : 'Show the picture to move it with a finger.',
+      }),
       el('div', { class: 'chip-row' }, [
         this.toggleChip(reference.visible ? 'eye' : 'eyeOff', reference.visible ? 'Showing' : 'Hidden', reference.visible, 'Show or hide the picture', () => {
           reference.visible = !reference.visible;
@@ -476,7 +468,6 @@ export class CharacterPanel {
         ]),
         button('chip danger', 'Remove the picture', () => {
           delete character.reference;
-          this.studio.movingReference = false;
           this.studio.emit(true);
           this.view.requestDraw();
           this.refresh();

@@ -43,8 +43,6 @@ export class Studio {
   /** Square brush sizes in pixels. The eraser starts bigger: clearing is rarely one pixel at a time. */
   pencilSize = 1;
   eraserSize = 3;
-  /** While true, a drag on the canvas moves the traced picture instead of drawing. */
-  movingReference = false;
   color = '#2b2139';
   /** Mirror edits across the vertical centre line. */
   mirrorX = false;
@@ -123,6 +121,31 @@ export class Studio {
     this.emit();
   }
 
+  /** Moves to the next (or, with -1, previous) frame of this direction, wrapping around. */
+  stepFrame(by: number): void {
+    const count = this.character?.frameCount ?? 0;
+    if (count < 2) return;
+    this.select(this.direction, (((this.frame + by) % count) + count) % count);
+  }
+
+  /** Stamps the current colour into the palette. Returns false when it is already there. */
+  stampColor(): boolean {
+    const character = this.character;
+    if (!character) return false;
+    const hex = this.color.toLowerCase();
+    if (character.palette.some((swatch) => swatch.toLowerCase() === hex)) return false;
+    character.palette.push(this.color);
+    this.emit();
+    return true;
+  }
+
+  removeSwatch(index: number): void {
+    const character = this.character;
+    if (!character || index < 0 || index >= character.palette.length) return;
+    character.palette.splice(index, 1);
+    this.emit();
+  }
+
   // --- Editing -------------------------------------------------------------
 
   /** Captures the frame so the whole stroke becomes one undo step. */
@@ -130,6 +153,19 @@ export class Studio {
     const frame = this.currentFrame;
     if (!frame) return;
     this.strokeBefore = new Uint8ClampedArray(frame.data);
+  }
+
+  /**
+   * Takes back the stroke in progress, as if it never happened, without
+   * touching the undo history: strokes finished earlier always stay.
+   */
+  cancelStroke(): void {
+    const before = this.strokeBefore;
+    this.strokeBefore = null;
+    const frame = this.currentFrame;
+    if (!before || !frame) return;
+    frame.data.set(before);
+    this.emit();
   }
 
   endStroke(): void {

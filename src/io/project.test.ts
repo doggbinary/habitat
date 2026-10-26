@@ -130,15 +130,24 @@ describe('saving and loading a project', () => {
     character.reference = { src: 'data:image/png;base64,AAAA', opacity: 0.3, visible: false };
     const saved = throughJson(serializeProject(createDoc(), [character], character.id, { tilesW: 3, tilesH: 4 }));
     const [back] = deserializeCharacters(saved);
-    expect(back.reference).toEqual({ src: 'data:image/png;base64,AAAA', opacity: 0.3, visible: false });
+    expect(back.reference).toEqual({ src: 'data:image/png;base64,AAAA', opacity: 0.3, visible: false, locked: false });
     expect(saved.lastCharacterSize).toEqual({ tilesW: 3, tilesH: 4 });
   });
 
-  it('keeps the traced picture enlarged and moved', () => {
+  it('keeps the traced picture enlarged, moved and locked', () => {
     const character = createCharacter(16, 2, 2, 1, 'Tracer');
-    character.reference = { src: 'data:image/png;base64,AAAA', opacity: 0.4, visible: true, scale: 2.5, x: -3, y: 4.5 };
+    character.reference = { src: 'data:image/png;base64,AAAA', opacity: 0.4, visible: true, scale: 2.5, x: -3, y: 4.5, locked: true };
     const [back] = deserializeCharacters(throughJson(serializeProject(createDoc(), [character])));
     expect(back.reference).toEqual(character.reference);
+  });
+
+  it('loads a picture saved before locking existed as locked, so fingers still draw', () => {
+    const character = createCharacter(16, 2, 2, 1, 'Tracer');
+    character.reference = { src: 'data:image/png;base64,AAAA', opacity: 0.4, visible: true };
+    const saved = throughJson(serializeProject(createDoc(), [character]));
+    delete (saved.characters![0].reference as { locked?: boolean }).locked;
+    const [back] = deserializeCharacters(saved);
+    expect(back.reference?.locked).toBe(true);
   });
 
   it('keeps pixels that live in part of a larger buffer', () => {

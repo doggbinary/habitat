@@ -6,6 +6,7 @@ import {
   createCharacter,
   frameIndex,
   getPixel,
+  pinchReference,
   referencePlacement,
   resizeCharacter,
   type Character,
@@ -108,6 +109,60 @@ describe('drawing in the studio', () => {
     s.pencilSize = 4;
     s.paint(0, 0);
     expect(opaqueCount(s.currentFrame!)).toBe(9);
+  });
+
+  it('cancelling a stroke takes back only that stroke, never one finished earlier', () => {
+    const s = studio();
+    s.beginStroke();
+    s.paint(1, 1);
+    s.endStroke();
+    // A palm lands during a stroke that has changed nothing yet.
+    s.beginStroke();
+    s.cancelStroke();
+    expect(getPixel(s.currentFrame!, 32, 1, 1)[3]).toBe(255);
+    expect(s.canUndo).toBe(true);
+    // And one that has painted is put back.
+    s.beginStroke();
+    s.paint(5, 5);
+    s.cancelStroke();
+    expect(getPixel(s.currentFrame!, 32, 5, 5)[3]).toBe(0);
+    expect(getPixel(s.currentFrame!, 32, 1, 1)[3]).toBe(255);
+  });
+
+  it('stamps the current colour into the palette once, and removes swatches', () => {
+    const s = studio();
+    const before = s.character!.palette.length;
+    s.color = '#123456';
+    expect(s.stampColor()).toBe(true);
+    expect(s.stampColor()).toBe(false);
+    expect(s.character!.palette.length).toBe(before + 1);
+    s.removeSwatch(before);
+    expect(s.character!.palette).not.toContain('#123456');
+  });
+
+  it('frame steps wrap around in both directions', () => {
+    const s = studio();
+    const count = s.character!.frameCount;
+    s.stepFrame(-1);
+    expect(s.frame).toBe(count - 1);
+    s.stepFrame(1);
+    expect(s.frame).toBe(0);
+  });
+
+  it('a pinch keeps the point between the fingers under them', () => {
+    const start = { scale: 1, x: 0, y: 0 };
+    const from = { x: 10, y: 20 };
+    const before = referencePlacement(100, 100, 32, 32, start);
+    const u = (from.x - before.x) / before.w;
+    const v = (from.y - before.y) / before.h;
+    const to = { x: 14, y: 18 };
+    const next = pinchReference(100, 100, 32, 32, start, from, to, 2);
+    expect(next.scale).toBe(2);
+    const after = referencePlacement(100, 100, 32, 32, next);
+    expect(after.x + u * after.w).toBeCloseTo(to.x);
+    expect(after.y + v * after.h).toBeCloseTo(to.y);
+    // Spreading past the largest size stops there.
+    expect(pinchReference(100, 100, 32, 32, start, from, from, 50).scale).toBe(4);
   });
 
   it('symmetry paints the mirrored pixel too', () => {

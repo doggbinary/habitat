@@ -13,6 +13,7 @@ import { icon, type IconName } from './icons';
 import { LayersPanel } from './layers';
 import { MapPanel } from './map-panel';
 import { PalettePanel, type PaletteActions } from './palette';
+import { StudioBar } from './studio-bar';
 
 export interface ShellActions {
   addTileset: () => void;
@@ -87,6 +88,7 @@ export class Shell {
   private toastTimer: number | undefined;
   private mode: Mode = 'map';
   private readonly modeBar: HTMLElement;
+  private readonly studioBar: StudioBar;
 
   constructor(
     root: HTMLElement,
@@ -134,10 +136,17 @@ export class Shell {
 
     this.modeBar = el('div', { class: 'mode-bar', role: 'tablist' });
 
+    this.studioBar = new StudioBar(studio, () => characterView.requestDraw(), () => {
+      characterView.requestDraw();
+      characterPanel.refresh();
+      studio.emit();
+    });
+
     const canvasArea = el('div', { class: 'canvas-area' }, [
       canvas,
       characterView.canvas,
       this.optionsBar,
+      this.studioBar.element,
       this.status,
     ]);
 
@@ -489,10 +498,17 @@ export class Shell {
     }
 
     if (this.mode === 'character') {
+      const character = this.studio.character;
+      const reference = character?.reference;
+      const fingersMovePicture = !!reference && reference.visible && !reference.locked;
       chips.push(
         el('span', {
           class: 'chip-label',
-          text: !this.studio.character ? 'No character yet' : 'Pencil or finger draws',
+          text: !character
+            ? 'No character yet'
+            : fingersMovePicture
+              ? 'Pencil draws, finger moves the picture'
+              : 'Pencil or finger draws',
         }),
         el('div', { class: 'divider vertical' }),
         this.chipToggle('flipH', 'Symmetry', this.studio.mirrorX, () => {
@@ -506,6 +522,21 @@ export class Shell {
           this.refreshPanels();
         }),
       );
+      if (character && character.frameCount > 1) {
+        const step = (by: number) => {
+          this.studio.stepFrame(by);
+          this.characterView.requestDraw();
+          this.refreshPanels();
+        };
+        chips.push(
+          button('icon-btn', 'Previous frame', () => step(-1), [icon('chevronLeft', 18)]),
+          el('span', {
+            class: 'chip-label frame-readout',
+            text: `Frame ${this.studio.frame + 1} of ${character.frameCount}`,
+          }),
+          button('icon-btn', 'Next frame', () => step(1), [icon('chevronRight', 18)]),
+        );
+      }
       this.optionsBar.append(...chips);
       return;
     }
@@ -747,6 +778,7 @@ export class Shell {
   toggleDock(force?: boolean): void {
     this.dockOpen = force ?? !this.dockOpen;
     this.dock.classList.toggle('collapsed', !this.dockOpen);
+    this.refreshStudioBar();
     // The canvas changed size, so the renderer needs new dimensions.
     requestAnimationFrame(() => {
       this.renderer.resize();
@@ -760,9 +792,17 @@ export class Shell {
     this.buildToolRail();
     this.buildTopActions();
     this.buildOptionsBar();
+    this.refreshStudioBar();
     this.title.textContent =
       this.mode === 'character' ? (this.studio.character?.name ?? 'Character studio') : this.store.doc.name;
     this.refreshStatus();
+  }
+
+  /** With the panel hidden, the studio's colour and brush controls float over the canvas instead. */
+  private refreshStudioBar(): void {
+    const visible = this.mode === 'character' && !this.dockOpen && !!this.studio.character;
+    this.studioBar.setVisible(visible);
+    if (visible) this.studioBar.refresh();
   }
 
   refreshPanels(): void {

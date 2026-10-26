@@ -52,6 +52,8 @@ export interface CharacterReference {
   /** Nudge from the fitted position, in sprite pixels. */
   x?: number;
   y?: number;
+  /** When locked, fingers draw. Unlocked, a finger drags the picture and two pinch it. */
+  locked?: boolean;
   /** Loaded from `src`; not saved. */
   image?: HTMLImageElement;
 }
@@ -86,6 +88,37 @@ export function referencePlacement(
   const w = imageW * scale;
   const h = imageH * scale;
   return { x: (boxW - w) / 2 + (adjust.x ?? 0), y: boxH - h + (adjust.y ?? 0), w, h };
+}
+
+export const REFERENCE_MIN_SCALE = 0.2;
+export const REFERENCE_MAX_SCALE = 4;
+
+/**
+ * The picture's size and nudge after a pinch, in sprite pixels: the point of
+ * the picture that was between the fingers stays between them as they move
+ * apart, together, or across the canvas.
+ */
+export function pinchReference(
+  imageW: number,
+  imageH: number,
+  boxW: number,
+  boxH: number,
+  start: Pick<CharacterReference, 'scale' | 'x' | 'y'>,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  factor: number,
+): { scale: number; x: number; y: number } {
+  const before = referencePlacement(imageW, imageH, boxW, boxH, start);
+  const wanted = (start.scale ?? 1) * (Number.isFinite(factor) && factor > 0 ? factor : 1);
+  const scale = Math.max(REFERENCE_MIN_SCALE, Math.min(REFERENCE_MAX_SCALE, wanted));
+  const after = referencePlacement(imageW, imageH, boxW, boxH, { scale });
+  const u = before.w > 0 ? (from.x - before.x) / before.w : 0.5;
+  const v = before.h > 0 ? (from.y - before.y) / before.h : 1;
+  return {
+    scale,
+    x: to.x - u * after.w - (boxW - after.w) / 2,
+    y: to.y - v * after.h - (boxH - after.h),
+  };
 }
 
 /**
