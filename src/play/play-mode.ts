@@ -696,13 +696,17 @@ export class PlayMode {
     }
     ctx.globalAlpha = 1;
 
-    ctx.fillStyle = 'rgba(255, 90, 90, 0.38)';
-    const size = this.doc.tileSize;
-    for (let i = 0; i < this.solid.length; i++) {
-      if (!this.solid[i]) continue;
-      const tx = i % this.doc.width;
-      const ty = (i / this.doc.width) | 0;
-      ctx.fillRect((tx * size - camX) * zoom, (ty * size - camY) * zoom, size * zoom, size * zoom);
+    // Blocked squares show while an object is being worked on, so walking
+    // around the world is not covered in red.
+    if (this.objects.selected()) {
+      ctx.fillStyle = 'rgba(255, 90, 90, 0.38)';
+      const size = this.doc.tileSize;
+      for (let i = 0; i < this.solid.length; i++) {
+        if (!this.solid[i]) continue;
+        const tx = i % this.doc.width;
+        const ty = (i / this.doc.width) | 0;
+        ctx.fillRect((tx * size - camX) * zoom, (ty * size - camY) * zoom, size * zoom, size * zoom);
+      }
     }
 
     // Walk frames alternate stand, step, stand, other step. A pose the user

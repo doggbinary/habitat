@@ -153,6 +153,8 @@ export interface SerializedProject {
   lastPlayedCharacter?: string;
   /** Canvas size, in tiles, the last time a character was drawn on. */
   lastCharacterSize?: { tilesW: number; tilesH: number };
+  /** The square the character stands on in the map, when it has been placed. */
+  characterAt?: { x: number; y: number };
   pins?: AssetRef[];
   folders?: AssetFolder[];
   removedSheets?: string[];
@@ -182,10 +184,12 @@ export function serializeProject(
   characters: Character[] = [],
   lastPlayedId?: string | null,
   lastCharacterSize?: { tilesW: number; tilesH: number } | null,
+  characterAt?: { x: number; y: number } | null,
 ): SerializedProject {
   return {
     ...(lastPlayedId ? { lastPlayedCharacter: lastPlayedId } : {}),
     ...(lastCharacterSize ? { lastCharacterSize: { ...lastCharacterSize } } : {}),
+    ...(characterAt ? { characterAt: { x: characterAt.x, y: characterAt.y } } : {}),
     characters: characters.map((c) => ({
       id: c.id,
       name: c.name,

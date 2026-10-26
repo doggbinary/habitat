@@ -1628,6 +1628,43 @@ textarea {
   animation: play-hint-fade 420ms ease 4s forwards;
 }
 
+/* First-launch coach: one card at a time, low on the screen, clear of the map's middle. */
+.coach {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--sa-bottom));
+  transform: translateX(-50%);
+  z-index: 60;
+  width: min(420px, calc(100vw - 32px));
+  padding: 16px 18px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.coach-count {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.coach-title {
+  margin: 4px 0 6px;
+  font-size: 17px;
+}
+
+.coach-text {
+  margin: 0 0 14px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.coach-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* Choosing where a door leads: the hint stays until the tap. */
 .play-hint.linking {
   animation: none;

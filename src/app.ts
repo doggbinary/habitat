@@ -43,6 +43,7 @@ import { EMPTY_STAMP, singleStamp } from './core/stamp';
 import { EMPTY, flagsOf, indexOf, pack, tilesetOf, withFlags, type PackedTile } from './core/tiles';
 import { openAssetMenu } from './ui/asset-menu';
 import { CharacterPanel } from './ui/character-panel';
+import { showCoach } from './ui/coach';
 import { Store } from './core/store';
 import { bindKeyboard } from './input/keyboard';
 import { PointerInput } from './input/pointer-input';
@@ -246,7 +247,15 @@ export class App {
     // Tiles held up with the select tool are saved where they float, so
     // closing the app mid-move never loses them.
     this.autosave = createAutosave(() =>
-      serializeProject(this.editor.settledDoc(), this.studio.characters, this.studio.lastPlayedId, this.studio.lastSize),
+      serializeProject(
+        this.editor.settledDoc(),
+        this.studio.characters,
+        this.studio.lastPlayedId,
+        this.studio.lastSize,
+        this.store.characterPreview.enabled
+          ? { x: this.store.characterPreview.tx, y: this.store.characterPreview.ty }
+          : null,
+      ),
     );
 
     // Held tiles belong to the select tool; picking up any other tool sets them down.
@@ -344,7 +353,7 @@ export class App {
         } catch {
           this.adoptDoc(createDoc(STARTER_MAP.width, STARTER_MAP.height, STARTER_TILE));
         }
-      } else {
+      } else if (!(await this.openSampleVillage())) {
         this.adoptDoc(createDoc(STARTER_MAP.width, STARTER_MAP.height, STARTER_TILE));
       }
     }
@@ -361,6 +370,27 @@ export class App {
     // A brand-new project has nothing to paint with, so send the user
     // straight to the import step.
     if (this.store.doc.tilesets.length === 0) this.addTileset();
+  }
+
+  /**
+   * A first launch opens on a small village whose house door leads into a
+   * room, with a character on the path, so Play works before anything is
+   * drawn. The coach then walks through the three things to try.
+   */
+  private async openSampleVillage(): Promise<boolean> {
+    try {
+      const response = await fetch(new URL('starter/sample-village.pfproj', document.baseURI));
+      if (!response.ok) return false;
+      const data = (await response.json()) as unknown;
+      if (!isProjectFile(data)) return false;
+      const doc = await deserializeProject(data);
+      this.adoptDoc(doc);
+      this.adoptCharacters(data);
+      showCoach({ play: () => this.startPlayTest() });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -638,6 +668,14 @@ export class App {
     this.studio.emit();
     this.characterPanel.refresh();
     this.characterView.fit();
+    // The character goes back where it was left standing on the map.
+    const at = data.characterAt;
+    const preview = this.store.characterPreview;
+    preview.enabled = !!at && Number.isFinite(at.x) && Number.isFinite(at.y) && this.studio.characters.length > 0;
+    if (at && preview.enabled) {
+      preview.tx = at.x;
+      preview.ty = at.y;
+    }
   }
 
   /**
