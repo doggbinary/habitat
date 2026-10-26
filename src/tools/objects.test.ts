@@ -388,6 +388,18 @@ describe('duplicate and delete', () => {
     expect(tools.selected()?.obj.id).toBe(copy.id);
   });
 
+  it('a copy of a grouped asset is not tied to the original', () => {
+    const [obj] = withObjects(fakeObject({ id: 'orig', groupId: 'g1' }));
+    store.selectedGroup = [{ layerId: layer.id, objectId: 'orig' }];
+    tools.duplicate();
+    const copy = layer.objects[1];
+    expect(copy.groupId).toBeUndefined();
+    expect(store.selectedGroup).toHaveLength(0);
+    const startX = obj.x;
+    tools.moveSelected(copy, copy.x + 64, copy.y);
+    expect(obj.x).toBe(startX);
+  });
+
   it('a locked asset does not move, until it is unlocked', () => {
     const [obj] = withObjects(fakeObject({ id: 'fixed', x: 40, y: 40 }));
     tools.toggleLock();

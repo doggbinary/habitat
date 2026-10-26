@@ -466,7 +466,7 @@ export class App {
     }
 
     const have = new Set(this.store.doc.tilesets.map((sheet) => sheet.name));
-    let added = 0;
+    let added = this.applyLibraryHints(entries);
     let opened = this.store.doc.tilesets.length === 0;
     for (const entry of entries) {
       if (have.has(entry.name) || skipped.has(entry.name)) continue;
@@ -514,6 +514,41 @@ export class App {
     if (added === 0) return 0;
     this.store.toast(`${added} asset ${added === 1 ? 'page' : 'pages'} ready`);
     return added;
+  }
+
+  /**
+   * Pages saved in the project before the library said they hold whole
+   * objects, or listed their picture boxes, are split again to match. A page
+   * the user has edited by hand keeps their edits.
+   */
+  private applyLibraryHints(entries: LibraryEntry[]): number {
+    let changed = 0;
+    for (const entry of entries) {
+      const sheet = this.store.doc.tilesets.find((t) => t.name === entry.name);
+      if (!sheet?.image) continue;
+      const boxes = Array.isArray(entry.assets) && entry.assets.length > 0 ? entry.assets : null;
+      if (boxes) {
+        const same =
+          sheet.assets?.length === boxes.length &&
+          sheet.assets.every((a, i) => a.x === boxes[i].x && a.y === boxes[i].y && a.w === boxes[i].w && a.h === boxes[i].h);
+        if (same) continue;
+        sheet.splitMode = 'objects';
+        sheet.assets = boxes.map((rect) => ({ ...rect }));
+        sheet.groundAssets = [];
+        sheet.groundBlocks = [];
+        sheet.assetsEdited = true;
+        sheet.assetsVersion = DETECT_VERSION;
+        sheet.propsOnly = !!entry.props;
+        changed += 1;
+        continue;
+      }
+      if (entry.props && !sheet.propsOnly && !sheet.assetsEdited) {
+        sheet.propsOnly = true;
+        detectInto(sheet);
+        changed += 1;
+      }
+    }
+    return changed;
   }
 
   /** Floor pages stay at the front; everything else appends. */

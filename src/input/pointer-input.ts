@@ -1101,7 +1101,8 @@ export class PointerInput {
     this.store.preview = null;
     this.anchorCell = null;
 
-    if (this.placeArmed && wasTap && !tappedObject && this.tapStart) {
+    // Only a one-finger tap places: two and three fingers are undo and redo.
+    if (this.placeArmed && wasTap && fingers <= 1 && !tappedObject && this.tapStart) {
       const armed = this.armedObject();
       const cell = this.cellAt(this.tapStart.x, this.tapStart.y);
       const doc = this.store.doc;

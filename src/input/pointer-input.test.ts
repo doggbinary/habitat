@@ -96,6 +96,22 @@ describe('fingers and placed objects', () => {
   });
 });
 
+describe('an object picked in Assets', () => {
+  it('a two-finger tap undoes instead of placing a copy', () => {
+    store.doc.tilesets[0].assets = [{ x: 0, y: 0, w: 16, h: 16 }];
+    store.libraryPick = { tilesetId: 'a', index: 0 };
+    handlers.pointerdown(touch(24, 24));
+    handlers.pointerup(touch(24, 24));
+    const objectsLayer = () => store.doc.layers.find((l) => l.kind === 'objects') as ObjectLayer | undefined;
+    expect(objectsLayer()?.objects).toHaveLength(1);
+    handlers.pointerdown(touch(200, 200, 2));
+    handlers.pointerdown(touch(260, 200, 3));
+    handlers.pointerup(touch(200, 200, 2));
+    handlers.pointerup(touch(260, 200, 3));
+    expect(objectsLayer()?.objects ?? []).toHaveLength(0);
+  });
+});
+
 describe('tools with a finger', () => {
   it('boxes tiles with Select', () => {
     layer.data.fill(pack(0, 1));

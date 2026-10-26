@@ -604,18 +604,25 @@ export class ObjectTools {
     const found = this.selected();
     if (!found) return;
     const before = snapshot(this.doc);
-    const { w } = objectSize(found.obj);
-    // Offset the copy so it is visibly a second object, not hidden on top.
+    const { w, h } = objectSize(found.obj);
+    // Offset the copy so it is visibly a second object, not hidden on top. It
+    // is its own object: no shared group, so it never drags the original along.
+    const { groupId: _group, ...rest } = found.obj;
+    void _group;
+    const at = snapToGrid(w, h, found.obj.x + Math.max(this.doc.tileSize, Math.round(w / 3)), found.obj.y, this.doc.tileSize);
     const copy: MapObject = {
-      ...found.obj,
+      ...rest,
       id: uid('obj'),
       rect: { ...found.obj.rect },
-      x: found.obj.x + Math.round(Math.max(8, w / 3)),
+      x: at.x,
+      y: at.y,
       locked: false,
     };
+    this.keepOnMap(copy);
     const index = found.layer.objects.indexOf(found.obj);
     found.layer.objects.splice(index + 1, 0, copy);
     this.store.history.commitSnapshot('Duplicate', before);
+    this.store.selectedGroup = [];
     this.store.selectedObject = { layerId: found.layer.id, objectId: copy.id };
     this.store.changed();
     this.renderer.requestDraw();
