@@ -35,6 +35,7 @@ describe('saving and loading a project', () => {
     objects.objects = [
       fakeObject({ id: 'tree', x: 10, y: 20, scale: 1.5, rotation: 3, flipX: true }),
       fakeObject({ id: 'rock', hueShift: 42, saturation: 0.5, brightness: 1.2, contrast: 1.4, clarity: 0.6 }),
+      fakeObject({ id: 'house', blocks: true, door: { x: 120, y: 88 } }),
     ];
     doc.layers.push(objects);
 

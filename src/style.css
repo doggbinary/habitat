@@ -1628,6 +1628,14 @@ textarea {
   animation: play-hint-fade 420ms ease 4s forwards;
 }
 
+/* Choosing where a door leads: the hint stays until the tap. */
+.play-hint.linking {
+  animation: none;
+  opacity: 1;
+  color: #ffd666;
+  border-color: rgba(255, 214, 102, 0.6);
+}
+
 @keyframes play-hint-fade {
   to {
     opacity: 0;

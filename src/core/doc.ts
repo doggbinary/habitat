@@ -98,6 +98,8 @@ export interface MapObject {
   clarity?: number;
   /** Stops the character on the squares it covers, wherever it is moved or sized to. */
   blocks?: boolean;
+  /** Where walking through this object's doorway leads, in world pixels. */
+  door?: { x: number; y: number };
   /** When set, the asset stays where it was dropped until it is unlocked. */
   locked?: boolean;
   /** Assets that share an id move and select together. */
@@ -276,6 +278,9 @@ export function fitPlacement(
  */
 export const ART_TILE = 48;
 
+/** Square size of the starter pack (Ninja Adventure), which new maps start on. */
+export const STARTER_TILE = 16;
+
 /**
  * Moves a map made with small squares onto the library's own square size.
  * Every painted cell stays where it is; placed assets and pictures are
@@ -286,6 +291,9 @@ export const ART_TILE = 48;
 export function upgradeTileSize(doc: Doc): boolean {
   if (doc.tileSize >= ART_TILE || ART_TILE % doc.tileSize !== 0) return false;
   if (!doc.tilesets.some((sheet) => !sheet.generated && sheet.tileW === ART_TILE)) return false;
+  // A map whose own art is drawn on its square size, such as the starter
+  // pack on 16 px, is already pixel for pixel.
+  if (doc.tilesets.some((sheet) => !sheet.generated && sheet.tileW === doc.tileSize)) return false;
   const k = ART_TILE / doc.tileSize;
   doc.tileSize = ART_TILE;
   for (const layer of doc.layers) {

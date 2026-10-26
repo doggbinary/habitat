@@ -1,10 +1,42 @@
+import { isNative } from './native';
 import type { SerializedProject } from './project';
 
 /**
  * Autosave lives in IndexedDB rather than localStorage: a project with a
  * couple of embedded tilesets runs to several megabytes, well past the
  * localStorage quota Safari enforces.
+ *
+ * In the iPad app the project is also a file in the app's Library folder.
+ * iOS may clear a web view's storage when space runs low, but never that
+ * folder, and it is backed up with the device. It is not shown in the Files
+ * app: taking a file out of the app is what Export is for.
  */
+
+const PROJECT_FILE = 'Projects/current.pfproj';
+const PROJECT_TEMP = 'Projects/current.pfproj.tmp';
+
+async function writeProjectFile(project: SerializedProject): Promise<void> {
+  const { Directory, Encoding, Filesystem } = await import('@capacitor/filesystem');
+  const options = { directory: Directory.Library, encoding: Encoding.UTF8 };
+  // Written aside first, so a crash mid-save leaves the last good copy whole.
+  await Filesystem.writeFile({ ...options, path: PROJECT_TEMP, data: JSON.stringify(project), recursive: true });
+  await Filesystem.deleteFile({ directory: Directory.Library, path: PROJECT_FILE }).catch(() => {});
+  await Filesystem.rename({ from: PROJECT_TEMP, to: PROJECT_FILE, directory: Directory.Library, toDirectory: Directory.Library });
+}
+
+async function readProjectFile(): Promise<SerializedProject | null> {
+  const { Directory, Encoding, Filesystem } = await import('@capacitor/filesystem');
+  // The finished copy first; the one written aside if a save was cut short.
+  for (const path of [PROJECT_FILE, PROJECT_TEMP]) {
+    try {
+      const file = await Filesystem.readFile({ path, directory: Directory.Library, encoding: Encoding.UTF8 });
+      return JSON.parse(String(file.data)) as SerializedProject;
+    } catch {
+      /* missing or unreadable; try the next */
+    }
+  }
+  return null;
+}
 
 const DB_NAME = 'pixel-fusion';
 const DB_VERSION = 1;
@@ -41,10 +73,20 @@ async function withStore<T>(
 }
 
 export async function saveProject(project: SerializedProject): Promise<void> {
+  if (isNative()) {
+    await writeProjectFile(project);
+    // The web view copy is a spare; the file is the one that counts.
+    await withStore('readwrite', (store) => store.put(project, CURRENT_KEY)).catch(() => {});
+    return;
+  }
   await withStore('readwrite', (store) => store.put(project, CURRENT_KEY));
 }
 
 export async function loadProject(): Promise<SerializedProject | null> {
+  if (isNative()) {
+    const fromFile = await readProjectFile().catch(() => null);
+    if (fromFile) return fromFile;
+  }
   try {
     const result = await withStore<SerializedProject | undefined>('readonly', (store) =>
       store.get(CURRENT_KEY),

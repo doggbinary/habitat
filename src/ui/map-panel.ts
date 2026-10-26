@@ -99,6 +99,12 @@ export class MapPanel {
           gesture('Three-finger tap', 'Redo'),
         ]),
       ]),
+      section('Credits', [
+        el('p', {
+          class: 'hint',
+          text: 'Starter art: Ninja Adventure by Pixel-Boy and AAA, released under CC0. pixel-boy.itch.io/ninja-adventure-asset-pack',
+        }),
+      ]),
     );
   }
 

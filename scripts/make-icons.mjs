@@ -6,7 +6,7 @@
  * Run with: npm run icons
  */
 import { deflateSync } from 'node:zlib';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -150,20 +150,4 @@ ${MOTIF.flatMap((row, y) =>
 writeFileSync(resolve(OUT_DIR, 'icon.svg'), svg);
 console.log('wrote icon.svg');
 
-// The iOS app icon, if the native project has been scaffolded. It must be
-// 1024x1024 with no alpha channel, and iOS applies its own rounded mask, so
-// the artwork goes edge to edge with only a small inset.
-const IOS_ICON = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  'ios',
-  'App',
-  'App',
-  'Assets.xcassets',
-  'AppIcon.appiconset',
-  'AppIcon-512@2x.png',
-);
-if (existsSync(dirname(IOS_ICON))) {
-  writeFileSync(IOS_ICON, drawIcon(1024, 0.08, true));
-  console.log('wrote ios AppIcon-512@2x.png (1024x1024, no alpha)');
-}
+// The iOS app icon is drawn from the starter art by make-app-icon.mjs.

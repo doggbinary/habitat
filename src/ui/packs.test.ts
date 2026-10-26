@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { packNames, packOf, sameAsset } from './packs';
 
 describe('asset packs', () => {
-  it('groups numbered pages of one pack', () => {
+  it('groups numbered pages of one pack, and titled pages of one pack', () => {
     expect(packOf('Nature Park 1')).toBe('Nature Park');
     expect(packOf('living room 3')).toBe('living room');
+    expect(packOf('Ninja Adventure — Houses')).toBe('Ninja Adventure');
+    expect(packOf('Pixel Town 2 4')).toBe('Pixel Town 2');
     expect(packNames(['Nature Park 2', 'Town 2', 'Nature Park 1', 'Town 1'])).toEqual(['Nature Park', 'Town']);
   });
 

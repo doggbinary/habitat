@@ -60,4 +60,11 @@ describe('upgrading a 16 px map', () => {
     expect(upgradeTileSize(createDoc(4, 4, 48))).toBe(false);
     expect(upgradeTileSize(createDoc(4, 4, 16))).toBe(false);
   });
+
+  it('leaves a 16 px map alone when its own pack is drawn at 16 px, even beside 48 px packs', () => {
+    const doc = createDoc(4, 4, 16);
+    doc.tilesets = [fakeTileset('ninja', 16), fakeTileset('modern', 48)];
+    expect(upgradeTileSize(doc)).toBe(false);
+    expect(doc.tileSize).toBe(16);
+  });
 });

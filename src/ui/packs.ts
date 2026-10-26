@@ -12,8 +12,10 @@ export interface AssetFolder {
   assets: AssetRef[];
 }
 
-/** "Nature Park 1" belongs with "Nature Park 2". */
+/** "Nature Park 1" belongs with "Nature Park 2", and "Ninja Adventure — Water" with "Ninja Adventure — Houses". */
 export function packOf(name: string): string {
+  const titled = name.indexOf(' — ');
+  if (titled > 0) return name.slice(0, titled);
   return name.replace(/ \d+$/, '') || name;
 }
 

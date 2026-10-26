@@ -2,7 +2,40 @@ import { describe, expect, it } from 'vitest';
 import { createDoc, createLayer, type TileLayer } from '../core/doc';
 import { EMPTY, pack } from '../core/tiles';
 import { fakeObject } from '../test-support/fakes';
-import { buildCollision, ensureCollisionLayer, objectCells } from './play-mode';
+import { buildCollision, doorAt, ensureCollisionLayer, objectCells } from './play-mode';
+
+describe('doors', () => {
+  // A 64 x 48 house whose box runs from (32, 32) to (96, 80), on 16 px squares.
+  const house = () => fakeObject({ id: 'house', rect: { x: 0, y: 0, w: 64, h: 48 }, x: 64, y: 56, door: { x: 200, y: 200 } });
+  const withObjects = (...objects: ReturnType<typeof fakeObject>[]) => {
+    const doc = createDoc(20, 20, 16);
+    doc.layers.push({ id: 'o', kind: 'objects', name: 'Objects', visible: true, locked: false, opacity: 1, objects });
+    return doc;
+  };
+
+  it('opens at the middle of the bottom edge, including just in front of it', () => {
+    const doc = withObjects(house());
+    expect(doorAt(doc, 64, 76)?.id).toBe('house');
+    // Standing on the path just below the house, as a blocking house allows.
+    expect(doorAt(doc, 64, 86)?.id).toBe('house');
+  });
+
+  it('is not the whole house: the roof, the far corners and the yard do not lead anywhere', () => {
+    const doc = withObjects(house());
+    expect(doorAt(doc, 64, 40)).toBeNull();
+    expect(doorAt(doc, 34, 76)).toBeNull();
+    expect(doorAt(doc, 64, 100)).toBeNull();
+  });
+
+  it('ignores objects with no door and hidden layers', () => {
+    const plain = house();
+    delete plain.door;
+    expect(doorAt(withObjects(plain), 64, 76)).toBeNull();
+    const doc = withObjects(house());
+    doc.layers[1].visible = false;
+    expect(doorAt(doc, 64, 76)).toBeNull();
+  });
+});
 
 describe('blocking under an object', () => {
   it('covers exactly the squares under the box', () => {

@@ -1,5 +1,5 @@
 import {
-  ART_TILE,
+  STARTER_TILE,
   createDoc,
   createImageLayer,
   exactPlacement,
@@ -150,6 +150,22 @@ function fillsItsSquares(sheet: Tileset, pixels: ImageData, rect: AssetRect): bo
     (rect.w + sheet.spacing) % stepX === 0 &&
     (rect.h + sheet.spacing) % stepY === 0;
   return aligned && isSolid(pixels.data, sheet.imgW, rect);
+}
+
+/** Squares across and down a brand-new map: a small village on the starter pack's 16 px grid. */
+const STARTER_MAP = { width: 40, height: 30 };
+
+/** A list of library pages, or none when the list is missing or unreadable. */
+async function readLibraryList(path: string): Promise<LibraryEntry[]> {
+  try {
+    // Always ask the server: a cached list would hide packs added since.
+    const response = await fetch(new URL(path, document.baseURI), { cache: 'no-cache' });
+    if (!response.ok) return [];
+    const entries = (await response.json()) as unknown;
+    return Array.isArray(entries) ? (entries as LibraryEntry[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** A labelled percentage slider for the asset colour popover, applied live as it moves. */
@@ -326,10 +342,10 @@ export class App {
           this.adoptCharacters(saved);
           this.adoptDoc(doc);
         } catch {
-          this.adoptDoc(createDoc());
+          this.adoptDoc(createDoc(STARTER_MAP.width, STARTER_MAP.height, STARTER_TILE));
         }
       } else {
-        this.adoptDoc(createDoc());
+        this.adoptDoc(createDoc(STARTER_MAP.width, STARTER_MAP.height, STARTER_TILE));
       }
     }
 
@@ -377,16 +393,10 @@ export class App {
    * already in the project are not added again.
    */
   private async loadObjectLibrary(): Promise<number> {
-    let entries: LibraryEntry[];
-    try {
-      // Always ask the server: a cached list would hide packs added since.
-      const response = await fetch(new URL('library/manifest.json', document.baseURI), { cache: 'no-cache' });
-      if (!response.ok) return 0;
-      entries = (await response.json()) as LibraryEntry[];
-    } catch {
-      return 0;
-    }
-    if (!Array.isArray(entries) || entries.length === 0) return 0;
+    // The starter pack ships in every build. The wider library only exists
+    // in the web build, so a missing list is normal and skipped.
+    const entries = [...(await readLibraryList('starter/manifest.json')), ...(await readLibraryList('library/manifest.json'))];
+    if (entries.length === 0) return 0;
 
     const skipKey = `pf-library-skip-${DETECT_VERSION}`;
     let skipped = new Set<string>();
@@ -1250,7 +1260,7 @@ export class App {
     try {
       const image = await loadImage(await readFileAsDataUrl(file));
       const { width, height } = pictureMapSize(image.naturalWidth, image.naturalHeight);
-      const doc = createDoc(width, height, ART_TILE);
+      const doc = createDoc(width, height, this.store.doc.tileSize);
       doc.name = file.name.replace(/\.[^.]+$/, '') || 'Picture map';
       doc.tilesets = this.store.doc.tilesets;
       doc.pins = this.store.doc.pins;

@@ -26,6 +26,11 @@ const MULTI_TAP_SLOP = 14;
 
 type Gesture = 'idle' | 'move' | 'size' | 'pinch';
 
+const PLAY_HINT =
+  'Walk with the stick. Tap an object to move, size, block, lock it or make it a door. Pinch to zoom. Two-finger tap undoes, three redoes.';
+/** How long the screen takes to fade back in after a door, in seconds. */
+const DOOR_FADE_S = 0.35;
+
 /**
  * A full-screen play test.
  *
@@ -64,6 +69,12 @@ export class PlayMode {
   private touchWandered = false;
   /** The corner grip only shows once Size is chosen for the tapped object. */
   private sizeOpen = false;
+  /** The object whose door is waiting for a tap on where it leads. */
+  private linkingDoor: string | null = null;
+  /** False after going through a door, until the feet leave every doorway, so nobody bounces straight back. */
+  private doorArmed = true;
+  /** Black over the screen after a door, fading from 1 to 0. */
+  private fade = 0;
 
   private x = 0;
   private y = 0;
@@ -89,6 +100,8 @@ export class PlayMode {
   private readonly sizeButton: HTMLButtonElement;
   private readonly blockButton: HTMLButtonElement;
   private readonly lockButton: HTMLButtonElement;
+  private readonly doorButton: HTMLButtonElement;
+  private readonly hint: HTMLElement;
   private readonly smallerButton: HTMLButtonElement;
   private readonly biggerButton: HTMLButtonElement;
   private readonly undoButton: HTMLButtonElement;
@@ -120,6 +133,8 @@ export class PlayMode {
     // Start standing on the middle of the requested tile.
     this.x = (startTile.x + 0.5) * this.doc.tileSize;
     this.y = (startTile.y + 0.5) * this.doc.tileSize;
+    // Starting in a doorway must not count as walking through it.
+    this.doorArmed = !doorAt(this.doc, this.x, this.y);
 
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'play-canvas';
@@ -147,23 +162,24 @@ export class PlayMode {
     this.biggerButton = button('play-menu-btn play-menu-step', '+', () => this.stepSize(1));
     this.blockButton = button('play-menu-btn', 'Block', () => this.toggleBlock());
     this.lockButton = button('play-menu-btn', 'Lock', () => this.toggleLock());
+    this.doorButton = button('play-menu-btn', 'Door', () => this.toggleDoor());
     this.menu = element('div', 'play-object-menu', [
       this.sizeButton,
       this.smallerButton,
       this.biggerButton,
       this.blockButton,
+      this.doorButton,
       this.lockButton,
     ]);
     // A press on the menu must not reach the map underneath and deselect.
     this.menu.addEventListener('pointerdown', (e) => e.stopPropagation());
 
-    const hint = element('div', 'play-hint');
-    hint.textContent =
-      'Walk with the stick. Tap an object to move, size, block or lock it. Pinch to zoom. Two-finger tap undoes, three redoes.';
+    this.hint = element('div', 'play-hint');
+    this.hint.textContent = PLAY_HINT;
 
     this.root = element('div', 'play-root', [
       this.canvas,
-      hint,
+      this.hint,
       this.menu,
       this.stickBase,
       element('div', 'play-controls', [this.undoButton, this.redoButton, zoomOut, zoomIn, exit]),
@@ -315,6 +331,10 @@ export class PlayMode {
 
   private pressMap(id: number, sx: number, sy: number): void {
     const world = this.worldAt(sx, sy);
+    if (this.linkingDoor) {
+      this.linkDoorTo(world.x, world.y);
+      return;
+    }
     const found = this.objects.selected();
     if (found && this.sizeOpen && !found.obj.locked && this.onHandle(sx, sy)) {
       const size = objectSize(found.obj);
@@ -458,6 +478,64 @@ export class PlayMode {
     this.sizeOpen = false;
   }
 
+  /** Door on an object without one asks where it leads; on one that has one, takes it off. */
+  private toggleDoor(): void {
+    const found = this.objects.selected();
+    if (!found) return;
+    if (this.linkingDoor) {
+      this.stopLinking();
+      return;
+    }
+    if (found.obj.door) {
+      this.objects.beginGesture();
+      delete found.obj.door;
+      this.objects.endGesture('Remove door');
+      return;
+    }
+    this.linkingDoor = found.obj.id;
+    this.hint.textContent = 'Tap where this door leads, such as inside a room. Tap Door again to cancel.';
+    this.hint.classList.add('linking');
+  }
+
+  /** Sends the door being linked to the middle of the tapped square. */
+  private linkDoorTo(wx: number, wy: number): void {
+    const id = this.linkingDoor;
+    this.stopLinking();
+    const size = this.doc.tileSize;
+    const tx = clamp(Math.floor(wx / size), 0, this.doc.width - 1);
+    const ty = clamp(Math.floor(wy / size), 0, this.doc.height - 1);
+    for (const layer of this.doc.layers) {
+      if (layer.kind !== 'objects') continue;
+      const obj = layer.objects.find((o) => o.id === id);
+      if (!obj) continue;
+      this.objects.beginGesture();
+      obj.door = { x: (tx + 0.5) * size, y: (ty + 0.5) * size };
+      this.objects.endGesture('Door');
+      this.store.toast('Door set. Walk into its doorway to go through.');
+      return;
+    }
+  }
+
+  private stopLinking(): void {
+    this.linkingDoor = null;
+    this.hint.textContent = PLAY_HINT;
+    this.hint.classList.remove('linking');
+  }
+
+  /** Steps through a door: the character comes out at the far side and the screen fades back in. */
+  private checkDoor(): void {
+    const door = doorAt(this.doc, this.x, this.y);
+    if (!door?.door) {
+      this.doorArmed = true;
+      return;
+    }
+    if (!this.doorArmed) return;
+    this.x = door.door.x;
+    this.y = door.door.y;
+    this.doorArmed = false;
+    this.fade = 1;
+  }
+
   private refreshSolid(): void {
     const next = buildCollision(this.doc);
     this.solid.set(next.subarray(0, this.solid.length));
@@ -507,6 +585,7 @@ export class PlayMode {
   };
 
   private update(dt: number): void {
+    this.fade = Math.max(0, this.fade - dt / DOOR_FADE_S);
     let vx = this.stick.x;
     let vy = this.stick.y;
 
@@ -538,6 +617,7 @@ export class PlayMode {
     // stopping dead.
     this.moveAxis(vx * step, 0);
     this.moveAxis(0, vy * step);
+    this.checkDoor();
 
     this.walkTime += dt;
   }
@@ -651,6 +731,25 @@ export class PlayMode {
       ctx.strokeStyle = '#ffd666';
       ctx.lineWidth = 2;
       ctx.strokeRect(x, y, w * zoom, h * zoom);
+      // Where this door leads: its doorway joined to the square it opens onto.
+      const door = found.obj.door;
+      if (door) {
+        const size = this.doc.tileSize;
+        const zone = doorZone(found.obj, size);
+        const fromX = ((zone.x0 + zone.x1) / 2 - camX) * zoom;
+        const fromY = (zone.y0 + size / 2 - camY) * zoom;
+        const toX = (door.x - camX) * zoom;
+        const toY = (door.y - camY) * zoom;
+        ctx.save();
+        ctx.setLineDash([6, 5]);
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.strokeRect(toX - (size * zoom) / 2, toY - (size * zoom) / 2, size * zoom, size * zoom);
+        ctx.restore();
+      }
       if (this.sizeOpen) {
         ctx.fillStyle = '#ffd666';
         ctx.beginPath();
@@ -661,6 +760,12 @@ export class PlayMode {
     } else {
       this.menu.classList.remove('visible');
       this.sizeOpen = false;
+      if (this.linkingDoor) this.stopLinking();
+    }
+
+    if (this.fade > 0) {
+      ctx.fillStyle = `rgba(0, 0, 0, ${this.fade})`;
+      ctx.fillRect(0, 0, this.viewW, this.viewH);
     }
     this.refreshHistory();
   }
@@ -677,6 +782,8 @@ export class PlayMode {
     this.blockButton.classList.toggle('active', this.isBlocked(obj));
     this.lockButton.classList.toggle('active', locked);
     this.lockButton.textContent = locked ? 'Unlock' : 'Lock';
+    this.doorButton.classList.toggle('active', !!obj.door || this.linkingDoor === obj.id);
+    this.doorButton.textContent = this.linkingDoor === obj.id ? 'Cancel door' : obj.door ? 'Door ✓' : 'Door';
     const mw = menu.offsetWidth;
     const mh = menu.offsetHeight;
     const left = clamp(x + w / 2 - mw / 2, 8, this.viewW - mw - 8);
@@ -733,6 +840,32 @@ function button(className: string, label: string, onPress: () => void): HTMLButt
   node.textContent = label;
   node.addEventListener('click', onPress);
   return node;
+}
+
+/**
+ * The doorway of an object that leads somewhere: the middle of its bottom
+ * edge, reaching a little below it so a house that blocks the character can
+ * still be walked into from the front.
+ */
+export function doorZone(obj: MapObject, tile: number): { x0: number; y0: number; x1: number; y1: number } {
+  const { w, h } = objectSize(obj);
+  const half = Math.max(tile / 2, w / 6);
+  const bottom = obj.y + h / 2;
+  return { x0: obj.x - half, x1: obj.x + half, y0: bottom - tile, y1: bottom + tile * 0.6 };
+}
+
+/** The door object whose doorway the character's feet are in, if any. */
+export function doorAt(doc: Doc, x: number, y: number): MapObject | null {
+  for (let li = doc.layers.length - 1; li >= 0; li--) {
+    const layer = doc.layers[li];
+    if (layer.kind !== 'objects' || !layer.visible) continue;
+    for (const obj of layer.objects) {
+      if (!obj.door) continue;
+      const zone = doorZone(obj, doc.tileSize);
+      if (x >= zone.x0 && x <= zone.x1 && y >= zone.y0 && y <= zone.y1) return obj;
+    }
+  }
+  return null;
 }
 
 /** Map squares an object's box covers, as indices into a layer. */

@@ -46,6 +46,9 @@ function readObject(raw: Partial<MapObject>): MapObject {
     ...(finite(raw.contrast, 1) !== 1 ? { contrast: finite(raw.contrast, 1) } : {}),
     ...(finite(raw.clarity, 0) !== 0 ? { clarity: finite(raw.clarity, 0) } : {}),
     ...(raw.blocks ? { blocks: true } : {}),
+    ...(raw.door && Number.isFinite(raw.door.x) && Number.isFinite(raw.door.y)
+      ? { door: { x: raw.door.x, y: raw.door.y } }
+      : {}),
     ...(raw.locked ? { locked: true } : {}),
     ...(typeof raw.groupId === 'string' && raw.groupId ? { groupId: raw.groupId } : {}),
   };

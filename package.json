@@ -9,8 +9,10 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc --noEmit",
-    "sync:ios": "npm run build && cap sync ios",
+    "build:native": "npm run build && node scripts/strip-web-library.mjs",
+    "sync:ios": "npm run build:native && cap sync ios",
     "icons": "node scripts/make-icons.mjs",
+    "app-icon": "node scripts/make-app-icon.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
