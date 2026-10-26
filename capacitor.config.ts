@@ -8,8 +8,8 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * fetch at runtime, which means it works in airplane mode from first launch.
  */
 const config: CapacitorConfig = {
-  appId: 'com.oliviabee.pixelfusion',
-  appName: 'Pixel Fusion',
+  appId: 'com.doggbinary.habitat',
+  appName: 'Habitat',
   webDir: 'dist',
   backgroundColor: '#0e0f13',
 

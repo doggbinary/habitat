@@ -566,7 +566,7 @@ export function openExportDialog(store: Store, characters: Character[] = [], las
         const blob = new Blob([JSON.stringify(serializeProject(doc, characters, lastPlayedId))], {
           type: 'application/json',
         });
-        await saveFile(blob, `${base}.pixelfusion.json`);
+        await saveFile(blob, `${base}.habitat.json`);
       }),
     ),
     status,

@@ -137,6 +137,7 @@ interface SerializedCharacter {
 }
 
 export interface SerializedProject {
+  /** From before the app was called Habitat; files saved since then still carry it. */
   format: 'pixel-fusion-project';
   version: number;
   name: string;

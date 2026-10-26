@@ -1346,7 +1346,7 @@ export class App {
       const text = await file.text();
       const parsed = JSON.parse(text);
       if (!isProjectFile(parsed)) {
-        this.store.toast('That is not a Pixel Fusion project file');
+        this.store.toast('That is not a Habitat project file');
         return;
       }
       const doc = await deserializeProject(parsed);

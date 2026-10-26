@@ -144,7 +144,7 @@ export class Shell {
     root.append(
       el('div', { class: 'app' }, [
         el('header', { class: 'topbar' }, [
-          el('div', { class: 'brand' }, [icon('pencilTip', 20), el('span', { text: 'Pixel Fusion' })]),
+          el('div', { class: 'brand' }, [icon('pencilTip', 20), el('span', { text: 'Habitat' })]),
           this.modeBar,
           this.title,
           this.topActions,

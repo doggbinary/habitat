@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>Pixel Fusion</string>
+        <string>Habitat</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -68,7 +68,7 @@
 	<true/>
 
 	<!-- Exports are written to Documents. These two keys surface that folder
-	     as "On My iPad > Pixel Fusion" in the Files app, so maps and sprite
+	     as "On My iPad > Habitat" in the Files app, so maps and sprite
 	     sheets are reachable without going through the editor. -->
 	<key>UIFileSharingEnabled</key>
 	<true/>

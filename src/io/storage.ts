@@ -38,6 +38,7 @@ async function readProjectFile(): Promise<SerializedProject | null> {
   return null;
 }
 
+// From before the app was called Habitat. Renaming it would lose every saved map.
 const DB_NAME = 'pixel-fusion';
 const DB_VERSION = 1;
 const STORE = 'projects';

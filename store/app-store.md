@@ -1,9 +1,9 @@
-# App Store listing: Pixel Fusion
+# App Store listing: Habitat
 
 Paste these into App Store Connect. Apple's character limits are in brackets; every field below fits.
 
 ## App information
-- **Name** (30): Pixel Fusion
+- **Name** (30): Habitat
 - **Subtitle** (30): Build pixel worlds, walk in
 - **Primary category:** Graphics & Design
 - **Secondary category:** Developer Tools
@@ -17,7 +17,7 @@ Build a village, draw your hero, press Play and walk through the front door. Fre
 ## Description (4000)
 Build a pixel-art world, draw the character who lives in it, then press Play and walk around inside it.
 
-Pixel Fusion is a tile map and sprite editor made for iPad and Apple Pencil. Paint ground with the Pencil, drop in houses and trees, draw a character frame by frame, and walk it through your town with an on-screen stick. Link a house to a room, and walking into the doorway takes you inside.
+Habitat is a tile map and sprite editor made for iPad and Apple Pencil. Paint ground with the Pencil, drop in houses and trees, draw a character frame by frame, and walk it through your town with an on-screen stick. Link a house to a room, and walking into the doorway takes you inside.
 
 FREE TO BUILD AND WALK
 - A starter world from Ninja Adventure: ground, water, trees, houses, village props and interiors on a 16 px grid
@@ -28,7 +28,7 @@ FREE TO BUILD AND WALK
 - Your project saves on its own as you work
 - Import your own tilesets and sprite sheets
 
-PIXEL FUSION PRO, $14.99 ONCE
+HABITAT PRO, $14.99 ONCE
 One purchase, yours to keep. No subscription, no trial timer. Pro unlocks Export:
 - The map as a PNG, at up to 8x
 - The tileset as a PNG
@@ -44,17 +44,17 @@ Starter art: Ninja Adventure by Pixel-Boy and AAA (CC0).
 pixel art,tilemap,tileset,level editor,sprite,map maker,rpg,game maker,8bit,godot,unity,phaser,retro
 
 ## URLs
-- **Support:** https://oliviabee23-wq.github.io/pixel-fusion/support.html
-- **Privacy policy:** https://oliviabee23-wq.github.io/pixel-fusion/privacy.html
+- **Support:** https://doggbinary.github.io/habitat/support.html
+- **Privacy policy:** https://doggbinary.github.io/habitat/privacy.html
 
 ## In-app purchase
 - **Type:** Non-consumable
-- **Reference name:** Pixel Fusion Pro
-- **Product ID:** pixelfusion.pro (must match `src/pro.ts`)
+- **Reference name:** Habitat Pro
+- **Product ID:** habitat.pro (must match `src/pro.ts`)
 - **Price:** $14.99 (Tier set in App Store Connect)
-- **Display name:** Pixel Fusion Pro
+- **Display name:** Habitat Pro
 - **Description:** Export maps, tilesets, sprite sheets and engine files.
-- **RevenueCat:** entitlement `pro`, attached to `pixelfusion.pro`, in the current offering. The public iOS API key goes in `.env.production.local` as `VITE_REVENUECAT_IOS_KEY` on the Mac that builds.
+- **RevenueCat:** entitlement `pro`, attached to `habitat.pro`, in the current offering. The public iOS API key goes in `.env.production.local` as `VITE_REVENUECAT_IOS_KEY` on the Mac that builds.
 
 ## App privacy (the questionnaire)
 - **Data collected:** Purchases > Purchase History
@@ -64,7 +64,7 @@ pixel art,tilemap,tileset,level editor,sprite,map maker,rpg,game maker,8bit,godo
 - Nothing else is collected. No accounts, analytics or ads.
 
 ## Review notes
-Pixel Fusion is an editor for iPad and Apple Pencil. The Pencil draws; one finger pans and moves objects; pinch zooms. To try the full loop: the app opens on a sample village. Tap Play (bottom bar), walk up the path with the stick in the bottom right, and go through the house door. Export (top right) shows the one in-app purchase, which unlocks exporting files. A sandbox tester account is provided below for the purchase and Restore purchase.
+Habitat is an editor for iPad and Apple Pencil. The Pencil draws; one finger pans and moves objects; pinch zooms. To try the full loop: the app opens on a sample village. Tap Play (bottom bar), walk up the path with the stick in the bottom right, and go through the house door. Export (top right) shows the one in-app purchase, which unlocks exporting files. A sandbox tester account is provided below for the purchase and Restore purchase.
 
 ## Screenshots (13-inch iPad, 2064 x 2752 portrait or 2752 x 2064 landscape)
 1. The sample village in the editor, a house selected, with "Build a pixel world" as the caption.

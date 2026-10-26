@@ -11,6 +11,9 @@ name: Build iOS app
 #   APPSTORE_PRIVATE_KEY the full contents of the downloaded AuthKey_*.p8
 #   APPLE_TEAM_ID        your 10-character Apple Developer team ID
 #
+# REVENUECAT_IOS_KEY (RevenueCat's public iOS key) turns on the Habitat Pro
+# purchase; without it the app builds with the store marked unavailable.
+#
 # Manual-only for now: the browser build is the focus, and a macOS runner on
 # every push spends CI minutes on a binary nobody is installing yet. Run it
 # from the Actions tab, or restore the `push` trigger when shipping to Apple.
@@ -38,9 +41,13 @@ jobs:
 
       - run: npm ci
 
+      # The native build leaves out the web-only library; the purchase key
+      # comes from the REVENUECAT_IOS_KEY repository secret.
       - name: Build web and sync to iOS
+        env:
+          VITE_REVENUECAT_IOS_KEY: ${{ secrets.REVENUECAT_IOS_KEY }}
         run: |
-          npm run build
+          npm run build:native
           npx cap sync ios
 
       - name: Show available Xcode
@@ -146,6 +153,6 @@ jobs:
         if: env.HAS_SIGNING == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: pixel-fusion-ipa
+          name: habitat-ipa
           path: ${{ env.EXPORT_PATH }}/*.ipa
           if-no-files-found: warn

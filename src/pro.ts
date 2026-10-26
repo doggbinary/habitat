@@ -1,7 +1,7 @@
 import { isNative } from './io/native';
 
 /**
- * Pixel Fusion Pro: one purchase, kept, that unlocks Export. Building,
+ * Habitat Pro: one purchase, kept, that unlocks Export. Building,
  * saving the one project, the character studio and Play are free.
  *
  * The store is reached through RevenueCat, which handles StoreKit receipts,
@@ -12,7 +12,7 @@ import { isNative } from './io/native';
 /** The entitlement in RevenueCat that the $14.99 product grants. */
 const ENTITLEMENT = 'pro';
 /** The non-consumable in App Store Connect. */
-const PRODUCT_ID = 'pixelfusion.pro';
+const PRODUCT_ID = 'habitat.pro';
 const FALLBACK_PRICE = '$14.99';
 /** Remembered so a purchase still counts with no connection. */
 const OWNED_KEY = 'pf-pro-owned';

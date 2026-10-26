@@ -61,7 +61,7 @@ export function openProScreen(options: { unlocked: () => void; toast: (message: 
     status,
   ]);
 
-  handle = openModal({ title: 'Export with Pixel Fusion Pro', body, actions: [{ label: 'Not now' }] });
+  handle = openModal({ title: 'Export with Habitat Pro', body, actions: [{ label: 'Not now' }] });
   void proPrice().then((value) => {
     price.textContent = value;
   });

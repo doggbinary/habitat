@@ -1,6 +1,6 @@
 {
-  "name": "Pixel Fusion — Tilemap Editor",
-  "short_name": "Pixel Fusion",
+  "name": "Habitat — Pixel World Editor",
+  "short_name": "Habitat",
   "description": "Touch-first tilemap editor built for iPad and Apple Pencil.",
   "start_url": "./",
   "scope": "./",

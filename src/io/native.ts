@@ -48,7 +48,7 @@ function blobToBase64(blob: Blob): Promise<string> {
  * Writes a file into the app's Documents folder and offers the share sheet.
  *
  * Documents is the right home for exports: with `UIFileSharingEnabled` the
- * folder shows up under "On My iPad > Pixel Fusion" in the Files app, so work
+ * folder shows up under "On My iPad > Habitat" in the Files app, so work
  * is reachable without going through the app at all.
  */
 export async function saveFileNative(blob: Blob, filename: string): Promise<boolean> {
