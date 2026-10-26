@@ -44,6 +44,8 @@ import { EMPTY, flagsOf, indexOf, pack, tilesetOf, withFlags, type PackedTile } 
 import { openAssetMenu } from './ui/asset-menu';
 import { CharacterPanel } from './ui/character-panel';
 import { showCoach } from './ui/coach';
+import { openProScreen } from './ui/pro-screen';
+import { isPro } from './pro';
 import { Store } from './core/store';
 import { bindKeyboard } from './input/keyboard';
 import { PointerInput } from './input/pointer-input';
@@ -238,7 +240,12 @@ export class App {
       openProject: () => void this.openProject(),
       exportMap: () => {
         this.editor.commitSelection();
-        openExportDialog(this.store, this.studio.characters, this.studio.lastPlayedId);
+        // Export is what Pro unlocks; everything else in the app is free.
+        const open = () => openExportDialog(this.store, this.studio.characters, this.studio.lastPlayedId);
+        void isPro().then((pro) => {
+          if (pro) open();
+          else openProScreen({ unlocked: open, toast: (message) => this.store.toast(message) });
+        });
       },
       fitToView: () => this.fit(),
       playTest: () => this.startPlayTest(),

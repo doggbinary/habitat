@@ -28,6 +28,7 @@
     "@capacitor/filesystem": "^8.1.5",
     "@capacitor/ios": "^8.5.3",
     "@capacitor/share": "^8.0.3",
-    "@capacitor/status-bar": "^8.0.4"
+    "@capacitor/status-bar": "^8.0.4",
+    "@revenuecat/purchases-capacitor": "^13.7.6"
   }
 }

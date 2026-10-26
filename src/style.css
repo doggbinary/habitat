@@ -1628,6 +1628,35 @@ textarea {
   animation: play-hint-fade 420ms ease 4s forwards;
 }
 
+/* Pro: what Export unlocks, the price, and the way to restore it. */
+.pro-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pro-pitch {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.pro-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.pro-buy {
+  min-height: 48px;
+  font-size: 16px;
+}
+
+.pro-status:empty {
+  display: none;
+}
+
 /* First-launch coach: one card at a time, low on the screen, clear of the map's middle. */
 .coach {
   position: fixed;
