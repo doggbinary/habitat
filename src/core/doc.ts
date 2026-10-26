@@ -324,6 +324,45 @@ export function rescaleGrid(doc: Doc, next: number): void {
   }
 }
 
+/**
+ * Reads a page of whole objects at a new square size, for art that was
+ * drawn bigger or smaller than the rest of its pack. Objects already placed
+ * from it are rescaled the same way, keeping their top-left corner.
+ * Returns false when the page has painted squares, whose numbering a new
+ * grid would change.
+ */
+export function retileSheet(doc: Doc, sheetIndex: number, tile: number): boolean {
+  const sheet = doc.tilesets[sheetIndex];
+  if (!sheet || tile <= 0 || sheet.tileW === tile) return false;
+  for (const layer of doc.layers) {
+    if (layer.kind !== 'tiles') continue;
+    for (const cell of layer.data) if (cell !== -1 && ((cell >> 16) & 0xff) === sheetIndex) return false;
+  }
+  const k = sheet.tileW / tile;
+  sheet.tileW = tile;
+  sheet.tileH = tile;
+  reslice(sheet);
+  for (const layer of doc.layers) {
+    if (layer.kind !== 'objects') continue;
+    for (const obj of layer.objects) {
+      if (obj.tilesetId !== sheet.id) continue;
+      const before = objectSize(obj);
+      const left = obj.x - before.w / 2;
+      const top = obj.y - before.h / 2;
+      obj.scale *= k;
+      const after = objectSize(obj);
+      obj.x = left + after.w / 2;
+      obj.y = top + after.h / 2;
+    }
+  }
+  return true;
+}
+
+/** Art drawn on `art` px squares looks even on `tile` px squares when one is a whole multiple of the other. */
+function scalesEvenly(art: number, tile: number): boolean {
+  return art > 0 && tile > 0 && (art % tile === 0 || tile % art === 0);
+}
+
 export interface GridCheck {
   /** Sheets the map uses whose art is drawn on a different square size, so it is stretched or shrunk. */
   mismatched: { name: string; tileW: number; uses: number }[];
@@ -365,11 +404,24 @@ export function checkGrid(doc: Doc): GridCheck {
     const sheet = doc.tilesets[index];
     if (!sheet || sheet.generated || sheet.tileW <= 0) continue;
     bySize.set(sheet.tileW, (bySize.get(sheet.tileW) ?? 0) + count);
-    if (sheet.tileW !== tile) mismatched.push({ name: sheet.name, tileW: sheet.tileW, uses: count });
+    // Exactly half or double size still shows every pixel evenly.
+    if (!scalesEvenly(sheet.tileW, tile)) mismatched.push({ name: sheet.name, tileW: sheet.tileW, uses: count });
   }
   mismatched.sort((a, b) => b.uses - a.uses);
-  const top = [...bySize].sort((a, b) => b[1] - a[1])[0];
-  return { mismatched, suggested: top && top[0] !== tile ? top[0] : null, offGrid };
+
+  // The square size that leaves the least art uneven, preferring the map's own.
+  const unevenAt = (size: number) =>
+    [...bySize].reduce((sum, [art, count]) => sum + (scalesEvenly(art, size) ? 0 : count), 0);
+  let suggested: number | null = null;
+  let best = unevenAt(tile);
+  for (const [size] of [...bySize].sort((a, b) => b[1] - a[1])) {
+    const uneven = unevenAt(size);
+    if (uneven < best) {
+      best = uneven;
+      suggested = size;
+    }
+  }
+  return { mismatched, suggested, offGrid };
 }
 
 /** Squares across a map made from a picture. Its height follows the picture. */

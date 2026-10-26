@@ -6,6 +6,8 @@ import {
   fitPlacement,
   pictureMapSize,
   upgradeTileSize,
+  objectSize,
+  retileSheet,
   isImageLayer,
   loadImage,
   makeTileset,
@@ -31,7 +33,7 @@ import { dominantColor, recolorToCanvas } from './io/recolor';
 import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
 import { isSolid } from './core/seamless';
 import { cropAsset } from './render/object-draw';
-import { gridScale, ObjectTools } from './tools/objects';
+import { gridScale, ObjectTools, snapToGrid } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
 import { hexToHsv, hsvToHex } from './ui/color-wheel';
 import { importSpriteSheet } from './character/import';
@@ -521,8 +523,16 @@ export class App {
   private applyLibraryHints(entries: LibraryEntry[]): number {
     let changed = 0;
     for (const entry of entries) {
-      const sheet = this.store.doc.tilesets.find((t) => t.name === entry.name);
+      const index = this.store.doc.tilesets.findIndex((t) => t.name === entry.name);
+      const sheet = this.store.doc.tilesets[index];
       if (!sheet?.image) continue;
+      // A page whose art was drawn at another scale says so in the list;
+      // it is read at that size, and what was placed from it shrinks to match.
+      const tile = typeof entry.tile === 'number' && entry.tile > 0 ? entry.tile : null;
+      if (tile && sheet.tileW !== tile && retileSheet(this.store.doc, index, tile)) {
+        this.fitToGrid(sheet.id);
+        changed += 1;
+      }
       const boxes = Array.isArray(entry.assets) && entry.assets.length > 0 ? entry.assets : null;
       if (boxes) {
         const same =
@@ -546,6 +556,25 @@ export class App {
       }
     }
     return changed;
+  }
+
+  /** Whole squares and grid-line corners for every unlocked object placed from one page. */
+  private fitToGrid(tilesetId: string): void {
+    const tile = this.store.doc.tileSize;
+    for (const layer of this.store.doc.layers) {
+      if (layer.kind !== 'objects') continue;
+      for (const obj of layer.objects) {
+        if (obj.tilesetId !== tilesetId || obj.locked) continue;
+        const before = objectSize(obj);
+        const left = obj.x - before.w / 2;
+        const top = obj.y - before.h / 2;
+        obj.scale = gridScale(obj.rect.w, obj.rect.h, obj.scale, tile);
+        const { w, h } = objectSize(obj);
+        const at = snapToGrid(w, h, left + w / 2, top + h / 2, tile);
+        obj.x = at.x;
+        obj.y = at.y;
+      }
+    }
   }
 
   /**

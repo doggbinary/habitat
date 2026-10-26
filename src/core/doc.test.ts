@@ -8,6 +8,7 @@ import {
   fitPlacement,
   pictureMapSize,
   rescaleGrid,
+  retileSheet,
   upgradeTileSize,
   type ImageLayer,
   type TileLayer,
@@ -81,6 +82,46 @@ describe('upgrading a 16 px map', () => {
     expect(check.suggested).toBe(32);
     // 16 x 32 centred on (40, 64): corner (32, 48), not on a 48 px line.
     expect(check.offGrid).toBe(1);
+  });
+
+  it('does not count art at exactly half or double size as uneven', () => {
+    const doc = createDoc(4, 4, 32);
+    doc.tilesets = [fakeTileset('town', 32), fakeTileset('buildings', 64), fakeTileset('modern', 48)];
+    const objects = createObjectLayer();
+    objects.objects = [
+      fakeObject({ tilesetId: 'buildings', x: 32, y: 32, rect: { x: 0, y: 0, w: 64, h: 64 } }),
+      fakeObject({ tilesetId: 'buildings', x: 32, y: 32, rect: { x: 0, y: 0, w: 64, h: 64 } }),
+    ];
+    doc.layers.push(objects);
+    (doc.layers[0] as TileLayer).data[0] = pack(2, 1);
+    const check = checkGrid(doc);
+    expect(check.mismatched.map((m) => m.tileW)).toEqual([48]);
+    // 64 px buildings are the most used, but 32 already shows them evenly.
+    expect(check.suggested).toBeNull();
+  });
+
+  it('reads a page of objects at a new square size and shrinks what was placed from it', () => {
+    const doc = createDoc(10, 10, 32);
+    doc.tilesets = [fakeTileset('buildings', 32)];
+    const objects = createObjectLayer();
+    // A 64 x 64 building drawn at 1x on a 32 px map: two squares, corner at (32, 64).
+    objects.objects = [fakeObject({ tilesetId: 'buildings', rect: { x: 0, y: 0, w: 64, h: 64 }, x: 64, y: 96 })];
+    doc.layers.push(objects);
+
+    expect(retileSheet(doc, 0, 64)).toBe(true);
+    expect(doc.tilesets[0].tileW).toBe(64);
+    const obj = objects.objects[0];
+    expect(obj.scale).toBe(0.5);
+    expect(obj.x - 16).toBe(32);
+    expect(obj.y - 16).toBe(64);
+  });
+
+  it('leaves a page alone when squares are painted from it', () => {
+    const doc = createDoc(4, 4, 32);
+    doc.tilesets = [fakeTileset('ground', 32)];
+    (doc.layers[0] as TileLayer).data[0] = pack(0, 2);
+    expect(retileSheet(doc, 0, 64)).toBe(false);
+    expect(doc.tilesets[0].tileW).toBe(32);
   });
 
   it('switches the grid and scales objects, doors and pictures with it, keeping every cell', () => {
