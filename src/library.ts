@@ -30,6 +30,8 @@ export interface LibraryFile {
   tile?: number;
   /** The page holds only whole objects. */
   props?: boolean;
+  /** Exact picture boxes, when the page was laid out by hand. */
+  assets?: { x: number; y: number; w: number; h: number }[];
 }
 
 /**
@@ -49,6 +51,7 @@ export function buildLibraryEntries(files: LibraryFile[]): LibraryEntry[] {
         url,
         ...(item.tile ? { tile: item.tile } : {}),
         ...(item.props ? { props: true } : {}),
+        ...(item.assets?.length ? { assets: item.assets } : {}),
       });
     }
     else if (isPathSheet(item.folders, item.file)) {
@@ -95,4 +98,6 @@ export interface LibraryEntry {
   tile?: number;
   /** A page of whole objects, with no floor squares to find on it. */
   props?: boolean;
+  /** Exact boxes of the pictures on a page that was laid out by hand, so nothing is guessed. */
+  assets?: { x: number; y: number; w: number; h: number }[];
 }

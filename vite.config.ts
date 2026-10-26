@@ -20,6 +20,7 @@ function assetLibrary(): Plugin {
   interface PackInfo {
     tile?: number;
     props?: string[];
+    assets?: Record<string, { x: number; y: number; w: number; h: number }[]>;
   }
 
   const walk = (dir: string, folders: string[], pack: PackInfo) => {
@@ -34,7 +35,8 @@ function assetLibrary(): Plugin {
         ? crypto.createHash('sha1').update(fs.readFileSync(abs)).digest('hex')
         : undefined;
       const props = pack.props?.includes(entry.name) ?? false;
-      found.push({ folders, file: entry.name, id, tile: pack.tile, ...(props ? { props } : {}) });
+      const assets = pack.assets?.[entry.name];
+      found.push({ folders, file: entry.name, id, tile: pack.tile, ...(props ? { props } : {}), ...(assets ? { assets } : {}) });
       located.set(libraryUrl(folders, entry.name), abs);
     }
   };
@@ -49,6 +51,7 @@ function assetLibrary(): Plugin {
       return {
         tile: typeof raw.tile === 'number' && raw.tile > 0 ? raw.tile : undefined,
         props: Array.isArray(raw.props) ? raw.props.filter((name) => typeof name === 'string') : undefined,
+        assets: raw.assets && typeof raw.assets === 'object' ? raw.assets : undefined,
       };
     } catch {
       return {};

@@ -476,8 +476,17 @@ export class App {
         const tile = typeof entry.tile === 'number' && entry.tile > 0 ? entry.tile : 48;
         const tileset = await makeTileset(new URL(entry.url, document.baseURI).href, entry.name, tile, tile);
         if (entry.props) tileset.propsOnly = true;
-        detectInto(tileset);
-        if (isSampleMap(tileset.imgW, tileset.imgH, tileset.assets ?? [])) {
+        if (Array.isArray(entry.assets) && entry.assets.length > 0) {
+          // A page laid out by hand lists its pictures; guessing could only cut them up.
+          tileset.splitMode = 'objects';
+          tileset.assets = entry.assets.map((rect) => ({ ...rect }));
+          tileset.groundAssets = [];
+          tileset.assetsEdited = true;
+          tileset.assetsVersion = DETECT_VERSION;
+        } else {
+          detectInto(tileset);
+        }
+        if (!entry.assets?.length && isSampleMap(tileset.imgW, tileset.imgH, tileset.assets ?? [])) {
           skipped.add(entry.name);
           continue;
         }
