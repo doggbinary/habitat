@@ -3,74 +3,28 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
-import { buildLibraryEntries, isLibrarySheet, libraryUrl, type LibraryFile } from './src/library.ts';
 
 /**
- * Serves the object pages from the tileset folders next to this project.
- * Ground and wall grids are not included. The pictures stay on this computer;
- * they are not part of the site build.
+ * The full version: on this computer, `npm run full` also serves the bought
+ * packs from a folder beside the project (or HABITAT_LIBRARY), at the same
+ * `library/` address the app reads. They are licensed for your own use, so
+ * they live outside the repo and never reach the website or the iPad app,
+ * which carry only the starter pack.
  */
-function assetLibrary(): Plugin {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../tilesets');
-  const routes = new Map<string, string>();
-  const found: LibraryFile[] = [];
-  const located = new Map<string, string>();
-
-  interface PackInfo {
-    tile?: number;
-    props?: string[];
-    assets?: Record<string, { x: number; y: number; w: number; h: number }[]>;
-  }
-
-  const walk = (dir: string, folders: string[], pack: PackInfo) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        walk(path.join(dir, entry.name), [...folders, entry.name], pack);
-        continue;
-      }
-      if (!isLibrarySheet(folders, entry.name)) continue;
-      const abs = path.join(dir, entry.name);
-      const props = pack.props?.includes(entry.name) ?? false;
-      const assets = pack.assets?.[entry.name];
-      found.push({ folders, file: entry.name, tile: pack.tile, ...(props ? { props } : {}), ...(assets ? { assets } : {}) });
-      located.set(libraryUrl(folders, entry.name), abs);
-    }
-  };
-
-  // A pack that is not 48 px squares, or has pages of whole objects only,
-  // says so in a pack.json beside its pages: { "tile": 32, "props": ["4.png"] }.
-  const packInfo = (dir: string): PackInfo => {
-    const file = path.join(dir, 'pack.json');
-    if (!fs.existsSync(file)) return {};
-    try {
-      const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as PackInfo;
-      return {
-        tile: typeof raw.tile === 'number' && raw.tile > 0 ? raw.tile : undefined,
-        props: Array.isArray(raw.props) ? raw.props.filter((name) => typeof name === 'string') : undefined,
-        assets: raw.assets && typeof raw.assets === 'object' ? raw.assets : undefined,
-      };
-    } catch {
-      return {};
-    }
-  };
-
-  if (fs.existsSync(root)) {
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const dir = path.join(root, entry.name);
-      walk(dir, [entry.name], packInfo(dir));
-    }
-  }
-  const entries = buildLibraryEntries(found);
-  for (const entry of entries) {
-    const file = located.get(entry.url);
-    if (file) routes.set(`/${decodeURIComponent(entry.url)}`, file);
-  }
-  const manifest = JSON.stringify(entries);
+function localLibrary(): Plugin {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const dir = path.resolve(process.env.HABITAT_LIBRARY ?? path.join(here, '../habitat-library'));
+  const types: Record<string, string> = { '.png': 'image/png', '.json': 'application/json' };
 
   return {
-    name: 'asset-library',
+    name: 'local-library',
+    apply: 'serve',
     configureServer(server) {
+      if (!fs.existsSync(dir)) {
+        server.config.logger.info(`No library at ${dir}: running the app version, starter pack only.`);
+        return;
+      }
+      server.config.logger.info(`Full version: serving your packs from ${dir}`);
       server.middlewares.use((req, res, next) => {
         let pathname = (req.url ?? '').split('?')[0];
         try {
@@ -79,18 +33,20 @@ function assetLibrary(): Plugin {
           next();
           return;
         }
-        if (pathname === '/library/manifest.json') {
-          res.setHeader('content-type', 'application/json');
-          res.end(manifest);
-          return;
-        }
-        const file = routes.get(pathname);
-        if (!file) {
+        if (!pathname.startsWith('/library/')) {
           next();
           return;
         }
-        res.setHeader('content-type', 'image/png');
-        res.setHeader('cache-control', 'public, max-age=86400');
+        const file = path.resolve(dir, pathname.slice('/library/'.length));
+        // Nothing outside the library folder is ever served.
+        if (!file.startsWith(dir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+          next();
+          return;
+        }
+        const type = types[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
+        res.setHeader('content-type', type);
+        // The list changes when packs are added; the pictures do not.
+        res.setHeader('cache-control', type === 'application/json' ? 'no-cache' : 'public, max-age=86400');
         fs.createReadStream(file).pipe(res);
       });
     },
@@ -98,7 +54,7 @@ function assetLibrary(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [assetLibrary()],
+  plugins: [localLibrary()],
   base: './',
   server: {
     host: '0.0.0.0',

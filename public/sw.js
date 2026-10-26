@@ -4,7 +4,7 @@
  * production build, so a new deploy evicts the old assets instead of serving
  * a half-updated mix.
  */
-const CACHE = 'habitat-v5';
+const CACHE = 'habitat-v6';
 
 self.addEventListener('install', (event) => {
   // The app shell is tiny; everything else is picked up on first use.

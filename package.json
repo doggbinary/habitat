@@ -6,6 +6,7 @@
   "description": "Touch-first tilemap editor for iPad and Apple Pencil",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "full": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc --noEmit",

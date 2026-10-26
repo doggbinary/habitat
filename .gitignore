@@ -31,3 +31,7 @@ npm-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Bought packs: licensed for personal use, served locally by npm run full
+# from ../habitat-library, never committed or published.
+public/library/
