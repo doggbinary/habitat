@@ -83,6 +83,20 @@ export async function saveProject(project: SerializedProject): Promise<void> {
   await withStore('readwrite', (store) => store.put(project, CURRENT_KEY));
 }
 
+/**
+ * Asks the browser to keep this site's storage even when space runs low.
+ * Safari otherwise may clear a site's saved data, the map with it.
+ */
+export async function keepStorage(): Promise<void> {
+  try {
+    if (!isNative() && navigator.storage?.persist && !(await navigator.storage.persisted())) {
+      await navigator.storage.persist();
+    }
+  } catch {
+    /* not offered by every browser; saving still works */
+  }
+}
+
 export async function loadProject(): Promise<SerializedProject | null> {
   if (isNative()) {
     const fromFile = await readProjectFile().catch(() => null);
@@ -115,6 +129,8 @@ export async function clearProject(): Promise<void> {
 export function createAutosave(
   serialize: () => SerializedProject,
   delay = 1200,
+  /** Told when a save fails, such as when the browser blocks storage, so the user is not left thinking work is kept. */
+  onError: (error: unknown) => void = () => {},
 ): { schedule: () => void; flush: () => Promise<void> } {
   let timer: number | undefined;
   let pending = false;
@@ -123,8 +139,9 @@ export function createAutosave(
     pending = false;
     try {
       await saveProject(serialize());
-    } catch {
-      /* out of quota or storage blocked; the in-memory document is unaffected */
+    } catch (error) {
+      // The in-memory document is unaffected; the user just has to know.
+      onError(error);
     }
   };
 

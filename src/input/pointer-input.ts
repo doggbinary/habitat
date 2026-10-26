@@ -69,6 +69,8 @@ export class PointerInput {
   private tapObject: MapObject | null = null;
   /** A tap on empty map should drop another copy of the picked object. */
   private placeArmed = false;
+  /** Something was selected when that tap began, so the tap deselects instead of placing. */
+  private placeDeselects = false;
   private tapObjectLayer: string | null = null;
 
   /** Called when a placed ground tile is double-tapped. */
@@ -538,6 +540,7 @@ export class PointerInput {
   private beginPlace(pointer: TrackedPointer, precise: boolean): boolean {
     if (this.store.tool !== 'brush' || !this.armedObject()) return false;
     this.placeArmed = true;
+    this.placeDeselects = this.objects.members().length > 0;
     this.gestureStart = performance.now();
     this.gestureMoved = false;
     this.gestureMaxFingers = Math.max(this.gestureMaxFingers, 1);
@@ -1071,13 +1074,21 @@ export class PointerInput {
 
     // Only a one-finger tap places: two and three fingers are undo and redo.
     if (this.placeArmed && wasTap && fingers <= 1 && !tappedObject && this.tapStart) {
+      this.placeArmed = false;
+      // With something selected, tapping empty map lets it go first.
+      if (this.placeDeselects) {
+        this.objects.deselect();
+        return;
+      }
       const armed = this.armedObject();
       const cell = this.cellAt(this.tapStart.x, this.tapStart.y);
       const doc = this.store.doc;
-      this.placeArmed = false;
       if (armed && cell.x >= 0 && cell.y >= 0 && cell.x < doc.width && cell.y < doc.height) {
         const tile = doc.tileSize;
         this.objects.place(armed.tilesetId, armed.rect, (cell.x + 0.5) * tile, (cell.y + 0.5) * tile);
+        // Copies stamped with taps are not left selected, so the next tap
+        // stamps again and a tapped object is the only thing ever selected.
+        this.objects.deselect();
       }
       return;
     }

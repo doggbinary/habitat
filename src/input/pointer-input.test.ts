@@ -94,6 +94,82 @@ describe('fingers and placed objects', () => {
   });
 });
 
+describe('the Select tool and the Pencil', () => {
+  const stroke = () => {
+    handlers.pointerdown(pen(4, 4));
+    handlers.pointermove(pen(40, 40));
+    handlers.pointerup(pen(40, 40));
+  };
+
+  it('boxes tiles and never paints, on a blank layer', () => {
+    store.setTool('select');
+    stroke();
+    expect(painted()).toBe(0);
+    expect(store.tool).toBe('select');
+  });
+
+  it('never paints, even with a ground square or an asset picked in Assets', () => {
+    store.doc.tilesets[0].assets = [{ x: 0, y: 0, w: 16, h: 16 }];
+    store.libraryPick = { tilesetId: 'a', index: 0 };
+    store.setTool('select');
+    stroke();
+    expect(painted()).toBe(0);
+    const objectsLayer = store.doc.layers.find((l) => l.kind === 'objects') as ObjectLayer | undefined;
+    expect(objectsLayer?.objects ?? []).toHaveLength(0);
+    expect(store.tool).toBe('select');
+  });
+
+  it('comes back to Select after sampling with Pick tile', () => {
+    layer.data.fill(pack(0, 1));
+    store.setTool('select');
+    store.setTool('picker');
+    handlers.pointerdown(pen(4, 4));
+    handlers.pointerup(pen(4, 4));
+    expect(store.tool).toBe('select');
+  });
+});
+
+describe('deselecting while an object is picked in Assets', () => {
+  const objectsLayer = () => store.doc.layers.find((l) => l.kind === 'objects') as ObjectLayer | undefined;
+  const tap = (x: number, y: number, make: typeof touch | typeof pen = touch) => {
+    handlers.pointerdown(make(x, y));
+    handlers.pointerup(make(x, y));
+  };
+
+  beforeEach(() => {
+    store.doc.tilesets[0].assets = [{ x: 0, y: 0, w: 16, h: 16 }];
+    store.libraryPick = { tilesetId: 'a', index: 0 };
+  });
+
+  it('stamps copies without leaving them selected', () => {
+    tap(24, 24);
+    tap(72, 24);
+    expect(objectsLayer()?.objects).toHaveLength(2);
+    expect(objects.selected()).toBeNull();
+  });
+
+  it('a tap on empty map lets a selected object go instead of stamping, then the next tap stamps', () => {
+    tap(24, 24);
+    // Tap the copy to select it.
+    tap(24, 24);
+    expect(objects.selected()).not.toBeNull();
+    tap(100, 100);
+    expect(objects.selected()).toBeNull();
+    expect(objectsLayer()?.objects).toHaveLength(1);
+    tap(100, 100);
+    expect(objectsLayer()?.objects).toHaveLength(2);
+  });
+
+  it('works the same with the Pencil', () => {
+    tap(24, 24, pen);
+    tap(24, 24, pen);
+    expect(objects.selected()).not.toBeNull();
+    tap(100, 100, pen);
+    expect(objects.selected()).toBeNull();
+    expect(objectsLayer()?.objects).toHaveLength(1);
+  });
+});
+
 describe('an object picked in Assets', () => {
   it('is placed only by the brush, not by Pick tile', () => {
     store.doc.tilesets[0].assets = [{ x: 0, y: 0, w: 16, h: 16 }];

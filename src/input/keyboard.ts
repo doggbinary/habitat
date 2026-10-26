@@ -56,6 +56,11 @@ export function bindKeyboard(options: {
       return;
     }
 
+    if (key === 'escape' && shell.putAway()) {
+      e.preventDefault();
+      return;
+    }
+
     if ((key === 'delete' || key === 'backspace') && shell.deleteSelected()) {
       e.preventDefault();
       return;

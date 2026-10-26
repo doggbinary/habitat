@@ -225,6 +225,24 @@ export class Shell {
   }
 
   /** Deletes the selected assets, or the held tiles, on the map. False when nothing is selected. */
+  /**
+   * Lets go of everything in hand on the map: selected objects, held tiles,
+   * and the asset picked in Assets, so the next tap does nothing unexpected.
+   * False when there was nothing to put away.
+   */
+  putAway(): boolean {
+    if (this.mode !== 'map') return false;
+    const had = this.objects.members().length > 0 || !!this.store.selection || !!this.store.libraryPick;
+    if (!had) return false;
+    this.objects.deselect();
+    this.editor.commitSelection();
+    this.store.libraryPick = null;
+    this.palette.draw();
+    this.refreshChrome();
+    this.renderer.requestDraw();
+    return true;
+  }
+
   deleteSelected(): boolean {
     if (this.mode !== 'map') return false;
     if (this.objects.members().length > 0) this.objects.remove();
@@ -394,6 +412,7 @@ export class Shell {
 
       const adding = this.store.addingToSelection;
       this.optionsBar.append(
+        this.selectionChip('check', 'Done: deselect and put the picked asset away', () => this.putAway(), 'primary-chip', 'Done'),
         ...(picked > 1 ? [el('span', { class: 'chip-label', text: `${picked} selected` })] : []),
         this.chipToggle('plus', adding ? 'Tap assets to add' : 'Select more', adding, () => {
           this.store.addingToSelection = !this.store.addingToSelection;
@@ -489,6 +508,15 @@ export class Shell {
       );
       this.optionsBar.append(...chips);
       return;
+    }
+
+    // An asset picked in Assets stays picked, so every tap places a copy,
+    // until Done puts it away.
+    if (store.libraryPick) {
+      chips.push(
+        this.selectionChip('check', 'Done: put the picked asset away', () => this.putAway(), 'primary-chip', 'Done'),
+        el('div', { class: 'divider vertical' }),
+      );
     }
 
     if (store.tool === 'eraser') {

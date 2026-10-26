@@ -59,7 +59,7 @@ import {
   readFileAsDataUrl,
 } from './ui/dialogs';
 import { deserializeCharacters, deserializeProject, isProjectFile, serializeProject, type SerializedProject } from './io/project';
-import { createAutosave, loadProject } from './io/storage';
+import { createAutosave, keepStorage, loadProject } from './io/storage';
 import { fitToView, screenToCell, screenToWorld } from './render/camera';
 import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
@@ -263,6 +263,8 @@ export class App {
           ? { x: this.store.characterPreview.tx, y: this.store.characterPreview.ty }
           : null,
       ),
+      1200,
+      () => this.warnNotSaving(),
     );
 
     // Held tiles belong to the select tool; picking up any other tool sets them down.
@@ -307,6 +309,19 @@ export class App {
       if (document.visibilityState === 'hidden') void this.autosave.flush();
     });
     window.addEventListener('pagehide', () => void this.autosave.flush());
+    // A reload or a closed desktop tab is caught here first.
+    window.addEventListener('beforeunload', () => void this.autosave.flush());
+    void keepStorage();
+  }
+
+  private lastSaveWarning = 0;
+
+  /** Saving failed, usually because the browser blocks storage. Said at most once a minute. */
+  private warnNotSaving(): void {
+    const now = Date.now();
+    if (now - this.lastSaveWarning < 60_000) return;
+    this.lastSaveWarning = now;
+    this.store.toast('Not saving: this browser is blocking storage. Turn off blocking for this site, or your map is lost on refresh.');
   }
 
   private observeSize(): void {
@@ -975,18 +990,27 @@ export class App {
     if (!rect) return;
     this.store.libraryPick = { tilesetId: sheet.id, index: assetIndex };
 
+    // Leaving Select, the eraser or Pick tile for the brush is said out loud,
+    // so the Pencil starting to paint is never a surprise.
+    const switched = (tool: string) => (tool === 'brush' ? '' : 'Switched to the Brush. ');
     const tile = tileIndexOf(sheet, rect);
     if (tile !== -1 && assetIsGround(sheet, assetIndex)) {
-      this.store.setTool('brush');
+      const was = this.store.tool;
+      // Rectangle, Fill and Line paint ground too, so they are kept.
+      const paints = was === 'brush' || was === 'rect' || was === 'fill' || was === 'line';
+      if (!paints) this.store.setTool('brush');
       this.store.setStamp(singleStamp(sheetIndex, tile), null);
       this.shell.palette.draw();
-      this.store.toast('Painting ground. Draw with the Pencil, or use Rectangle to fill an area.');
+      this.store.toast(`${paints ? '' : switched(was)}Painting ground. Draw with the Pencil, or use Rectangle to fill an area.`);
       return;
     }
 
+    const was = this.store.tool;
     this.store.setTool('brush');
+    // The bar shows Done while an asset is picked, even if the tool stayed the same.
+    this.store.emit('ui');
     this.shell.palette.draw();
-    this.store.toast('Tap the map to place it. Each tap adds another.');
+    this.store.toast(`${switched(was)}Tap the map to place it. Each tap adds another. Done puts it away.`);
   }
 
   private dragStart(tilesetId: string, rect: AssetRect): void {
