@@ -76,15 +76,21 @@ export function scaleFromCorner(
 }
 
 /**
- * Pulls a box back inside the map. A box bigger than the map is centred,
- * because it cannot sit fully inside.
+ * Lets a box hang off the edge of the map, keeping at least one square of it
+ * on the map so it can still be reached. The limits fall on grid lines, so a
+ * box whose corner is on the grid stays there and the part left on the map
+ * still lines up with the squares.
  */
-export function clampInsideMap(obj: MapObject, mapW: number, mapH: number): void {
+export function keepTouchingMap(obj: MapObject, mapW: number, mapH: number, tile: number): void {
   const { w, h } = objectSize(obj);
-  const left = w >= mapW ? (mapW - w) / 2 : Math.max(0, Math.min(mapW - w, obj.x - w / 2));
-  const top = h >= mapH ? (mapH - h) / 2 : Math.max(0, Math.min(mapH - h, obj.y - h / 2));
-  obj.x = left + w / 2;
-  obj.y = top + h / 2;
+  const axis = (start: number, size: number, map: number) => {
+    const keep = Math.min(tile, size, map);
+    const min = Math.ceil((keep - size) / tile) * tile;
+    const max = Math.floor((map - keep) / tile) * tile;
+    return Math.max(min, Math.min(max, start));
+  };
+  obj.x = axis(obj.x - w / 2, w, mapW) + w / 2;
+  obj.y = axis(obj.y - h / 2, h, mapH) + h / 2;
 }
 
 /** Centre of a box whose top-left corner sits on a grid line. */
@@ -577,7 +583,8 @@ export class ObjectTools {
   }
 
   private keepOnMap(obj: MapObject): void {
-    clampInsideMap(obj, this.doc.width * this.doc.tileSize, this.doc.height * this.doc.tileSize);
+    const tile = this.doc.tileSize;
+    keepTouchingMap(obj, this.doc.width * tile, this.doc.height * tile, tile);
   }
 
   /** Every unlocked asset in the selection, or just the selected one. */

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDoc, createObjectLayer, objectSize, type MapObject, type ObjectLayer } from '../core/doc';
 import { Store } from '../core/store';
 import { fakeObject, fakeRenderer, fakeTileset } from '../test-support/fakes';
-import { MAX_SCALE, MIN_SCALE, ObjectTools, clampInsideMap, onWholePixels, scaleFromCorner } from './objects';
+import { MAX_SCALE, MIN_SCALE, ObjectTools, keepTouchingMap, onWholePixels, scaleFromCorner } from './objects';
 
 let store: Store;
 let tools: ObjectTools;
@@ -111,27 +111,42 @@ describe('resizing', () => {
     expect(Number.isInteger(obj.y - h / 2)).toBe(true);
   });
 
-  it('stops a drag at the map edge', () => {
-    const [obj] = withObjects(fakeObject());
+  it('hangs off the edge, keeping one square on the map', () => {
+    // 16 x 32 on a 160 px map of 16 px squares.
+    const obj = fakeObject();
     const { w, h } = objectSize(obj);
     obj.x = 1000;
     obj.y = 1000;
-    clampInsideMap(obj, 160, 160);
-    expect(obj.x + w / 2).toBe(160);
-    expect(obj.y + h / 2).toBe(160);
-    obj.x = 0;
-    obj.y = 0;
-    clampInsideMap(obj, 160, 160);
-    expect(obj.x - w / 2).toBe(0);
-    expect(obj.y - h / 2).toBe(0);
+    keepTouchingMap(obj, 160, 160, 16);
+    expect(obj.x - w / 2).toBe(144);
+    expect(obj.y - h / 2).toBe(144);
+    obj.x = -1000;
+    obj.y = -1000;
+    keepTouchingMap(obj, 160, 160, 16);
+    expect(obj.x + w / 2).toBe(16);
+    expect(obj.y + h / 2).toBe(16);
   });
 
-  it('cannot drag an object off the map', () => {
-    const [obj] = withObjects(fakeObject());
-    tools.moveSelected(obj, 5000, -5000);
+  it('can be dragged partly off the map, and the part left on it stays on the grid', () => {
+    // Two squares wide, so one can hang off while the other stays on.
+    const [obj] = withObjects(fakeObject({ rect: { x: 0, y: 0, w: 32, h: 32 } }));
     const { w, h } = objectSize(obj);
-    expect(obj.x + w / 2).toBeLessThanOrEqual(160);
-    expect(obj.y - h / 2).toBeGreaterThanOrEqual(0);
+    tools.moveSelected(obj, -4, 30);
+    // Half of it off the left edge, its corner on a grid line.
+    expect(obj.x - w / 2).toBe(-16);
+    expect(Math.abs((obj.y - h / 2) % 16)).toBe(0);
+    tools.moveSelected(obj, 5000, -5000);
+    expect(obj.x - w / 2).toBe(144);
+    expect(obj.y + h / 2).toBe(16);
+  });
+
+  it('keeps one square of a big asset on the map, still on the grid', () => {
+    const obj = fakeObject({ rect: { x: 0, y: 0, w: 64, h: 48 } });
+    obj.x = -500;
+    obj.y = 40;
+    keepTouchingMap(obj, 160, 160, 16);
+    expect(obj.x - 32).toBe(-48);
+    expect(obj.x + 32).toBe(16);
   });
 
   it('steps one square bigger and smaller', () => {
@@ -142,13 +157,14 @@ describe('resizing', () => {
     expect(objectSize(obj).h).toBe(32);
   });
 
-  it('centres a box that is bigger than the map', () => {
-    const [obj] = withObjects(fakeObject({ scale: 20 }));
-    clampInsideMap(obj, 160, 160);
+  it('lets a box bigger than the map sit anywhere that still covers a square', () => {
+    const obj = fakeObject({ scale: 20, x: 0, y: 0 });
     const { w, h } = objectSize(obj);
-    expect(obj.x).toBeCloseTo(160 / 2);
-    expect(obj.y).toBeCloseTo((160 - h) / 2 + h / 2);
+    keepTouchingMap(obj, 160, 160, 16);
     expect(w).toBeGreaterThan(160);
+    expect(obj.x + w / 2).toBeGreaterThanOrEqual(16);
+    expect(obj.y + h / 2).toBeGreaterThanOrEqual(16);
+    expect(Math.abs((obj.x - w / 2) % 16)).toBe(0);
   });
 
   it('still asks for the larger size after the centre jumps to the grid', () => {
