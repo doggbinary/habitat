@@ -885,6 +885,100 @@ export function objectCells(doc: Doc, obj: MapObject): number[] {
   return cells;
 }
 
+/** Whether the sheet pixel at (x, y) is part of the artwork rather than its transparent background. */
+export type AlphaAt = (x: number, y: number) => boolean;
+
+/** A square only blocks when the artwork fills at least this much of it. */
+export const BLOCK_COVERAGE = 1 / 3;
+
+/**
+ * Map squares an object's visible pixels fill, as indices into a layer: the
+ * walls of a house rather than the empty corners of its picture. Each pixel
+ * of the art is placed exactly as `drawObject` draws it, rotated and flipped,
+ * and a square blocks when the pixels in it add up to a third of its area.
+ */
+export function opaqueCells(doc: Doc, obj: MapObject, alphaAt: AlphaAt): number[] {
+  const size = doc.tileSize;
+  const s = obj.scale;
+  const { rect } = obj;
+  const w = rect.w * s;
+  const h = rect.h * s;
+  const turn = ((obj.rotation % 4) + 4) % 4;
+  const fx = obj.flipX ? -1 : 1;
+  const fy = obj.flipY ? -1 : 1;
+  const covered = new Map<number, number>();
+  const eps = 1e-6;
+
+  for (let v = 0; v < rect.h; v++) {
+    for (let u = 0; u < rect.w; u++) {
+      if (!alphaAt(rect.x + u, rect.y + v)) continue;
+      // The pixel's centre in the object's own frame, mirrored, then turned
+      // clockwise by quarter turns as the canvas does.
+      const lx = fx * (-w / 2 + (u + 0.5) * s);
+      const ly = fy * (-h / 2 + (v + 0.5) * s);
+      let px = lx;
+      let py = ly;
+      if (turn === 1) [px, py] = [-ly, lx];
+      else if (turn === 2) [px, py] = [-lx, -ly];
+      else if (turn === 3) [px, py] = [ly, -lx];
+      const x0 = obj.x + px - s / 2;
+      const y0 = obj.y + py - s / 2;
+      const x1 = x0 + s;
+      const y1 = y0 + s;
+      const cx0 = Math.max(0, Math.floor(x0 / size + eps));
+      const cy0 = Math.max(0, Math.floor(y0 / size + eps));
+      const cx1 = Math.min(doc.width - 1, Math.floor(x1 / size - eps));
+      const cy1 = Math.min(doc.height - 1, Math.floor(y1 / size - eps));
+      for (let cy = cy0; cy <= cy1; cy++) {
+        const oy = Math.min(y1, (cy + 1) * size) - Math.max(y0, cy * size);
+        if (oy <= 0) continue;
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const ox = Math.min(x1, (cx + 1) * size) - Math.max(x0, cx * size);
+          if (ox <= 0) continue;
+          const index = cy * doc.width + cx;
+          covered.set(index, (covered.get(index) ?? 0) + ox * oy);
+        }
+      }
+    }
+  }
+
+  const needed = size * size * BLOCK_COVERAGE - eps;
+  return [...covered].filter(([, area]) => area >= needed).map(([index]) => index).sort((a, b) => a - b);
+}
+
+/** Alpha read from each sheet once, until its picture changes size or is replaced. */
+const alphaCache = new WeakMap<object, { w: number; h: number; alpha: Uint8Array }>();
+
+/** Which pixels of a sheet are drawn, or null when its picture is not ready or cannot be read. */
+export function sheetAlpha(doc: Doc, tilesetId: string): AlphaAt | null {
+  const sheet = doc.tilesets.find((t) => t.id === tilesetId);
+  const image = sheet?.image;
+  if (!image || typeof document === 'undefined') return null;
+  const w = image instanceof HTMLImageElement ? image.naturalWidth : image.width;
+  const h = image instanceof HTMLImageElement ? image.naturalHeight : image.height;
+  if (!w || !h) return null;
+  let cached = alphaCache.get(image);
+  if (!cached || cached.w !== w || cached.h !== h) {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(image, 0, 0);
+      const pixels = ctx.getImageData(0, 0, w, h).data;
+      const alpha = new Uint8Array(w * h);
+      for (let i = 0; i < alpha.length; i++) alpha[i] = pixels[i * 4 + 3];
+      cached = { w, h, alpha };
+      alphaCache.set(image, cached);
+    } catch {
+      return null;
+    }
+  }
+  const { alpha } = cached;
+  return (x, y) => x >= 0 && y >= 0 && x < w && y < h && alpha[y * w + x] >= 128;
+}
+
 /** Flattens every visible tile layer into one canvas, drawn once per session. */
 function composeMap(doc: Doc): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
@@ -937,17 +1031,23 @@ export function ensureCollisionLayer(doc: Doc): TileLayer {
 }
 
 /**
- * Any tile on a collision layer is solid, and so is every square under an
- * object set to Block, measured from where the object is now.
+ * Any tile on a collision layer is solid, and so is every square an object
+ * set to Block fills with its visible pixels, measured from where it is now.
+ * Art that cannot be read yet blocks its whole box rather than nothing.
  */
-export function buildCollision(doc: Doc): Uint8Array {
+export function buildCollision(
+  doc: Doc,
+  alphaFor: (doc: Doc, tilesetId: string) => AlphaAt | null = sheetAlpha,
+): Uint8Array {
   const solid = new Uint8Array(doc.width * doc.height);
   for (const layer of doc.layers) {
     if (layer.kind === 'objects') {
       if (!layer.visible) continue;
       for (const obj of layer.objects) {
         if (!obj.blocks) continue;
-        for (const index of objectCells(doc, obj)) solid[index] = 1;
+        const alpha = alphaFor(doc, obj.tilesetId);
+        const cells = alpha ? opaqueCells(doc, obj, alpha) : objectCells(doc, obj);
+        for (const index of cells) solid[index] = 1;
       }
       continue;
     }

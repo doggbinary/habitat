@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDoc, createLayer, type TileLayer } from '../core/doc';
 import { EMPTY, pack } from '../core/tiles';
 import { fakeObject } from '../test-support/fakes';
-import { buildCollision, doorAt, ensureCollisionLayer, objectCells } from './play-mode';
+import { buildCollision, doorAt, ensureCollisionLayer, objectCells, opaqueCells, type AlphaAt } from './play-mode';
 
 describe('doors', () => {
   // A 64 x 48 house whose box runs from (32, 32) to (96, 80), on 16 px squares.
@@ -69,6 +69,43 @@ describe('blocking under an object', () => {
 
     delete obj.blocks;
     expect(blockedAt()).toEqual([]);
+  });
+});
+
+describe('blocking only what is drawn', () => {
+  // A 64 x 48 picture: a 16 px roof peak in the middle of the top row and a
+  // 40 px wide body below it, leaving the corners transparent.
+  const houseAlpha: AlphaAt = (u, v) => (v < 16 ? u >= 24 && u < 40 : u >= 12 && u < 52);
+
+  it('leaves the empty corners of a house picture walkable', () => {
+    const doc = createDoc(20, 20, 16);
+    // Box from (32, 32) to (96, 80): squares 2 to 5 across, 2 to 4 down.
+    const house = fakeObject({ rect: { x: 0, y: 0, w: 64, h: 48 }, x: 64, y: 56, blocks: true });
+    expect(objectCells(doc, house)).toHaveLength(12);
+    // The roof fills half of squares 3 and 4 on top; the body's 4 px edges
+    // fill a quarter of the outer squares, too little to stop anyone.
+    expect(opaqueCells(doc, house, houseAlpha)).toEqual([43, 44, 63, 64, 83, 84]);
+    doc.layers.push({ id: 'o', kind: 'objects', name: 'Objects', visible: true, locked: false, opacity: 1, objects: [house] });
+    const solid = buildCollision(doc, () => houseAlpha);
+    expect([...solid].flatMap((v, i) => (v ? [i] : []))).toEqual([43, 44, 63, 64, 83, 84]);
+  });
+
+  it('follows the art when it is turned and mirrored', () => {
+    const doc = createDoc(10, 10, 16);
+    // A 16 x 32 post whose top half is drawn.
+    const topHalf: AlphaAt = (_u, v) => v < 16;
+    expect(opaqueCells(doc, fakeObject({ x: 40, y: 48 }), topHalf)).toEqual([22]);
+    // A quarter turn clockwise lays it across (32, 32) to (64, 48), top pointing right.
+    const turned = fakeObject({ x: 48, y: 40, rotation: 1 });
+    expect(opaqueCells(doc, turned, topHalf)).toEqual([23]);
+    expect(opaqueCells(doc, { ...turned, flipY: true }, topHalf)).toEqual([22]);
+  });
+
+  it('counts a bigger object by the area its pixels cover', () => {
+    const doc = createDoc(10, 10, 16);
+    // At twice the size each art pixel is 2 x 2, so 8 drawn columns fill a whole square.
+    const post = fakeObject({ rect: { x: 0, y: 0, w: 16, h: 16 }, x: 48, y: 48, scale: 2 });
+    expect(opaqueCells(doc, post, (u) => u < 8)).toEqual([22, 32]);
   });
 });
 
