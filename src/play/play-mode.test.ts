@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { createDoc, createLayer, type TileLayer } from '../core/doc';
 import { EMPTY, pack } from '../core/tiles';
 import { fakeObject } from '../test-support/fakes';
-import { buildCollision, doorAt, ensureCollisionLayer, objectCells, opaqueCells, type AlphaAt } from './play-mode';
+import {
+  buildCollision,
+  doorAt,
+  ensureCollisionLayer,
+  nextZoom,
+  objectCells,
+  opaqueCells,
+  type AlphaAt,
+} from './play-mode';
 
 describe('doors', () => {
   // A 64 x 48 house whose box runs from (32, 32) to (96, 80), on 16 px squares.
@@ -106,6 +114,17 @@ describe('blocking only what is drawn', () => {
     // At twice the size each art pixel is 2 x 2, so 8 drawn columns fill a whole square.
     const post = fakeObject({ rect: { x: 0, y: 0, w: 16, h: 16 }, x: 48, y: 48, scale: 2 });
     expect(opaqueCells(doc, post, (u) => u < 8)).toEqual([22, 32]);
+  });
+});
+
+describe('zoom steps', () => {
+  it('steps in whole sizes from 1x up and in thirds below it', () => {
+    expect(nextZoom(2, 1)).toBe(3);
+    expect(nextZoom(2.4, 1)).toBe(3);
+    expect(nextZoom(2.4, -1)).toBe(2);
+    expect(nextZoom(1, -1)).toBeCloseTo(2 / 3);
+    expect(nextZoom(2 / 3, 1)).toBe(1);
+    expect(nextZoom(0.5, 1)).toBe(0.75);
   });
 });
 

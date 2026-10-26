@@ -206,8 +206,17 @@ export class PlayMode {
     this.zoom = clamp(Math.round(target) || 2, MIN_ZOOM, MAX_ZOOM);
   }
 
+  /** Far enough out to see the whole map at once, or 1x when that is further in. */
+  private minZoom(): number {
+    const mapW = this.doc.width * this.doc.tileSize;
+    const mapH = this.doc.height * this.doc.tileSize;
+    if (!this.viewW || !this.viewH || !mapW || !mapH) return MIN_ZOOM;
+    return Math.min(MIN_ZOOM, this.viewW / mapW, this.viewH / mapH);
+  }
+
+  /** Whole steps at 1x and up, where pixels stay even; smaller steps below, down to the whole map. */
   private nudgeZoom(delta: number): void {
-    this.zoom = clamp(Math.round(this.zoom) + delta, MIN_ZOOM, MAX_ZOOM);
+    this.zoom = clamp(nextZoom(this.zoom, delta), this.minZoom(), MAX_ZOOM);
   }
 
   private resize(): void {
@@ -276,6 +285,15 @@ export class PlayMode {
       (e) => {
         e.preventDefault();
         const local = this.local(e);
+        // The first finger of a new touch: anything still tracked lost its
+        // lift somewhere, and would otherwise turn every touch into a pinch
+        // that never moves.
+        if (e.isPrimary && this.pointers.size > 0) {
+          if (this.gesture === 'move' || this.gesture === 'size') this.finishGesture();
+          this.pointers.clear();
+          this.gesture = 'idle';
+          this.activeId = null;
+        }
         if (this.pointers.size === 0) {
           this.touchStart = performance.now();
           this.touchMost = 0;
@@ -327,6 +345,17 @@ export class PlayMode {
     };
     canvas.addEventListener('pointerup', release);
     canvas.addEventListener('pointercancel', release);
+    canvas.addEventListener('lostpointercapture', release);
+    // A trackpad pinch arrives as a wheel with ctrl held; a mouse wheel steps.
+    canvas.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        const factor = e.ctrlKey ? Math.exp(-e.deltaY / 100) : e.deltaY < 0 ? 1.25 : 0.8;
+        this.zoom = clamp(this.zoom * factor, this.minZoom(), MAX_ZOOM);
+      },
+      { passive: false },
+    );
   }
 
   private pressMap(id: number, sx: number, sy: number): void {
@@ -420,7 +449,7 @@ export class PlayMode {
     const [a, b] = [...this.pointers.values()];
     if (!a || !b) return;
     const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-    this.zoom = clamp(this.pinchZoom * (distance / this.pinchDistance), MIN_ZOOM, MAX_ZOOM);
+    this.zoom = clamp(this.pinchZoom * (distance / this.pinchDistance), this.minZoom(), MAX_ZOOM);
   }
 
   /** Two fingers tapped together undo, three redo, as in the map editor. */
@@ -838,11 +867,40 @@ function element(tag: string, className: string, children: HTMLElement[] = []): 
   return node;
 }
 
+/**
+ * The next zoom for a − or + press: whole steps from 1x up, where every
+ * pixel stays the same size, and steps of a third below 1x.
+ */
+export function nextZoom(zoom: number, delta: number): number {
+  if (delta > 0) return zoom < 1 - 1e-6 ? Math.min(1, zoom * 1.5) : Math.floor(zoom + 1e-6) + 1;
+  return zoom > 1 + 1e-6 ? Math.ceil(zoom - 1e-6) - 1 : zoom / 1.5;
+}
+
+/**
+ * iPad often delivers a tap as pointerup and then drops the click, so the
+ * press itself runs the action and the click is only a fallback.
+ */
 function button(className: string, label: string, onPress: () => void): HTMLButtonElement {
   const node = element('button', className) as HTMLButtonElement;
   node.type = 'button';
   node.textContent = label;
-  node.addEventListener('click', onPress);
+  let pressed = false;
+  node.addEventListener('pointerdown', (e) => e.stopPropagation());
+  node.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    pressed = true;
+    onPress();
+  });
+  node.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (pressed) {
+      pressed = false;
+      return;
+    }
+    onPress();
+  });
   return node;
 }
 
