@@ -47,6 +47,11 @@ export interface CharacterReference {
   src: string;
   opacity: number;
   visible: boolean;
+  /** Size against the picture's fitted size, 1 when absent. */
+  scale?: number;
+  /** Nudge from the fitted position, in sprite pixels. */
+  x?: number;
+  y?: number;
   /** Loaded from `src`; not saved. */
   image?: HTMLImageElement;
 }
@@ -64,17 +69,23 @@ export function referenceImage(reference: CharacterReference, onLoad: () => void
   return null;
 }
 
-/** Where a picture sits inside the sprite box: as large as fits, centred, standing on the bottom. */
+/**
+ * Where a picture sits inside the sprite box. By default it is as large as
+ * fits, centred, standing on the bottom; its own size and nudge then grow it
+ * from that bottom-centre point and move it.
+ */
 export function referencePlacement(
   imageW: number,
   imageH: number,
   boxW: number,
   boxH: number,
+  adjust: Pick<CharacterReference, 'scale' | 'x' | 'y'> = {},
 ): { x: number; y: number; w: number; h: number } {
-  const scale = Math.min(boxW / Math.max(1, imageW), boxH / Math.max(1, imageH));
+  const fit = Math.min(boxW / Math.max(1, imageW), boxH / Math.max(1, imageH));
+  const scale = fit * (adjust.scale ?? 1);
   const w = imageW * scale;
   const h = imageH * scale;
-  return { x: (boxW - w) / 2, y: boxH - h, w, h };
+  return { x: (boxW - w) / 2 + (adjust.x ?? 0), y: boxH - h + (adjust.y ?? 0), w, h };
 }
 
 /**

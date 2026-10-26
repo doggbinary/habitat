@@ -6,6 +6,7 @@ import {
   createCharacter,
   frameIndex,
   getPixel,
+  referencePlacement,
   resizeCharacter,
   type Character,
   type Frame,
@@ -50,6 +51,15 @@ describe('the starter template', () => {
   });
 });
 
+describe('the traced picture', () => {
+  it('fits by default, then grows from its bottom centre and moves by its nudge', () => {
+    // A square picture in a 32 x 64 sprite fits at 32 x 32, standing on the bottom.
+    expect(referencePlacement(100, 100, 32, 64)).toEqual({ x: 0, y: 32, w: 32, h: 32 });
+    expect(referencePlacement(100, 100, 32, 64, { scale: 2 })).toEqual({ x: -16, y: 0, w: 64, h: 64 });
+    expect(referencePlacement(100, 100, 32, 64, { scale: 0.5, x: 3, y: -2 })).toEqual({ x: 11, y: 46, w: 16, h: 16 });
+  });
+});
+
 describe('resizing a character', () => {
   it('keeps the feet on the bottom edge and the body centred', () => {
     const c = createCharacter(16, 2, 2);
@@ -74,6 +84,31 @@ describe('drawing in the studio', () => {
     s.color = '#ff0000';
     return s;
   }
+
+  it('paints and erases a square the size of the brush, each tool keeping its own size', () => {
+    const s = studio();
+    s.pencilSize = 3;
+    s.paint(10, 10);
+    expect(opaqueCount(s.currentFrame!)).toBe(9);
+    expect(getPixel(s.currentFrame!, 32, 9, 9)[3]).toBe(255);
+    expect(getPixel(s.currentFrame!, 32, 11, 11)[3]).toBe(255);
+
+    s.tool = 'eraser';
+    expect(s.brushSize).toBe(3);
+    s.brushSize = 2;
+    s.paint(10, 10);
+    // A 2 px eraser at (10, 10) clears 10..11 on both axes.
+    expect(opaqueCount(s.currentFrame!)).toBe(5);
+    s.tool = 'pencil';
+    expect(s.brushSize).toBe(3);
+  });
+
+  it('a big brush at the edge paints only what is on the canvas', () => {
+    const s = studio();
+    s.pencilSize = 4;
+    s.paint(0, 0);
+    expect(opaqueCount(s.currentFrame!)).toBe(9);
+  });
 
   it('symmetry paints the mirrored pixel too', () => {
     const s = studio();

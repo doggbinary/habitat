@@ -1,4 +1,5 @@
-import { MAX_MAP_SIZE, MIN_MAP_SIZE } from '../core/doc';
+import { MAX_MAP_SIZE, MIN_MAP_SIZE, checkGrid, rescaleGrid } from '../core/doc';
+import { lineUpObjects } from '../tools/objects';
 import type { Store } from '../core/store';
 import type { Editor } from '../tools/edit';
 import { button, clear, el } from './dom';
@@ -48,9 +49,9 @@ export class MapPanel {
     tileSize.addEventListener('change', () => {
       const next = Math.max(1, Math.min(256, Math.round(Number(tileSize.value) || doc.tileSize)));
       tileSize.value = String(next);
-      this.editor.structural('Change grid size', () => {
-        doc.tileSize = next;
-      });
+      // Objects and pictures scale with the squares, so nothing drifts off the grid.
+      this.editor.structural('Change grid size', () => rescaleGrid(doc, next));
+      this.refresh();
     });
 
     const background = el('input', { class: 'color', type: 'color', value: doc.background });
@@ -80,13 +81,17 @@ export class MapPanel {
         el('p', { class: 'hint', text: 'Tiles are kept from the top-left corner when you resize.' }),
         apply,
         field('Grid size (px)', tileSize),
-        el('p', { class: 'hint', text: '48 matches the library art exactly. Other sizes shrink or stretch it.' }),
+        el('p', {
+          class: 'hint',
+          text: 'Art drawn on this square size shows pixel for pixel; other art is shrunk or stretched. Objects and pictures scale with the grid.',
+        }),
         field('Background', background),
         this.switchRow('Dim inactive layers', this.store.settings.highlightActiveLayer, (on) => {
           this.store.settings.highlightActiveLayer = on;
           this.store.emit('doc');
         }),
       ]),
+      this.gridCheckSection(),
       section('Pencil and fingers', [
         el('div', { class: 'gesture-help' }, [
           gesture('Apple Pencil', 'Does the tool: paint, erase, box tiles, grab assets'),
@@ -106,6 +111,59 @@ export class MapPanel {
         }),
       ]),
     );
+  }
+
+  /**
+   * Why tiles or objects look uneven: art drawn on a different square size
+   * than the map is stretched, and objects off the grid sit between squares.
+   * Each problem comes with the button that fixes it.
+   */
+  private gridCheckSection(): HTMLElement {
+    const doc = this.store.doc;
+    const check = checkGrid(doc);
+    const items: HTMLElement[] = [];
+
+    if (check.mismatched.length === 0) {
+      items.push(el('p', { class: 'hint', text: `All the art on this map is drawn on ${doc.tileSize} px squares, so it shows pixel for pixel.` }));
+    } else {
+      const names = check.mismatched.slice(0, 3).map((m) => `${m.name} (${m.tileW} px)`).join(', ');
+      const more = check.mismatched.length > 3 ? ` and ${check.mismatched.length - 3} more` : '';
+      items.push(
+        el('p', {
+          class: 'hint',
+          text: `This map uses ${doc.tileSize} px squares, but ${names}${more} ${check.mismatched.length === 1 ? 'is' : 'are'} drawn on other sizes, so those tiles are stretched or shrunk and their pixels look uneven.`,
+        }),
+      );
+      if (check.suggested) {
+        const size = check.suggested;
+        items.push(
+          button('btn primary full', `Switch the map to ${size} px squares`, () => {
+            this.editor.structural('Change grid size', () => rescaleGrid(doc, size));
+            this.store.toast(`The map is on ${size} px squares now. Undo puts it back.`);
+            this.refresh();
+          }, [el('span', { text: `Switch the map to ${size} px squares` })]),
+          el('p', { class: 'hint', text: `Most of this map's art is drawn at ${size} px. Every tile stays in its square; objects scale with the grid.` }),
+        );
+      }
+    }
+
+    if (check.offGrid > 0) {
+      items.push(
+        el('p', { class: 'hint', text: `${check.offGrid} object${check.offGrid === 1 ? ' sits' : 's sit'} between grid squares.` }),
+        button('btn subtle full', 'Line objects up with the grid', () => {
+          let moved = 0;
+          this.editor.structural('Line up objects', () => {
+            moved = lineUpObjects(doc);
+          });
+          this.store.toast(`Lined up ${moved} object${moved === 1 ? '' : 's'}. Locked ones stay where they are.`);
+          this.refresh();
+        }, [el('span', { text: 'Line objects up with the grid' })]),
+      );
+    } else {
+      items.push(el('p', { class: 'hint', text: 'Every object sits on the grid.' }));
+    }
+
+    return section('Check the grid', items);
   }
 
   private numberField(value: number, min = MIN_MAP_SIZE, max = MAX_MAP_SIZE): HTMLInputElement {

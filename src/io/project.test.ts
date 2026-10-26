@@ -134,6 +134,13 @@ describe('saving and loading a project', () => {
     expect(saved.lastCharacterSize).toEqual({ tilesW: 3, tilesH: 4 });
   });
 
+  it('keeps the traced picture enlarged and moved', () => {
+    const character = createCharacter(16, 2, 2, 1, 'Tracer');
+    character.reference = { src: 'data:image/png;base64,AAAA', opacity: 0.4, visible: true, scale: 2.5, x: -3, y: 4.5 };
+    const [back] = deserializeCharacters(throughJson(serializeProject(createDoc(), [character])));
+    expect(back.reference).toEqual(character.reference);
+  });
+
   it('keeps pixels that live in part of a larger buffer', () => {
     const character = createCharacter(16, 1, 1, 1, 'Slice');
     const expected = character.w * character.h * 4;

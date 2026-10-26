@@ -32,10 +32,12 @@ export class CharacterView {
 
   private hover: { x: number; y: number } | null = null;
   private readonly pointers = new Map<number, { type: string }>();
-  private mode: 'idle' | 'draw' | 'blocked' = 'idle';
+  private mode: 'idle' | 'draw' | 'blocked' | 'move' = 'idle';
   private activeId: number | null = null;
   private penDown = false;
   private last: { x: number; y: number } | null = null;
+  /** Where a drag of the traced picture began: the screen point and the picture's nudge then. */
+  private moveFrom: { sx: number; sy: number; x: number; y: number } | null = null;
 
   /** Scratch canvas a frame is written into before being scaled up. */
   private readonly scratch = document.createElement('canvas');
@@ -136,7 +138,7 @@ export class CharacterView {
     const reference = character.reference;
     const picture = reference?.visible ? referenceImage(reference, () => this.requestDraw()) : null;
     if (reference && picture) {
-      const at = referencePlacement(picture.naturalWidth, picture.naturalHeight, character.w, character.h);
+      const at = referencePlacement(picture.naturalWidth, picture.naturalHeight, character.w, character.h, reference);
       ctx.globalAlpha = reference.opacity;
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(picture, x + at.x * this.zoom, y + at.y * this.zoom, at.w * this.zoom, at.h * this.zoom);
@@ -234,14 +236,18 @@ export class CharacterView {
     if (!hover) return;
     if (hover.x < 0 || hover.y < 0 || hover.x >= character.w || hover.y >= character.h) return;
     const { ctx } = this;
+    // The outline is the brush's whole square, so a big eraser shows what it will clear.
+    const size = this.studio.brushSize;
+    const from = Math.floor((size - 1) / 2);
+    const side = size * this.zoom;
     ctx.strokeStyle = CURSOR;
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(x + hover.x * this.zoom, y + hover.y * this.zoom, this.zoom, this.zoom);
+    ctx.strokeRect(x + (hover.x - from) * this.zoom, y + (hover.y - from) * this.zoom, side, side);
     if (this.studio.mirrorX) {
       const mx = character.w - 1 - hover.x;
       if (mx !== hover.x) {
         ctx.globalAlpha = 0.5;
-        ctx.strokeRect(x + mx * this.zoom, y + hover.y * this.zoom, this.zoom, this.zoom);
+        ctx.strokeRect(x + (mx - (size - 1 - from)) * this.zoom, y + (hover.y - from) * this.zoom, side, side);
         ctx.globalAlpha = 1;
       }
     }
@@ -316,6 +322,10 @@ export class CharacterView {
           this.continueDraw(e, x, y);
           return;
         }
+        if (this.mode === 'move' && e.pointerId === this.activeId) {
+          this.dragReference(x, y);
+          return;
+        }
         this.setHover(x, y);
       },
       { passive: false },
@@ -334,6 +344,9 @@ export class CharacterView {
       }
       if (e.pointerId === this.activeId) {
         if (this.mode === 'draw') this.studio.endStroke();
+        // The picture's new place is saved with the character.
+        if (this.mode === 'move') this.studio.emit();
+        this.moveFrom = null;
         this.mode = 'idle';
         this.activeId = null;
         this.last = null;
@@ -356,6 +369,13 @@ export class CharacterView {
   }
 
   private startDraw(id: number, x: number, y: number): void {
+    const reference = this.studio.character?.reference;
+    if (this.studio.movingReference && reference) {
+      this.mode = 'move';
+      this.activeId = id;
+      this.moveFrom = { sx: x, sy: y, x: reference.x ?? 0, y: reference.y ?? 0 };
+      return;
+    }
     this.mode = 'draw';
     this.activeId = id;
     const cell = this.toPixel(x, y);
@@ -363,6 +383,16 @@ export class CharacterView {
     this.studio.paint(cell.x, cell.y);
     this.last = cell;
     this.setHover(x, y);
+    this.requestDraw();
+  }
+
+  /** Follows the finger or Pencil with the traced picture, in sprite pixels. */
+  private dragReference(x: number, y: number): void {
+    const reference = this.studio.character?.reference;
+    const from = this.moveFrom;
+    if (!reference || !from) return;
+    reference.x = from.x + (x - from.sx) / this.zoom;
+    reference.y = from.y + (y - from.sy) / this.zoom;
     this.requestDraw();
   }
 

@@ -40,6 +40,11 @@ export class Studio {
   frame = 0;
 
   tool: PixelTool = 'pencil';
+  /** Square brush sizes in pixels. The eraser starts bigger: clearing is rarely one pixel at a time. */
+  pencilSize = 1;
+  eraserSize = 3;
+  /** While true, a drag on the canvas moves the traced picture instead of drawing. */
+  movingReference = false;
   color = '#2b2139';
   /** Mirror edits across the vertical centre line. */
   mirrorX = false;
@@ -183,9 +188,28 @@ export class Studio {
       return true;
     }
 
-    const color: RGBA = this.tool === 'eraser' ? [0, 0, 0, 0] : hexToRgba(this.color);
-    this.paintPixel(frame, w, h, x, y, color);
+    const erasing = this.tool === 'eraser';
+    const color: RGBA = erasing ? [0, 0, 0, 0] : hexToRgba(this.color);
+    // A square brush centred on the touched pixel, leaning up and left for even sizes.
+    const size = this.brushSize;
+    const from = Math.floor((size - 1) / 2);
+    for (let dy = 0; dy < size; dy++) {
+      for (let dx = 0; dx < size; dx++) this.paintPixel(frame, w, h, x - from + dx, y - from + dy, color);
+    }
     return true;
+  }
+
+  /** The square size the active tool paints, 1 for tools without one. */
+  get brushSize(): number {
+    if (this.tool === 'eraser') return this.eraserSize;
+    if (this.tool === 'pencil') return this.pencilSize;
+    return 1;
+  }
+
+  set brushSize(size: number) {
+    const next = Math.max(1, Math.min(16, Math.round(size)));
+    if (this.tool === 'eraser') this.eraserSize = next;
+    else if (this.tool === 'pencil') this.pencilSize = next;
   }
 
   /** Joins two samples so a fast stroke leaves no gaps. */

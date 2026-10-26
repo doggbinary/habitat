@@ -294,14 +294,26 @@ export function upgradeTileSize(doc: Doc): boolean {
   // A map whose own art is drawn on its square size, such as the starter
   // pack on 16 px, is already pixel for pixel.
   if (doc.tilesets.some((sheet) => !sheet.generated && sheet.tileW === doc.tileSize)) return false;
-  const k = ART_TILE / doc.tileSize;
-  doc.tileSize = ART_TILE;
+  rescaleGrid(doc, ART_TILE);
+  return true;
+}
+
+/**
+ * Puts a map on a new square size. Every painted cell stays in its square,
+ * and placed objects, door destinations and pictures are scaled with the
+ * squares, so the map looks the same, only drawn at a different size.
+ */
+export function rescaleGrid(doc: Doc, next: number): void {
+  if (next <= 0 || next === doc.tileSize) return;
+  const k = next / doc.tileSize;
+  doc.tileSize = next;
   for (const layer of doc.layers) {
     if (layer.kind === 'objects') {
       for (const obj of layer.objects) {
         obj.x *= k;
         obj.y *= k;
         obj.scale *= k;
+        if (obj.door) obj.door = { x: obj.door.x * k, y: obj.door.y * k };
       }
     } else if (layer.kind === 'image') {
       layer.x *= k;
@@ -310,7 +322,54 @@ export function upgradeTileSize(doc: Doc): boolean {
       layer.h *= k;
     }
   }
-  return true;
+}
+
+export interface GridCheck {
+  /** Sheets the map uses whose art is drawn on a different square size, so it is stretched or shrunk. */
+  mismatched: { name: string; tileW: number; uses: number }[];
+  /** The square size most of the map's art is drawn on, when that is not the map's own. */
+  suggested: number | null;
+  /** Placed objects whose corner is not on a grid line. */
+  offGrid: number;
+}
+
+/** What makes a map's tiles and objects look uneven against its grid. */
+export function checkGrid(doc: Doc): GridCheck {
+  const uses = new Map<number, number>();
+  for (const layer of doc.layers) {
+    if (layer.kind !== 'tiles') continue;
+    for (const tile of layer.data) {
+      if (tile === -1) continue;
+      const sheet = (tile >> 16) & 0xff;
+      uses.set(sheet, (uses.get(sheet) ?? 0) + 1);
+    }
+  }
+  let offGrid = 0;
+  const tile = doc.tileSize;
+  for (const layer of doc.layers) {
+    if (layer.kind !== 'objects') continue;
+    for (const obj of layer.objects) {
+      const index = doc.tilesets.findIndex((t) => t.id === obj.tilesetId);
+      if (index >= 0) uses.set(index, (uses.get(index) ?? 0) + 1);
+      const { w, h } = objectSize(obj);
+      const left = obj.x - w / 2;
+      const top = obj.y - h / 2;
+      const on = (v: number) => Math.abs(v / tile - Math.round(v / tile)) < 1e-6;
+      if (!on(left) || !on(top)) offGrid += 1;
+    }
+  }
+
+  const bySize = new Map<number, number>();
+  const mismatched: GridCheck['mismatched'] = [];
+  for (const [index, count] of uses) {
+    const sheet = doc.tilesets[index];
+    if (!sheet || sheet.generated || sheet.tileW <= 0) continue;
+    bySize.set(sheet.tileW, (bySize.get(sheet.tileW) ?? 0) + count);
+    if (sheet.tileW !== tile) mismatched.push({ name: sheet.name, tileW: sheet.tileW, uses: count });
+  }
+  mismatched.sort((a, b) => b.uses - a.uses);
+  const top = [...bySize].sort((a, b) => b[1] - a[1])[0];
+  return { mismatched, suggested: top && top[0] !== tile ? top[0] : null, offGrid };
 }
 
 /** Squares across a map made from a picture. Its height follows the picture. */

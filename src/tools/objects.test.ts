@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDoc, createObjectLayer, objectSize, type MapObject, type ObjectLayer } from '../core/doc';
 import { Store } from '../core/store';
 import { fakeObject, fakeRenderer, fakeTileset } from '../test-support/fakes';
-import { MAX_SCALE, MIN_SCALE, ObjectTools, keepTouchingMap, onWholePixels, scaleFromCorner } from './objects';
+import { MAX_SCALE, MIN_SCALE, ObjectTools, keepTouchingMap, lineUpObjects, onWholePixels, scaleFromCorner } from './objects';
 
 let store: Store;
 let tools: ObjectTools;
@@ -109,6 +109,20 @@ describe('resizing', () => {
     const { w, h } = objectSize(obj);
     expect(Number.isInteger(obj.x - w / 2)).toBe(true);
     expect(Number.isInteger(obj.y - h / 2)).toBe(true);
+  });
+
+  it('lines every unlocked object up with the grid in whole squares', () => {
+    const [loose, fixed] = withObjects(
+      fakeObject({ id: 'loose', x: 43, y: 51, scale: 1.3 }),
+      fakeObject({ id: 'fixed', x: 43, y: 51, locked: true }),
+    );
+    expect(lineUpObjects(store.doc)).toBe(1);
+    const { w, h } = objectSize(loose);
+    expect(h % 16).toBe(0);
+    expect((loose.x - w / 2) % 16).toBe(0);
+    expect((loose.y - h / 2) % 16).toBe(0);
+    expect(fixed.x).toBe(43);
+    expect(lineUpObjects(store.doc)).toBe(0);
   });
 
   it('hangs off the edge, keeping one square on the map', () => {

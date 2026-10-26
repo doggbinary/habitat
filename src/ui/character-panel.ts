@@ -144,6 +144,8 @@ export class CharacterPanel {
       const active = this.studio.tool === tool.id;
       const node = button(`chip${active ? ' active' : ''}`, tool.label, () => {
         this.studio.tool = tool.id;
+        // Choosing a tool means drawing, not moving the traced picture.
+        this.studio.movingReference = false;
         this.refresh();
       }, [icon(tool.icon, 17), el('span', { class: 'chip-text', text: tool.label })]);
       node.setAttribute('aria-pressed', String(active));
@@ -170,7 +172,34 @@ export class CharacterPanel {
 
     return section('Tools', [
       el('div', { class: 'chip-row' }, tools),
+      ...(this.studio.tool === 'pencil' || this.studio.tool === 'eraser' ? [this.brushSizeRow()] : []),
       el('div', { class: 'chip-row' }, toggles),
+    ]);
+  }
+
+  /** Square brush sizes for the pencil and the eraser, each remembered on its own. */
+  private brushSizeRow(): HTMLElement {
+    const current = this.studio.brushSize;
+    const label = this.studio.tool === 'eraser' ? 'Eraser size' : 'Pencil size';
+    const step = (by: number) => {
+      this.studio.brushSize = current + by;
+      this.view.requestDraw();
+      this.refresh();
+    };
+    const smaller = button('icon-btn', `Smaller ${label.toLowerCase()}`, () => step(-1), [icon('minus', 18)]);
+    const bigger = button('icon-btn', `Bigger ${label.toLowerCase()}`, () => step(1), [icon('plus', 18)]);
+    smaller.disabled = current <= 1;
+    bigger.disabled = current >= 16;
+    const presets = [1, 2, 4, 8].map((size) =>
+      button(`chip${size === current ? ' active' : ''}`, `${size} px`, () => {
+        this.studio.brushSize = size;
+        this.view.requestDraw();
+        this.refresh();
+      }, [el('span', { class: 'chip-text', text: `${size}` })]),
+    );
+    return el('div', { class: 'brush-size-row' }, [
+      el('span', { class: 'field-label', text: label }),
+      el('div', { class: 'chip-row' }, [smaller, el('span', { class: 'slider-value', text: `${current} px` }), bigger, ...presets]),
     ]);
   }
 
@@ -274,7 +303,7 @@ export class CharacterPanel {
         const picture = reference?.visible ? referenceImage(reference, () => this.refreshOnce()) : null;
         if (reference && picture) {
           // Behind the pixels, so the thumbnail matches the canvas.
-          const at = referencePlacement(picture.naturalWidth, picture.naturalHeight, character.w, character.h);
+          const at = referencePlacement(picture.naturalWidth, picture.naturalHeight, character.w, character.h, reference);
           ctx.globalCompositeOperation = 'destination-over';
           ctx.globalAlpha = reference.opacity;
           ctx.drawImage(picture, at.x, at.y, at.w, at.h);
@@ -398,11 +427,42 @@ export class CharacterPanel {
     });
     opacity.addEventListener('change', () => this.studio.emit());
 
+    // Size against the fitted picture: smaller to trace a detail, bigger to fill the canvas.
+    const percent = Math.round((reference.scale ?? 1) * 100);
+    const size = el('input', { class: 'slider', type: 'range', min: 20, max: 400, step: 5, value: percent });
+    const sizeReadout = el('span', { class: 'slider-value', text: `${percent}%` });
+    size.addEventListener('input', () => {
+      reference.scale = Number(size.value) / 100;
+      sizeReadout.textContent = `${size.value}%`;
+      this.view.requestDraw();
+    });
+    size.addEventListener('change', () => this.studio.emit());
+
+    const moving = this.studio.movingReference;
     return section('Trace a picture', [
       el('label', { class: 'field' }, [
         el('span', { class: 'field-label', text: 'Fade' }),
         el('div', { class: 'slider-row' }, [opacity, readout]),
       ]),
+      el('label', { class: 'field' }, [
+        el('span', { class: 'field-label', text: 'Size' }),
+        el('div', { class: 'slider-row' }, [size, sizeReadout]),
+      ]),
+      el('div', { class: 'chip-row' }, [
+        this.toggleChip('move', moving ? 'Moving picture' : 'Move picture', moving, 'Drag on the canvas to move the picture instead of drawing', () => {
+          this.studio.movingReference = !this.studio.movingReference;
+          this.refresh();
+        }),
+        button('chip', 'Put the picture back to its fitted size and place', () => {
+          delete reference.scale;
+          delete reference.x;
+          delete reference.y;
+          this.studio.emit();
+          this.view.requestDraw();
+          this.refresh();
+        }, [el('span', { class: 'chip-text', text: 'Reset size' })]),
+      ]),
+      ...(moving ? [el('p', { class: 'hint', text: 'Drag on the canvas to move the picture. Tap Moving picture again to draw.' })] : []),
       el('div', { class: 'chip-row' }, [
         this.toggleChip(reference.visible ? 'eye' : 'eyeOff', reference.visible ? 'Showing' : 'Hidden', reference.visible, 'Show or hide the picture', () => {
           reference.visible = !reference.visible;
@@ -416,6 +476,7 @@ export class CharacterPanel {
         ]),
         button('chip danger', 'Remove the picture', () => {
           delete character.reference;
+          this.studio.movingReference = false;
           this.studio.emit(true);
           this.view.requestDraw();
           this.refresh();

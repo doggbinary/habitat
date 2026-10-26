@@ -133,7 +133,7 @@ interface SerializedCharacter {
   /** Base64 RGBA buffers, direction-major like `Character.frames`. */
   frames: string[];
   /** Picture traced over, absent when there is none. */
-  reference?: { src: string; opacity: number; visible: boolean };
+  reference?: { src: string; opacity: number; visible: boolean; scale?: number; x?: number; y?: number };
 }
 
 export interface SerializedProject {
@@ -203,7 +203,16 @@ export function serializeProject(
       palette: [...c.palette],
       frames: c.frames.map((f) => toBase64(f.data.buffer.slice(f.data.byteOffset, f.data.byteOffset + f.data.byteLength))),
       ...(c.reference
-        ? { reference: { src: c.reference.src, opacity: c.reference.opacity, visible: c.reference.visible } }
+        ? {
+            reference: {
+              src: c.reference.src,
+              opacity: c.reference.opacity,
+              visible: c.reference.visible,
+              ...(c.reference.scale !== undefined ? { scale: c.reference.scale } : {}),
+              ...(c.reference.x !== undefined ? { x: c.reference.x } : {}),
+              ...(c.reference.y !== undefined ? { y: c.reference.y } : {}),
+            },
+          }
         : {}),
     })),
     format: 'pixel-fusion-project',
@@ -303,6 +312,9 @@ export function deserializeCharacters(data: SerializedProject): Character[] {
               src: c.reference.src,
               opacity: finite(c.reference.opacity, 0.5),
               visible: c.reference.visible !== false,
+              ...(Number.isFinite(c.reference.scale) && c.reference.scale! > 0 ? { scale: c.reference.scale } : {}),
+              ...(Number.isFinite(c.reference.x) ? { x: c.reference.x } : {}),
+              ...(Number.isFinite(c.reference.y) ? { y: c.reference.y } : {}),
             },
           }
         : {}),

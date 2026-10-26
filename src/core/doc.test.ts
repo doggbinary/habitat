@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   ART_TILE,
+  checkGrid,
   createDoc,
   createObjectLayer,
   exactPlacement,
   fitPlacement,
   pictureMapSize,
+  rescaleGrid,
   upgradeTileSize,
   type ImageLayer,
+  type TileLayer,
 } from './doc';
+import { pack } from './tiles';
 import { fakeObject, fakeTileset } from '../test-support/fakes';
 
 describe('maps made from a picture', () => {
@@ -59,6 +63,39 @@ describe('upgrading a 16 px map', () => {
   it('leaves maps that already match, or have no library art', () => {
     expect(upgradeTileSize(createDoc(4, 4, 48))).toBe(false);
     expect(upgradeTileSize(createDoc(4, 4, 16))).toBe(false);
+  });
+
+  it('finds 32 px art stretched on a 48 px map and offers 32', () => {
+    const doc = createDoc(4, 4, 48);
+    doc.tilesets = [fakeTileset('fantasy', 32), fakeTileset('modern', 48)];
+    doc.tilesets[0].name = 'Pixel Fantasy Town 1';
+    const tiles = doc.layers[0] as TileLayer;
+    tiles.data.fill(pack(0, 1));
+    tiles.data[0] = pack(1, 1);
+    const objects = createObjectLayer();
+    objects.objects = [fakeObject({ tilesetId: 'fantasy', x: 40, y: 64 })];
+    doc.layers.push(objects);
+
+    const check = checkGrid(doc);
+    expect(check.mismatched.map((m) => m.name)).toEqual(['Pixel Fantasy Town 1']);
+    expect(check.suggested).toBe(32);
+    // 16 x 32 centred on (40, 64): corner (32, 48), not on a 48 px line.
+    expect(check.offGrid).toBe(1);
+  });
+
+  it('switches the grid and scales objects, doors and pictures with it, keeping every cell', () => {
+    const doc = createDoc(4, 4, 48);
+    const tiles = doc.layers[0] as TileLayer;
+    tiles.data[5] = pack(0, 3);
+    const objects = createObjectLayer();
+    objects.objects = [fakeObject({ x: 72, y: 96, scale: 1.5, door: { x: 120, y: 24 } })];
+    doc.layers.push(objects);
+
+    rescaleGrid(doc, 32);
+
+    expect(doc.tileSize).toBe(32);
+    expect(tiles.data[5]).toBe(pack(0, 3));
+    expect(objects.objects[0]).toMatchObject({ x: 48, y: 64, scale: 1, door: { x: 80, y: 16 } });
   });
 
   it('leaves a 16 px map alone when its own pack is drawn at 16 px, even beside 48 px packs', () => {

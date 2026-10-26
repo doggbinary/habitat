@@ -4,6 +4,7 @@ import {
   objectSize,
   uid,
   type AssetRect,
+  type Doc,
   type MapObject,
   type ObjectLayer,
 } from '../core/doc';
@@ -91,6 +92,30 @@ export function keepTouchingMap(obj: MapObject, mapW: number, mapH: number, tile
   };
   obj.x = axis(obj.x - w / 2, w, mapW) + w / 2;
   obj.y = axis(obj.y - h / 2, h, mapH) + h / 2;
+}
+
+/**
+ * Lines every unlocked object up with the grid: whole squares on its longer
+ * side, its corner on a grid line. Returns how many moved or changed size.
+ */
+export function lineUpObjects(doc: Doc): number {
+  const tile = doc.tileSize;
+  let changed = 0;
+  for (const layer of doc.layers) {
+    if (layer.kind !== 'objects') continue;
+    for (const obj of layer.objects) {
+      if (obj.locked) continue;
+      const scale = gridScale(obj.rect.w, obj.rect.h, obj.scale, tile);
+      const { w, h } = objectSize({ ...obj, scale });
+      const at = snapToGrid(w, h, obj.x, obj.y, tile);
+      if (scale === obj.scale && at.x === obj.x && at.y === obj.y) continue;
+      obj.scale = scale;
+      obj.x = at.x;
+      obj.y = at.y;
+      changed += 1;
+    }
+  }
+  return changed;
 }
 
 /** Centre of a box whose top-left corner sits on a grid line. */
