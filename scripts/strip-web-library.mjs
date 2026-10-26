@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist');
-for (const name of ['library', 'maps', 'sw.js']) {
+for (const name of ['library', 'maps', 'sw.js', 'privacy.html', 'support.html']) {
   fs.rmSync(path.join(dist, name), { recursive: true, force: true });
 }
 console.log('Native build: starter pack only');
