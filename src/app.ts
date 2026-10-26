@@ -61,7 +61,38 @@ import {
   readFileAsDataUrl,
 } from './ui/dialogs';
 import { deserializeCharacters, deserializeProject, isProjectFile, serializeProject, type SerializedProject } from './io/project';
-import { createAutosave, keepStorage, loadProject } from './io/storage';
+import {
+  FIRST_MAP_ID,
+  createAutosave,
+  deleteValue,
+  keepStorage,
+  loadProject,
+  loadValue,
+  mapKey,
+  saveProject,
+  saveValue,
+} from './io/storage';
+import {
+  CHARACTERS_KEY,
+  MAPS_KEY,
+  createMapIndex,
+  freeFolderName,
+  isCharacterLibrary,
+  isMapIndex,
+  mergeCharacters,
+  readCharacterLibrary,
+  readMapIndex,
+  removeFolder,
+  renameFolder,
+  serializeCharacterLibrary,
+  type CharacterLibrary,
+  type MapEntry,
+  type MapIndex,
+} from './io/library';
+import { buildMapJson, renderPng, renderTilesetSheet, saveFile, slugify } from './io/export';
+import { zipBlob, type ZipEntry } from './io/zip';
+import { isNative } from './io/native';
+import { openLibrary } from './ui/library-browser';
 import { fitToView, screenToCell, screenToWorld } from './render/camera';
 import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
@@ -201,6 +232,14 @@ export class App {
   private readonly input: PointerInput;
   private readonly shell: Shell;
   private readonly autosave: ReturnType<typeof createAutosave>;
+  /** Characters are shared by every map, so they save on their own. */
+  private readonly characterSave: ReturnType<typeof createAutosave>;
+  /** Every map on this device and its folders; null until loaded. */
+  private maps: MapIndex | null = null;
+  /** The map being edited, which is where autosave writes. */
+  private openMapId = FIRST_MAP_ID;
+  /** Known Pro status, so menus can say what is free without waiting. The web copy has everything. */
+  private pro = !isNative();
   private readonly studio = new Studio();
   private readonly characterView: CharacterView;
   private readonly characterPanel: CharacterPanel;
@@ -239,7 +278,8 @@ export class App {
       replaceImage: (index) => void this.replaceImage(index),
       newMap: () => this.newMap(),
       newMapFromPicture: () => void this.newMapFromPicture(),
-      openProject: () => void this.openProject(),
+      openProject: () => this.openProject(),
+      openMaps: () => void this.openMapLibrary(),
       exportMap: () => {
         this.editor.commitSelection();
         // Export is what Pro unlocks; everything else in the app is free.
@@ -255,16 +295,9 @@ export class App {
 
     // Tiles held up with the select tool are saved where they float, so
     // closing the app mid-move never loses them.
-    this.autosave = createAutosave(() =>
-      serializeProject(
-        this.editor.settledDoc(),
-        this.studio.characters,
-        this.studio.lastPlayedId,
-        this.studio.lastSize,
-        this.store.characterPreview.enabled
-          ? { x: this.store.characterPreview.tx, y: this.store.characterPreview.ty }
-          : null,
-      ),
+    this.autosave = createAutosave(() => this.saveOpenMap(), 1200, () => this.warnNotSaving());
+    this.characterSave = createAutosave(
+      () => saveValue(CHARACTERS_KEY, serializeCharacterLibrary(this.characterLibrary())),
       1200,
       () => this.warnNotSaving(),
     );
@@ -280,10 +313,10 @@ export class App {
       this.autosave.schedule();
     });
     this.store.on('structure', () => this.autosave.schedule());
-    // Sprite edits live outside the document, so the studio schedules its own.
+    // Characters belong to no one map, so the studio saves its own library.
     this.studio.on((immediate) => {
-      this.autosave.schedule();
-      if (immediate) void this.autosave.flush();
+      this.characterSave.schedule();
+      if (immediate) void this.characterSave.flush();
     });
 
     bindKeyboard({
@@ -307,13 +340,49 @@ export class App {
 
     // Flush before the tab goes away: `visibilitychange` is the only event
     // iOS Safari reliably delivers when an app is swiped away.
+    const flushAll = () => {
+      void this.autosave.flush();
+      void this.characterSave.flush();
+    };
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') void this.autosave.flush();
+      if (document.visibilityState === 'hidden') flushAll();
     });
-    window.addEventListener('pagehide', () => void this.autosave.flush());
+    window.addEventListener('pagehide', flushAll);
     // A reload or a closed desktop tab is caught here first.
-    window.addEventListener('beforeunload', () => void this.autosave.flush());
+    window.addEventListener('beforeunload', flushAll);
     void keepStorage();
+    void isPro().then((pro) => {
+      this.pro = pro;
+    });
+  }
+
+  private characterLibrary(): CharacterLibrary {
+    return {
+      characters: this.studio.characters,
+      folders: this.studio.folders,
+      lastPlayedId: this.studio.lastPlayedId,
+      lastSize: this.studio.lastSize,
+    };
+  }
+
+  /** The open map, without its characters: they are in the shared library. */
+  private async saveOpenMap(): Promise<void> {
+    const doc = this.editor.settledDoc();
+    const preview = this.store.characterPreview;
+    await saveProject(
+      serializeProject(doc, [], null, null, preview.enabled ? { x: preview.tx, y: preview.ty } : null),
+      this.openMapId,
+    );
+    const entry = this.maps?.maps.find((m) => m.id === this.openMapId);
+    if (entry) {
+      entry.name = doc.name;
+      entry.updated = Date.now();
+      await this.saveMapIndex();
+    }
+  }
+
+  private async saveMapIndex(): Promise<void> {
+    if (this.maps) await saveValue(MAPS_KEY, this.maps);
   }
 
   private lastSaveWarning = 0;
@@ -364,11 +433,20 @@ export class App {
     // `?map=name` opens a map published with the site, so one link is enough
     // to hand someone a finished map on a tablet. The library still loads
     // afterwards: that link must not leave the rest of the packs missing.
+    const index = await loadValue<MapIndex>(MAPS_KEY);
+    this.maps = isMapIndex(index) ? readMapIndex(index) : null;
+    if (this.maps && this.maps.maps.length === 0) this.maps = null;
+    const libraryFile = await loadValue<unknown>(CHARACTERS_KEY);
+    const library = isCharacterLibrary(libraryFile) ? readCharacterLibrary(libraryFile) : null;
+    if (library) this.adoptLibrary(library);
+
     const wanted = new URLSearchParams(location.search).get('map');
     const opened = wanted ? await this.openPublishedMap(wanted) : false;
 
     if (!opened) {
-      const saved = await loadProject();
+      const id = this.maps?.openId ?? FIRST_MAP_ID;
+      const saved = await loadProject(id);
+      this.openMapId = id;
       if (saved && isProjectFile(saved)) {
         try {
           const doc = await deserializeProject(saved);
@@ -380,6 +458,21 @@ export class App {
       } else if (!(await this.openSampleVillage())) {
         this.adoptDoc(createDoc(STARTER_MAP.width, STARTER_MAP.height, STARTER_TILE));
       }
+    }
+
+    // From before maps were kept in a list: the one map there was becomes the first.
+    if (!this.maps) {
+      this.maps = createMapIndex({ id: this.openMapId, name: this.store.doc.name, updated: Date.now() });
+      await this.saveMapIndex().catch(() => {});
+    } else if (!this.maps.maps.some((m) => m.id === this.openMapId)) {
+      this.maps.maps.push({ id: this.openMapId, name: this.store.doc.name, updated: Date.now() });
+      this.maps.openId = this.openMapId;
+      await this.saveMapIndex().catch(() => {});
+    }
+    // Characters that lived inside the map are in the library now; keep them
+    // safe before the map is next saved without them.
+    if (!library && this.studio.characters.length > 0) {
+      await saveValue(CHARACTERS_KEY, serializeCharacterLibrary(this.characterLibrary())).catch(() => {});
     }
 
     this.renderer.resize();
@@ -424,12 +517,21 @@ export class App {
    */
   private async openPublishedMap(name: string): Promise<boolean> {
     if (!/^[a-z0-9-]+$/i.test(name)) return false;
+    // Kept in the map list under its own id, so a second visit opens the
+    // copy with your changes rather than the published one over it.
+    const id = `pub-${name.toLowerCase()}`;
     try {
-      const response = await fetch(new URL(`maps/${name}.pfproj`, document.baseURI));
-      if (!response.ok) return false;
-      const data = (await response.json()) as unknown;
+      const kept = this.maps?.maps.some((m) => m.id === id) ? await loadProject(id) : null;
+      let data: unknown = kept;
+      if (!isProjectFile(data)) {
+        const response = await fetch(new URL(`maps/${name}.pfproj`, document.baseURI));
+        if (!response.ok) return false;
+        data = (await response.json()) as unknown;
+      }
       if (!isProjectFile(data)) return false;
       const doc = await deserializeProject(data);
+      this.openMapId = id;
+      if (this.maps) this.maps.openId = id;
       this.adoptCharacters(data);
       this.adoptDoc(doc);
       this.renderer.resize();
@@ -704,19 +806,39 @@ export class App {
   }
 
   /** Restores saved characters and which one Play should walk. */
-  private adoptCharacters(data: SerializedProject): void {
-    this.studio.characters = deserializeCharacters(data);
-    const id = data.lastPlayedCharacter;
-    const index = this.studio.characters.findIndex((character) => character.id === id);
+  /** Puts the saved character library in the studio. */
+  private adoptLibrary(library: CharacterLibrary): void {
+    this.studio.characters = library.characters;
+    this.studio.folders = library.folders;
+    const index = this.studio.characters.findIndex((character) => character.id === library.lastPlayedId);
     this.studio.activeCharacter = index >= 0 ? index : 0;
     this.studio.lastPlayedId = this.studio.characters[this.studio.activeCharacter]?.id ?? null;
-    const size = data.lastCharacterSize;
-    this.studio.lastSize =
-      size && Number.isFinite(size.tilesW) && Number.isFinite(size.tilesH)
-        ? { tilesW: size.tilesW, tilesH: size.tilesH }
-        : null;
+    this.studio.lastSize = library.lastSize;
     this.studio.clearHistory();
-    this.studio.emit();
+  }
+
+  /**
+   * Characters that came with a map, from before they were shared or from a
+   * project file, join the library; none already there are touched. Then the
+   * character goes back where it was left standing on this map.
+   */
+  private adoptCharacters(data: SerializedProject): void {
+    const incoming = deserializeCharacters(data);
+    const wasEmpty = this.studio.characters.length === 0;
+    const added = mergeCharacters(this.studio.characters, incoming);
+    if (wasEmpty && added > 0) {
+      const id = data.lastPlayedCharacter;
+      const index = this.studio.characters.findIndex((character) => character.id === id);
+      this.studio.activeCharacter = index >= 0 ? index : 0;
+      this.studio.lastPlayedId = this.studio.characters[this.studio.activeCharacter]?.id ?? null;
+      const size = data.lastCharacterSize;
+      this.studio.lastSize =
+        size && Number.isFinite(size.tilesW) && Number.isFinite(size.tilesH)
+          ? { tilesW: size.tilesW, tilesH: size.tilesH }
+          : null;
+      this.studio.clearHistory();
+    }
+    if (added > 0) this.studio.emit(true);
     this.characterPanel.refresh();
     this.characterView.fit();
     // The character goes back where it was left standing on the map.
@@ -1309,41 +1431,291 @@ export class App {
     }
   }
 
-  private newMap(): void {
-    openNewMapDialog({
-      defaults: {
-        width: this.store.doc.width,
-        height: this.store.doc.height,
-        tileSize: this.store.doc.tileSize,
+  // --- Maps ------------------------------------------------------------------
+
+  /**
+   * The free app keeps one map; Pro keeps as many as you like. Runs `then`
+   * straight away when another map is allowed, so a file picker it opens
+   * still counts as coming from the tap.
+   */
+  private whenMapAllowed(then: () => void): void {
+    if (this.pro || (this.maps?.maps.length ?? 0) === 0) {
+      then();
+      return;
+    }
+    openProScreen({
+      title: 'Make more maps with Habitat Pro',
+      unlocked: () => {
+        this.pro = true;
+        then();
       },
-      onConfirm: ({ width, height, tileSize, name }) => {
-        const doc = createDoc(width, height, tileSize);
-        doc.name = name;
-        // Carry the tilesets over: starting a new map almost always means
-        // another map in the same game.
-        doc.tilesets = this.store.doc.tilesets;
-        this.adoptDoc(doc);
-        this.fit();
-      },
+      toast: (message) => this.store.toast(message),
     });
   }
 
-  /** Asks first, since a new map replaces the one that is open. */
-  private newMapFromPicture(): void {
-    openModal({
-      title: 'New map from picture',
-      body: el('div', { class: 'dialog-body' }, [
-        el('p', {
-          text: 'Choose a drawing of a map. It becomes a locked background, 32 squares wide and as tall as its shape needs, with each of its squares on a grid square.',
-        }),
-        el('p', { class: 'hint', text: 'This replaces the map you have open. Export it first if you want to keep it.' }),
-      ]),
-      actions: [
-        { label: 'Cancel' },
-        // The file picker has to open straight from the tap, or iPadOS blocks it.
-        { label: 'Choose picture', variant: 'primary', onSelect: () => void this.buildPictureMap() },
-      ],
+  /** Saves the map that is open, then makes `doc` a new map in the list and opens it. */
+  private async addMap(doc: Doc, folder?: string): Promise<void> {
+    await this.autosave.flush();
+    const id = uid('map');
+    const entry: MapEntry = { id, name: doc.name, updated: Date.now(), ...(folder ? { folder } : {}) };
+    if (!this.maps) this.maps = createMapIndex(entry);
+    else this.maps.maps.push(entry);
+    this.maps.openId = id;
+    this.openMapId = id;
+    this.adoptDoc(doc);
+    this.fit();
+    await this.saveOpenMap().catch(() => this.warnNotSaving());
+    void this.loadObjectLibrary().then((added) => {
+      if (added > 0) this.store.restructured();
     });
+  }
+
+  /** Saves the open map and opens another from the list. */
+  private async switchToMap(id: string): Promise<void> {
+    if (id === this.openMapId) return;
+    const entry = this.maps?.maps.find((m) => m.id === id);
+    if (!entry || !this.maps) return;
+    await this.autosave.flush();
+    await this.refreshMapThumb();
+    const saved = await loadProject(id);
+    if (!isProjectFile(saved)) {
+      this.store.toast(`${entry.name} could not be opened`);
+      return;
+    }
+    try {
+      const doc = await deserializeProject(saved);
+      doc.name = entry.name;
+      this.openMapId = id;
+      this.maps.openId = id;
+      this.adoptDoc(doc);
+      this.adoptCharacters(saved);
+      this.renderer.resize();
+      this.fit();
+      await this.saveMapIndex();
+      void this.refreshStaleAssets();
+      void this.loadObjectLibrary().then((added) => {
+        if (added > 0) this.store.restructured();
+      });
+      this.store.toast(`Opened ${entry.name}`);
+    } catch {
+      this.store.toast(`${entry.name} could not be opened`);
+    }
+  }
+
+  /** A small picture of the open map for the list, made when you leave it or look at the list. */
+  private async refreshMapThumb(): Promise<void> {
+    const entry = this.maps?.maps.find((m) => m.id === this.openMapId);
+    if (!entry) return;
+    try {
+      const blob = await renderPng(this.editor.settledDoc(), { scale: 1, opaque: true, visibleOnly: true, includeImages: true });
+      const bitmap = await createImageBitmap(blob);
+      const fit = Math.min(1, 192 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * fit));
+      canvas.height = Math.max(1, Math.round(bitmap.height * fit));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.imageSmoothingEnabled = fit < 1;
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close?.();
+      entry.thumb = canvas.toDataURL('image/png');
+      await this.saveMapIndex();
+    } catch {
+      /* the list shows a plain card instead */
+    }
+  }
+
+  /** The saved project for a map, with the open one saved first so it is current. */
+  private async projectFor(id: string): Promise<SerializedProject | null> {
+    if (id === this.openMapId) await this.autosave.flush();
+    const saved = await loadProject(id);
+    return isProjectFile(saved) ? saved : null;
+  }
+
+  /** Every map, in folders: open, rename, copy, move, delete, and export a folder. */
+  async openMapLibrary(): Promise<void> {
+    this.editor.commitSelection();
+    await this.refreshMapThumb();
+    const maps = this.maps;
+    if (!maps) return;
+    const entryFor = (id: string) => maps.maps.find((m) => m.id === id);
+    const savedIndex = () => void this.saveMapIndex().catch(() => this.warnNotSaving());
+    const date = (ms: number) =>
+      new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
+    const browser = openLibrary({
+      title: 'Your maps',
+      noun: 'map',
+      items: () =>
+        maps.maps.map((m) => ({
+          id: m.id,
+          name: m.name,
+          folder: m.folder,
+          note: `Saved ${date(m.updated)}`,
+          current: m.id === this.openMapId,
+          thumb: () => {
+            if (!m.thumb) return null;
+            const image = new Image();
+            image.src = m.thumb;
+            image.alt = '';
+            return image;
+          },
+        })),
+      folders: () => maps.folders,
+      open: (id) => void this.switchToMap(id),
+      rename: (id, name) => {
+        const entry = entryFor(id);
+        if (!entry) return;
+        entry.name = name;
+        if (id === this.openMapId) {
+          this.store.doc.name = name;
+          this.store.restructured();
+        }
+        savedIndex();
+      },
+      duplicate: (id) =>
+        this.whenMapAllowed(() => {
+          void (async () => {
+            const entry = entryFor(id);
+            const project = await this.projectFor(id);
+            if (!entry || !project) return;
+            const copyId = uid('map');
+            const name = `${entry.name} copy`;
+            await saveProject({ ...project, name }, copyId);
+            maps.maps.splice(maps.maps.indexOf(entry) + 1, 0, {
+              id: copyId,
+              name,
+              updated: Date.now(),
+              ...(entry.folder ? { folder: entry.folder } : {}),
+              ...(entry.thumb ? { thumb: entry.thumb } : {}),
+            });
+            savedIndex();
+            browser.refresh();
+            this.store.toast(`Copied ${entry.name}`);
+          })().catch(() => this.store.toast('That map could not be copied'));
+        }),
+      move: (id, folder) => {
+        const entry = entryFor(id);
+        if (!entry) return;
+        if (folder) entry.folder = folder;
+        else delete entry.folder;
+        savedIndex();
+      },
+      remove: (id) => void this.deleteMap(id).then(() => browser.refresh()),
+      addFolder: (name) => {
+        maps.folders.push(freeFolderName(maps.folders, name));
+        savedIndex();
+      },
+      renameFolder: (from, to) => {
+        renameFolder(maps.folders, maps.maps, from, to);
+        savedIndex();
+      },
+      removeFolder: (name) => {
+        removeFolder(maps.folders, maps.maps, name);
+        savedIndex();
+      },
+      exportFolder: (name) => this.exportMapFolder(name),
+      create: { label: 'New map', run: (folder) => this.newMap(folder) },
+      footnote: () =>
+        this.pro ? null : 'The free app keeps one map. Habitat Pro keeps as many as you like, in folders.',
+    });
+  }
+
+  /** Removes a map for good. The open one is swapped for another first, or a fresh map when it was the last. */
+  private async deleteMap(id: string): Promise<void> {
+    const maps = this.maps;
+    if (!maps) return;
+    const index = maps.maps.findIndex((m) => m.id === id);
+    if (index < 0) return;
+    if (id === this.openMapId) {
+      const other = maps.maps.find((m) => m.id !== id);
+      if (other) {
+        await this.switchToMap(other.id);
+      } else {
+        const doc = createDoc(STARTER_MAP.width, STARTER_MAP.height, this.store.doc.tileSize);
+        doc.tilesets = this.store.doc.tilesets;
+        await this.addMap(doc);
+      }
+    }
+    maps.maps = maps.maps.filter((m) => m.id !== id);
+    await deleteValue(mapKey(id));
+    await this.saveMapIndex().catch(() => this.warnNotSaving());
+  }
+
+  /**
+   * One zip for a folder: for each map, its picture, its data for game
+   * engines, its tileset, and the project file to reopen it. Export is Pro.
+   */
+  private exportMapFolder(folder: string): void {
+    const run = async () => {
+      const entries = (this.maps?.maps ?? []).filter((m) => m.folder === folder);
+      if (entries.length === 0) {
+        this.store.toast(`${folder} has no maps yet`);
+        return;
+      }
+      this.store.toast(`Exporting ${folder}…`);
+      const files: ZipEntry[] = [];
+      const used = new Set<string>();
+      const bytes = async (blob: Blob) => new Uint8Array(await blob.arrayBuffer());
+      const text = (value: string) => new TextEncoder().encode(value);
+      for (const entry of entries) {
+        const project = await this.projectFor(entry.id);
+        if (!project) continue;
+        let base = slugify(entry.name) || 'map';
+        for (let n = 2; used.has(base); n++) base = `${slugify(entry.name) || 'map'}-${n}`;
+        used.add(base);
+        const doc = await deserializeProject(project);
+        files.push({ name: `${base}/${base}.png`, data: await bytes(await renderPng(doc, { scale: 1, opaque: false, visibleOnly: true, includeImages: false })) });
+        files.push({ name: `${base}/${base}-map.json`, data: text(buildMapJson(doc)) });
+        const sheet = await renderTilesetSheet(doc);
+        if (sheet) files.push({ name: `${base}/${base}-tileset.png`, data: await bytes(sheet) });
+        files.push({ name: `${base}/${base}.habitat.json`, data: text(JSON.stringify({ ...project, name: entry.name })) });
+      }
+      await saveFile(zipBlob(files), `${slugify(folder) || 'maps'}.zip`);
+      this.store.toast(`Exported ${entries.length} map${entries.length === 1 ? '' : 's'} from ${folder}`);
+    };
+    const go = () => void run().catch(() => this.store.toast('That folder could not be exported'));
+    if (this.pro) go();
+    else openProScreen({ unlocked: () => { this.pro = true; go(); }, toast: (message) => this.store.toast(message) });
+  }
+
+  private newMap(folder?: string): void {
+    this.whenMapAllowed(() =>
+      openNewMapDialog({
+        defaults: {
+          width: this.store.doc.width,
+          height: this.store.doc.height,
+          tileSize: this.store.doc.tileSize,
+        },
+        onConfirm: ({ width, height, tileSize, name }) => {
+          const doc = createDoc(width, height, tileSize);
+          doc.name = name;
+          // Carry the tilesets over: starting a new map almost always means
+          // another map in the same game.
+          doc.tilesets = this.store.doc.tilesets;
+          void this.addMap(doc, folder);
+        },
+      }),
+    );
+  }
+
+  private newMapFromPicture(): void {
+    this.whenMapAllowed(() =>
+      openModal({
+        title: 'New map from picture',
+        body: el('div', { class: 'dialog-body' }, [
+          el('p', {
+            text: 'Choose a drawing of a map. It becomes a locked background, 32 squares wide and as tall as its shape needs, with each of its squares on a grid square.',
+          }),
+          el('p', { class: 'hint', text: 'It becomes a new map. The one you have open stays in Your maps.' }),
+        ]),
+        actions: [
+          { label: 'Cancel' },
+          // The file picker has to open straight from the tap, or iPadOS blocks it.
+          { label: 'Choose picture', variant: 'primary', onSelect: () => void this.buildPictureMap() },
+        ],
+      }),
+    );
   }
 
   /**
@@ -1384,15 +1756,19 @@ export class App {
       doc.layers = [background, floors];
       doc.activeLayer = 1;
 
-      this.adoptDoc(doc);
-      this.fit();
+      await this.addMap(doc);
       this.store.toast(`${doc.name}: ${width} x ${height} squares. Paint floors and add objects on top.`);
     } catch {
       this.store.toast('That picture could not be used');
     }
   }
 
-  private async openProject(): Promise<void> {
+  /** A project file becomes a new map in the list; its characters join the library. */
+  private openProject(): void {
+    this.whenMapAllowed(() => void this.importProjectFile());
+  }
+
+  private async importProjectFile(): Promise<void> {
     const file = await pickFile('application/json,.json');
     if (!file) return;
     try {
@@ -1403,14 +1779,14 @@ export class App {
         return;
       }
       const doc = await deserializeProject(parsed);
+      const before = this.studio.characters.length;
+      await this.addMap(doc);
       this.adoptCharacters(parsed);
-      this.adoptDoc(doc);
-      this.fit();
       void this.refreshStaleAssets();
-      const extra = this.studio.characters.length;
+      const extra = this.studio.characters.length - before;
       this.store.toast(
         extra > 0
-          ? `Opened ${this.store.doc.name} with ${extra} character${extra === 1 ? '' : 's'}`
+          ? `Opened ${this.store.doc.name} and added ${extra} character${extra === 1 ? '' : 's'}`
           : `Opened ${this.store.doc.name}`,
       );
     } catch {

@@ -1,4 +1,11 @@
-import { STARTER_PALETTE, type Character } from '../character/model';
+import {
+  STARTER_PALETTE,
+  characterFromFrames,
+  composeFrames,
+  type Character,
+  type CharacterReference,
+  type Frame,
+} from '../character/model';
 import {
   loadImage,
   makeTileset,
@@ -120,7 +127,17 @@ interface SerializedTileset {
   pathStride?: number;
 }
 
-interface SerializedCharacter {
+interface SerializedReference {
+  src: string;
+  opacity: number;
+  visible: boolean;
+  scale?: number;
+  x?: number;
+  y?: number;
+  locked?: boolean;
+}
+
+export interface SerializedCharacter {
   id: string;
   name: string;
   tilesW: number;
@@ -130,10 +147,16 @@ interface SerializedCharacter {
   frameCount: number;
   frameMs: number;
   palette: string[];
-  /** Base64 RGBA buffers, direction-major like `Character.frames`. */
+  /** Base64 RGBA buffers, direction-major like `Character.frames`: every layer flattened. */
   frames: string[];
-  /** Picture traced over, absent when there is none. */
-  reference?: { src: string; opacity: number; visible: boolean; scale?: number; x?: number; y?: number; locked?: boolean };
+  /** Absent when the character is one plain layer, which `frames` already is. */
+  layers?: { id: string; name: string; visible: boolean; frames: string[] }[];
+  activeLayer?: number;
+  /** One picture traced over, from before there could be several. */
+  reference?: SerializedReference;
+  references?: SerializedReference[];
+  activeReference?: number;
+  folder?: string;
 }
 
 export interface SerializedProject {
@@ -180,6 +203,110 @@ function fromBase64(value: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+const encodeFrame = (f: Frame) => toBase64(f.data.buffer.slice(f.data.byteOffset, f.data.byteOffset + f.data.byteLength));
+
+function serializeReference(r: CharacterReference): SerializedReference {
+  return {
+    src: r.src,
+    opacity: r.opacity,
+    visible: r.visible,
+    ...(r.scale !== undefined ? { scale: r.scale } : {}),
+    ...(r.x !== undefined ? { x: r.x } : {}),
+    ...(r.y !== undefined ? { y: r.y } : {}),
+    locked: r.locked === true,
+  };
+}
+
+export function serializeCharacter(c: Character): SerializedCharacter {
+  const plain = c.layers.length === 1 && c.layers[0].visible;
+  return {
+    id: c.id,
+    name: c.name,
+    tilesW: c.tilesW,
+    tilesH: c.tilesH,
+    w: c.w,
+    h: c.h,
+    frameCount: c.frameCount,
+    frameMs: c.frameMs,
+    palette: [...c.palette],
+    frames: c.frames.map(encodeFrame),
+    ...(plain
+      ? {}
+      : {
+          layers: c.layers.map((layer) => ({
+            id: layer.id,
+            name: layer.name,
+            visible: layer.visible,
+            frames: layer.frames.map(encodeFrame),
+          })),
+          activeLayer: c.activeLayer,
+        }),
+    ...(c.references.length
+      ? { references: c.references.map(serializeReference), activeReference: c.activeReference }
+      : {}),
+    ...(c.folder ? { folder: c.folder } : {}),
+  };
+}
+
+function deserializeReference(r: SerializedReference | undefined): CharacterReference | null {
+  if (!r || typeof r.src !== 'string') return null;
+  return {
+    src: r.src,
+    opacity: finite(r.opacity, 0.5),
+    visible: r.visible !== false,
+    ...(Number.isFinite(r.scale) && r.scale! > 0 ? { scale: r.scale } : {}),
+    ...(Number.isFinite(r.x) ? { x: r.x } : {}),
+    ...(Number.isFinite(r.y) ? { y: r.y } : {}),
+    // Saved before pictures could be unlocked, fingers drew over them: keep it that way.
+    locked: r.locked !== false,
+  };
+}
+
+export function deserializeCharacter(c: SerializedCharacter): Character {
+  const expected = c.w * c.h * 4;
+  const decode = (encoded: string) => {
+    const decoded = new Uint8ClampedArray(fromBase64(encoded));
+    if (decoded.length === expected) return { id: uid('frame'), data: decoded };
+    // Tolerate a frame whose size disagrees with the header rather than
+    // losing the whole character.
+    const fixed = new Uint8ClampedArray(expected);
+    fixed.set(decoded.subarray(0, Math.min(decoded.length, expected)));
+    return { id: uid('frame'), data: fixed };
+  };
+  const references = (c.references ?? (c.reference ? [c.reference] : []))
+    .map(deserializeReference)
+    .filter((r): r is CharacterReference => r !== null);
+  const character = characterFromFrames({
+    id: c.id || uid('char'),
+    name: c.name,
+    tilesW: c.tilesW,
+    tilesH: c.tilesH,
+    w: c.w,
+    h: c.h,
+    frameCount: c.frameCount,
+    frameMs: c.frameMs ?? 140,
+    palette: c.palette?.length ? [...c.palette] : [...STARTER_PALETTE],
+    frames: c.frames.map(decode),
+    references,
+    activeReference: Math.max(0, Math.min(references.length - 1, Math.floor(finite(c.activeReference ?? 0, 0)))),
+    ...(typeof c.folder === 'string' && c.folder ? { folder: c.folder } : {}),
+  });
+  const frameTotal = character.frames.length;
+  if (Array.isArray(c.layers) && c.layers.length > 0) {
+    character.layers = c.layers.map((layer, index) => ({
+      id: layer.id || uid('layer'),
+      name: typeof layer.name === 'string' && layer.name ? layer.name : `Layer ${index + 1}`,
+      visible: layer.visible !== false,
+      frames: Array.from({ length: frameTotal }, (_, f) =>
+        layer.frames?.[f] ? decode(layer.frames[f]) : { id: uid('frame'), data: new Uint8ClampedArray(expected) },
+      ),
+    }));
+    character.activeLayer = Math.max(0, Math.min(character.layers.length - 1, Math.floor(finite(c.activeLayer ?? 0, 0))));
+    composeFrames(character);
+  }
+  return character;
+}
+
 export function serializeProject(
   doc: Doc,
   characters: Character[] = [],
@@ -191,31 +318,7 @@ export function serializeProject(
     ...(lastPlayedId ? { lastPlayedCharacter: lastPlayedId } : {}),
     ...(lastCharacterSize ? { lastCharacterSize: { ...lastCharacterSize } } : {}),
     ...(characterAt ? { characterAt: { x: characterAt.x, y: characterAt.y } } : {}),
-    characters: characters.map((c) => ({
-      id: c.id,
-      name: c.name,
-      tilesW: c.tilesW,
-      tilesH: c.tilesH,
-      w: c.w,
-      h: c.h,
-      frameCount: c.frameCount,
-      frameMs: c.frameMs,
-      palette: [...c.palette],
-      frames: c.frames.map((f) => toBase64(f.data.buffer.slice(f.data.byteOffset, f.data.byteOffset + f.data.byteLength))),
-      ...(c.reference
-        ? {
-            reference: {
-              src: c.reference.src,
-              opacity: c.reference.opacity,
-              visible: c.reference.visible,
-              ...(c.reference.scale !== undefined ? { scale: c.reference.scale } : {}),
-              ...(c.reference.x !== undefined ? { x: c.reference.x } : {}),
-              ...(c.reference.y !== undefined ? { y: c.reference.y } : {}),
-              locked: c.reference.locked === true,
-            },
-          }
-        : {}),
-    })),
+    characters: characters.map(serializeCharacter),
     format: 'pixel-fusion-project',
     version: PROJECT_VERSION,
     name: doc.name,
@@ -285,44 +388,7 @@ export function isProjectFile(value: unknown): value is SerializedProject {
 /** Rebuilds the characters saved alongside a map. */
 export function deserializeCharacters(data: SerializedProject): Character[] {
   if (!data.characters) return [];
-  return data.characters.map((c) => {
-    const expected = c.w * c.h * 4;
-    const frames = c.frames.map((encoded) => {
-      const decoded = new Uint8ClampedArray(fromBase64(encoded));
-      if (decoded.length === expected) return { id: uid('frame'), data: decoded };
-      // Tolerate a frame whose size disagrees with the header rather than
-      // losing the whole character.
-      const fixed = new Uint8ClampedArray(expected);
-      fixed.set(decoded.subarray(0, Math.min(decoded.length, expected)));
-      return { id: uid('frame'), data: fixed };
-    });
-    return {
-      id: c.id || uid('char'),
-      name: c.name,
-      tilesW: c.tilesW,
-      tilesH: c.tilesH,
-      w: c.w,
-      h: c.h,
-      frameCount: c.frameCount,
-      frameMs: c.frameMs ?? 140,
-      palette: c.palette?.length ? [...c.palette] : [...STARTER_PALETTE],
-      frames,
-      ...(c.reference && typeof c.reference.src === 'string'
-        ? {
-            reference: {
-              src: c.reference.src,
-              opacity: finite(c.reference.opacity, 0.5),
-              visible: c.reference.visible !== false,
-              ...(Number.isFinite(c.reference.scale) && c.reference.scale! > 0 ? { scale: c.reference.scale } : {}),
-              ...(Number.isFinite(c.reference.x) ? { x: c.reference.x } : {}),
-              ...(Number.isFinite(c.reference.y) ? { y: c.reference.y } : {}),
-              // Saved before pictures could be unlocked, fingers drew over them: keep it that way.
-              locked: c.reference.locked !== false,
-            },
-          }
-        : {}),
-    };
-  });
+  return data.characters.map(deserializeCharacter);
 }
 
 export async function deserializeProject(data: SerializedProject): Promise<Doc> {

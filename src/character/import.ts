@@ -2,6 +2,7 @@ import { uid } from '../core/doc';
 import {
   DIRECTIONS,
   STARTER_PALETTE,
+  characterFromFrames,
   rgbaToHex,
   type Character,
   type Direction,
@@ -113,7 +114,7 @@ export function importSpriteSheet(
     }
   }
 
-  return {
+  return characterFromFrames({
     id: uid('char'),
     name,
     // Round up: a sprite taller than its tiles still occupies whole tiles.
@@ -125,7 +126,7 @@ export function importSpriteSheet(
     frames,
     palette: paletteFrom(frames, layout.frameW * layout.frameH),
     frameMs: 140,
-  };
+  });
 }
 
 /**

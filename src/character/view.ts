@@ -1,9 +1,12 @@
 import {
+  activeReference,
+  frameIndex,
   framePixels,
   pinchReference,
   referenceImage,
   referencePlacement,
   type Character,
+  type CharacterReference,
   type Frame,
 } from './model';
 import type { Studio } from './studio';
@@ -153,10 +156,10 @@ export class CharacterView {
 
     this.drawCheckerboard(x, y, w, h);
 
-    // The traced picture sits behind everything you draw.
-    const reference = character.reference;
-    const picture = reference?.visible ? referenceImage(reference, () => this.requestDraw()) : null;
-    if (reference && picture) {
+    // Traced pictures sit behind everything you draw, bottom first.
+    for (const reference of character.references) {
+      const picture = reference.visible ? referenceImage(reference, () => this.requestDraw()) : null;
+      if (!picture) continue;
       const at = referencePlacement(picture.naturalWidth, picture.naturalHeight, character.w, character.h, reference);
       ctx.globalAlpha = reference.opacity;
       ctx.imageSmoothingEnabled = true;
@@ -173,8 +176,12 @@ export class CharacterView {
       ctx.globalAlpha = 1;
     }
 
-    const frame = this.studio.currentFrame;
-    if (frame) ctx.drawImage(this.frameCanvas(character, frame), x, y, w, h);
+    // Every visible layer, bottom first, straight from what is being drawn.
+    const index = frameIndex(this.studio.direction, this.studio.frame, character.frameCount);
+    for (const layer of character.layers) {
+      const frame = layer.visible ? layer.frames[index] : null;
+      if (frame) ctx.drawImage(this.frameCanvas(character, frame), x, y, w, h);
+    }
 
     this.drawGrid(character, x, y);
     this.drawCursor(character, x, y);
@@ -416,14 +423,20 @@ export class CharacterView {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
+  /** The traced picture chosen in the panel, which is the one fingers move. */
+  private activePicture(): CharacterReference | null {
+    const character = this.studio.character;
+    return character ? activeReference(character) : null;
+  }
+
   /** True while the traced picture is showing and unlocked, so fingers move it instead of drawing. */
   private pictureFollowsFingers(): boolean {
-    const reference = this.studio.character?.reference;
+    const reference = this.activePicture();
     return !!reference && reference.visible && !reference.locked;
   }
 
   private startMove(id: number, x: number, y: number): void {
-    const reference = this.studio.character?.reference;
+    const reference = this.activePicture();
     if (!reference) return;
     this.mode = 'move';
     this.activeId = id;
@@ -431,7 +444,7 @@ export class CharacterView {
   }
 
   private startPinch(): void {
-    const reference = this.studio.character?.reference;
+    const reference = this.activePicture();
     const touches = [...this.pointers].filter(([, p]) => p.type === 'touch').slice(0, 2);
     if (!reference || touches.length < 2) return;
     const [[idA, a], [idB, b]] = touches;
@@ -451,7 +464,7 @@ export class CharacterView {
   /** Sizes the picture by how far the fingers have spread, keeping it under them. */
   private pinchReference(): void {
     const character = this.studio.character;
-    const reference = character?.reference;
+    const reference = this.activePicture();
     const picture = reference?.image;
     const from = this.pinchFrom;
     if (!character || !reference || !picture || !from) return;
@@ -499,7 +512,7 @@ export class CharacterView {
 
   /** Follows the finger or Pencil with the traced picture, in sprite pixels. */
   private dragReference(x: number, y: number): void {
-    const reference = this.studio.character?.reference;
+    const reference = this.activePicture();
     const from = this.moveFrom;
     if (!reference || !from) return;
     reference.x = from.x + (x - from.sx) / this.zoom;

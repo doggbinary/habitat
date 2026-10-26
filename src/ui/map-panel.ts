@@ -8,6 +8,7 @@ interface MapPanelActions {
   newMap: () => void;
   newMapFromPicture: () => void;
   openProject: () => void;
+  openMaps: () => void;
 }
 
 /** Map dimensions plus the display and input preferences. */
@@ -62,8 +63,12 @@ export class MapPanel {
     });
 
     this.element.append(
-      section('Start a map', [
-        button('btn primary full', 'New map from picture', () => this.actions.newMapFromPicture(), [
+      section('Maps', [
+        button('btn primary full', 'Your maps: open, name, copy and sort maps into folders', () => this.actions.openMaps(), [
+          el('span', { text: 'Your maps' }),
+        ]),
+        el('p', { class: 'hint', text: 'Every map you have made, in folders. Export a whole folder as one zip.' }),
+        button('btn subtle full', 'New map from picture', () => this.actions.newMapFromPicture(), [
           el('span', { text: 'New map from picture' }),
         ]),
         el('p', {

@@ -1,7 +1,11 @@
 import {
   DIRECTIONS,
   applyTemplate,
+  composeFrames,
   createCharacter,
+  createLayer,
+  duplicateCharacter,
+  type CharacterLayer,
   frameIndex,
   getPixel,
   hexToRgba,
@@ -30,6 +34,8 @@ type Listener = (immediate?: boolean) => void;
 
 export class Studio {
   characters: Character[] = [];
+  /** Folders in the character library, in the order they were made. */
+  folders: string[] = [];
   activeCharacter = 0;
   /** The character Play walks, remembered across reloads. */
   lastPlayedId: string | null = null;
@@ -63,7 +69,10 @@ export class Studio {
     return () => this.listeners.delete(listener);
   }
 
+  /** Tells listeners something changed, after flattening the open character's layers. */
   emit(immediate = false): void {
+    const character = this.character;
+    if (character) composeFrames(character);
     for (const listener of [...this.listeners]) listener(immediate);
   }
 
@@ -77,10 +86,18 @@ export class Studio {
     this.emit(true);
   }
 
-  get currentFrame(): Frame | null {
+  get layer(): CharacterLayer | null {
     const character = this.character;
     if (!character) return null;
-    return character.frames[frameIndex(this.direction, this.frame, character.frameCount)] ?? null;
+    return character.layers[character.activeLayer] ?? character.layers[0] ?? null;
+  }
+
+  /** The frame being drawn on: this pose, on the chosen layer. */
+  get currentFrame(): Frame | null {
+    const character = this.character;
+    const layer = this.layer;
+    if (!character || !layer) return null;
+    return layer.frames[frameIndex(this.direction, this.frame, character.frameCount)] ?? null;
   }
 
   /** The frame shown behind the current one when onion skinning is on. */
@@ -101,6 +118,64 @@ export class Studio {
     this.clearHistory();
     this.rememberPlayed(character);
     return character;
+  }
+
+  /** Starts a new character from a copy of one, layers, pictures and all, and opens it. */
+  duplicate(index = this.activeCharacter): Character | null {
+    const source = this.characters[index];
+    if (!source) return null;
+    const copy = duplicateCharacter(source);
+    this.characters.splice(index + 1, 0, copy);
+    this.activeCharacter = index + 1;
+    this.clearHistory();
+    this.emit(true);
+    return copy;
+  }
+
+  // --- Layers --------------------------------------------------------------
+
+  addLayer(): void {
+    const character = this.character;
+    if (!character) return;
+    const layer = createLayer(character, `Layer ${character.layers.length + 1}`);
+    character.layers.splice(character.activeLayer + 1, 0, layer);
+    character.activeLayer += 1;
+    this.emit(true);
+  }
+
+  selectLayer(index: number): void {
+    const character = this.character;
+    if (!character || index < 0 || index >= character.layers.length) return;
+    character.activeLayer = index;
+    this.emit();
+  }
+
+  /** The last layer stays: a character always has something to draw on. */
+  removeLayer(index: number): void {
+    const character = this.character;
+    if (!character || character.layers.length < 2) return;
+    character.layers.splice(index, 1);
+    character.activeLayer = Math.max(0, Math.min(character.layers.length - 1, character.activeLayer - (index <= character.activeLayer ? 1 : 0)));
+    this.emit(true);
+  }
+
+  /** Moves a layer up (+1, in front) or down (-1, behind), keeping it chosen. */
+  moveLayer(index: number, by: number): void {
+    const character = this.character;
+    const to = index + by;
+    if (!character || to < 0 || to >= character.layers.length) return;
+    const [layer] = character.layers.splice(index, 1);
+    character.layers.splice(to, 0, layer);
+    if (character.activeLayer === index) character.activeLayer = to;
+    else if (character.activeLayer === to) character.activeLayer = index;
+    this.emit(true);
+  }
+
+  toggleLayer(index: number): void {
+    const layer = this.character?.layers[index];
+    if (!layer) return;
+    layer.visible = !layer.visible;
+    this.emit();
   }
 
   removeCharacter(index: number): void {
@@ -211,7 +286,11 @@ export class Studio {
     if (x < 0 || y < 0 || x >= w || y >= h) return false;
 
     if (this.tool === 'picker') {
-      const picked = getPixel(frame, w, x, y);
+      // What you see, across every layer, even mid-stroke.
+      const index = frameIndex(this.direction, this.frame, character.frameCount);
+      composeFrames(character, index);
+      const shown = character.frames[index] ?? frame;
+      const picked = getPixel(shown, w, x, y);
       if (picked[3] === 0) return false;
       this.color = rgbaToHex(picked[0], picked[1], picked[2]);
       this.tool = 'pencil';
@@ -316,9 +395,10 @@ export class Studio {
     const character = this.character;
     const source = this.currentFrame;
     if (!character || !source) return;
+    const layer = this.layer!;
     for (let f = 0; f < character.frameCount; f++) {
       if (f === this.frame) continue;
-      const target = character.frames[frameIndex(this.direction, f, character.frameCount)];
+      const target = layer.frames[frameIndex(this.direction, f, character.frameCount)];
       this.undoStack.push({
         frameId: target.id,
         before: new Uint8ClampedArray(target.data),
@@ -340,7 +420,7 @@ export class Studio {
     if (!oppositeName) return;
 
     const opposite = DIRECTIONS.indexOf(oppositeName);
-    const target = character.frames[frameIndex(opposite, this.frame, character.frameCount)];
+    const target = this.layer!.frames[frameIndex(opposite, this.frame, character.frameCount)];
     const { w, h } = character;
     const before = new Uint8ClampedArray(target.data);
 
@@ -377,8 +457,10 @@ export class Studio {
 
   private frameById(id: string): Frame | null {
     for (const character of this.characters) {
-      const found = character.frames.find((f) => f.id === id);
-      if (found) return found;
+      for (const layer of character.layers) {
+        const found = layer.frames.find((f) => f.id === id);
+        if (found) return found;
+      }
     }
     return null;
   }

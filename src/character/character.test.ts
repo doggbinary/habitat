@@ -129,6 +129,61 @@ describe('drawing in the studio', () => {
     expect(getPixel(s.currentFrame!, 32, 1, 1)[3]).toBe(255);
   });
 
+  it('draws on the chosen layer, and Play sees every visible layer together', () => {
+    const s = studio();
+    s.beginStroke();
+    s.paint(1, 1);
+    s.endStroke();
+    s.addLayer();
+    expect(s.character!.layers).toHaveLength(2);
+    expect(s.character!.activeLayer).toBe(1);
+    s.color = '#00ff00';
+    s.beginStroke();
+    s.paint(2, 2);
+    s.endStroke();
+    const layers = s.character!.layers;
+    expect(getPixel(layers[0].frames[0], 32, 2, 2)[3]).toBe(0);
+    expect(getPixel(layers[1].frames[0], 32, 1, 1)[3]).toBe(0);
+    const shown = s.character!.frames[0];
+    expect(getPixel(shown, 32, 1, 1)).toEqual([255, 0, 0, 255]);
+    expect(getPixel(shown, 32, 2, 2)).toEqual([0, 255, 0, 255]);
+    s.toggleLayer(1);
+    expect(getPixel(s.character!.frames[0], 32, 2, 2)[3]).toBe(0);
+    // Undo reaches the layer the stroke was on.
+    s.undo();
+    expect(getPixel(layers[1].frames[0], 32, 2, 2)[3]).toBe(0);
+  });
+
+  it('moves layers and always keeps one', () => {
+    const s = studio();
+    s.addLayer();
+    s.character!.layers[1].name = 'Hat';
+    s.moveLayer(1, -1);
+    expect(s.character!.layers.map((l) => l.name)).toEqual(['Hat', 'Layer 1']);
+    expect(s.character!.activeLayer).toBe(0);
+    s.removeLayer(0);
+    s.removeLayer(0);
+    expect(s.character!.layers).toHaveLength(1);
+  });
+
+  it('duplicates a character to carry on from, without the two sharing pixels', () => {
+    const s = studio();
+    s.beginStroke();
+    s.paint(1, 1);
+    s.endStroke();
+    const original = s.character!;
+    original.references = [{ src: 'data:x', opacity: 0.5, visible: true }];
+    const copy = s.duplicate()!;
+    expect(s.character).toBe(copy);
+    expect(copy.id).not.toBe(original.id);
+    expect(copy.references).toHaveLength(1);
+    s.beginStroke();
+    s.paint(5, 5);
+    s.endStroke();
+    expect(getPixel(original.layers[0].frames[0], 32, 5, 5)[3]).toBe(0);
+    expect(getPixel(copy.layers[0].frames[0], 32, 1, 1)[3]).toBe(255);
+  });
+
   it('stamps the current colour into the palette once, and removes swatches', () => {
     const s = studio();
     const before = s.character!.palette.length;

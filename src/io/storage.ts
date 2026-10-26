@@ -6,31 +6,40 @@ import type { SerializedProject } from './project';
  * couple of embedded tilesets runs to several megabytes, well past the
  * localStorage quota Safari enforces.
  *
- * In the iPad app the project is also a file in the app's Library folder.
+ * In the iPad app everything is also a file in the app's Library folder.
  * iOS may clear a web view's storage when space runs low, but never that
  * folder, and it is backed up with the device. It is not shown in the Files
  * app: taking a file out of the app is what Export is for.
+ *
+ * Each saved thing has a key. The map from before there could be several
+ * keeps the key `current` and its old file, so nothing has to be copied.
  */
 
-const PROJECT_FILE = 'Projects/current.pfproj';
-const PROJECT_TEMP = 'Projects/current.pfproj.tmp';
+const CURRENT_KEY = 'current';
 
-async function writeProjectFile(project: SerializedProject): Promise<void> {
-  const { Directory, Encoding, Filesystem } = await import('@capacitor/filesystem');
-  const options = { directory: Directory.Library, encoding: Encoding.UTF8 };
-  // Written aside first, so a crash mid-save leaves the last good copy whole.
-  await Filesystem.writeFile({ ...options, path: PROJECT_TEMP, data: JSON.stringify(project), recursive: true });
-  await Filesystem.deleteFile({ directory: Directory.Library, path: PROJECT_FILE }).catch(() => {});
-  await Filesystem.rename({ from: PROJECT_TEMP, to: PROJECT_FILE, directory: Directory.Library, toDirectory: Directory.Library });
+function filePath(key: string): string {
+  return key === CURRENT_KEY ? 'Projects/current.pfproj' : `Projects/${key}.json`;
 }
 
-async function readProjectFile(): Promise<SerializedProject | null> {
+async function writeFile(key: string, value: unknown): Promise<void> {
   const { Directory, Encoding, Filesystem } = await import('@capacitor/filesystem');
+  const path = filePath(key);
+  const temp = `${path}.tmp`;
+  const options = { directory: Directory.Library, encoding: Encoding.UTF8 };
+  // Written aside first, so a crash mid-save leaves the last good copy whole.
+  await Filesystem.writeFile({ ...options, path: temp, data: JSON.stringify(value), recursive: true });
+  await Filesystem.deleteFile({ directory: Directory.Library, path }).catch(() => {});
+  await Filesystem.rename({ from: temp, to: path, directory: Directory.Library, toDirectory: Directory.Library });
+}
+
+async function readFile<T>(key: string): Promise<T | null> {
+  const { Directory, Encoding, Filesystem } = await import('@capacitor/filesystem');
+  const path = filePath(key);
   // The finished copy first; the one written aside if a save was cut short.
-  for (const path of [PROJECT_FILE, PROJECT_TEMP]) {
+  for (const candidate of [path, `${path}.tmp`]) {
     try {
-      const file = await Filesystem.readFile({ path, directory: Directory.Library, encoding: Encoding.UTF8 });
-      return JSON.parse(String(file.data)) as SerializedProject;
+      const file = await Filesystem.readFile({ path: candidate, directory: Directory.Library, encoding: Encoding.UTF8 });
+      return JSON.parse(String(file.data)) as T;
     } catch {
       /* missing or unreadable; try the next */
     }
@@ -38,11 +47,18 @@ async function readProjectFile(): Promise<SerializedProject | null> {
   return null;
 }
 
+async function deleteFile(key: string): Promise<void> {
+  const { Directory, Filesystem } = await import('@capacitor/filesystem');
+  const path = filePath(key);
+  for (const candidate of [path, `${path}.tmp`]) {
+    await Filesystem.deleteFile({ directory: Directory.Library, path: candidate }).catch(() => {});
+  }
+}
+
 // From before the app was called Habitat. Renaming it would lose every saved map.
 const DB_NAME = 'pixel-fusion';
 const DB_VERSION = 1;
 const STORE = 'projects';
-const CURRENT_KEY = 'current';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -73,14 +89,57 @@ async function withStore<T>(
   });
 }
 
-export async function saveProject(project: SerializedProject): Promise<void> {
+export async function saveValue(key: string, value: unknown): Promise<void> {
   if (isNative()) {
-    await writeProjectFile(project);
+    await writeFile(key, value);
     // The web view copy is a spare; the file is the one that counts.
-    await withStore('readwrite', (store) => store.put(project, CURRENT_KEY)).catch(() => {});
+    await withStore('readwrite', (store) => store.put(value, key)).catch(() => {});
     return;
   }
-  await withStore('readwrite', (store) => store.put(project, CURRENT_KEY));
+  await withStore('readwrite', (store) => store.put(value, key));
+}
+
+export async function loadValue<T>(key: string): Promise<T | null> {
+  if (isNative()) {
+    const fromFile = await readFile<T>(key).catch(() => null);
+    if (fromFile) return fromFile;
+  }
+  try {
+    const result = await withStore<T | undefined>('readonly', (store) => store.get(key));
+    return result ?? null;
+  } catch {
+    // Private browsing and storage pressure can both make this throw. An
+    // empty editor is a better outcome than a blank screen.
+    return null;
+  }
+}
+
+export async function deleteValue(key: string): Promise<void> {
+  if (isNative()) await deleteFile(key).catch(() => {});
+  try {
+    await withStore('readwrite', (store) => store.delete(key));
+  } catch {
+    /* nothing useful to do if the store is unavailable */
+  }
+}
+
+/** Where a map is kept. The first map ever saved keeps its original place. */
+export function mapKey(id: string): string {
+  return id === CURRENT_KEY ? CURRENT_KEY : `map-${id}`;
+}
+
+export const FIRST_MAP_ID = CURRENT_KEY;
+
+export function saveProject(project: SerializedProject, id: string = CURRENT_KEY): Promise<void> {
+  return saveValue(mapKey(id), project);
+}
+
+export function loadProject(id: string = CURRENT_KEY): Promise<SerializedProject | null> {
+  return loadValue<SerializedProject>(mapKey(id));
+}
+
+export function clearProject(id: string = CURRENT_KEY): Promise<void> {
+  return deleteValue(mapKey(id));
 }
 
 /**
@@ -97,37 +156,12 @@ export async function keepStorage(): Promise<void> {
   }
 }
 
-export async function loadProject(): Promise<SerializedProject | null> {
-  if (isNative()) {
-    const fromFile = await readProjectFile().catch(() => null);
-    if (fromFile) return fromFile;
-  }
-  try {
-    const result = await withStore<SerializedProject | undefined>('readonly', (store) =>
-      store.get(CURRENT_KEY),
-    );
-    return result ?? null;
-  } catch {
-    // Private browsing and storage pressure can both make this throw. An
-    // empty editor is a better outcome than a blank screen.
-    return null;
-  }
-}
-
-export async function clearProject(): Promise<void> {
-  try {
-    await withStore('readwrite', (store) => store.delete(CURRENT_KEY));
-  } catch {
-    /* nothing useful to do if the store is unavailable */
-  }
-}
-
 /**
  * Coalesces autosave requests. Saving serialises the whole document, so it is
  * deliberately lazy and never runs in the middle of a stroke.
  */
 export function createAutosave(
-  serialize: () => SerializedProject,
+  save: () => Promise<void>,
   delay = 1200,
   /** Told when a save fails, such as when the browser blocks storage, so the user is not left thinking work is kept. */
   onError: (error: unknown) => void = () => {},
@@ -138,7 +172,7 @@ export function createAutosave(
   const run = async () => {
     pending = false;
     try {
-      await saveProject(serialize());
+      await save();
     } catch (error) {
       // The in-memory document is unaffected; the user just has to know.
       onError(error);

@@ -1,6 +1,7 @@
 import {
   DIRECTIONS,
   DIRECTION_LABELS,
+  activeReference,
   applyTemplate,
   frameIndex,
   framePixels,
@@ -8,13 +9,16 @@ import {
   referencePlacement,
   type Character,
 } from '../character/model';
+import { characterThumb } from '../character/sheet';
 import type { PixelTool, Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
 import type { Store } from '../core/store';
+import { freeFolderName, removeFolder, renameFolder } from '../io/library';
 import { openColorPopover } from './color-popover';
 import { pickFile, readFileAsDataUrl } from './dialogs';
 import { button, clear, el } from './dom';
 import { icon, type IconName } from './icons';
+import { confirmAction, openLibrary, promptName } from './library-browser';
 import { paletteGrid } from './studio-bar';
 
 const TOOLS: { id: PixelTool; icon: IconName; label: string }[] = [
@@ -82,6 +86,7 @@ export class CharacterPanel {
       this.characterPager(character),
       this.toolsSection(),
       this.paletteSection(),
+      this.layersSection(character),
       this.framesSection(character),
       this.traceSection(character),
       this.previewSection(character),
@@ -105,46 +110,196 @@ export class CharacterPanel {
 
   // --- Sections ------------------------------------------------------------
 
+  /** Opens a character from the library and makes it the one Play walks. */
+  private openCharacter(index: number): void {
+    if (index < 0 || index >= this.studio.characters.length) return;
+    this.studio.activeCharacter = index;
+    this.studio.frame = 0;
+    this.studio.clearHistory();
+    const picked = this.studio.character;
+    if (picked) this.studio.rememberPlayed(picked);
+    this.studio.emit();
+    this.view.fit();
+    this.refresh();
+  }
+
+  /** Every character, in folders, like the asset library. */
+  openLibrary(): void {
+    const studio = this.studio;
+    const indexOf = (id: string) => studio.characters.findIndex((c) => c.id === id);
+    const saved = () => {
+      studio.emit(true);
+      this.view.fit();
+      this.refresh();
+    };
+    openLibrary({
+      title: 'Characters',
+      noun: 'character',
+      items: () =>
+        studio.characters.map((c, i) => ({
+          id: c.id,
+          name: c.name,
+          folder: c.folder,
+          note: `${c.tilesW} x ${c.tilesH} tiles`,
+          current: i === studio.activeCharacter,
+          thumb: () => characterThumb(c),
+        })),
+      folders: () => studio.folders,
+      open: (id) => this.openCharacter(indexOf(id)),
+      rename: (id, name) => {
+        const c = studio.characters[indexOf(id)];
+        if (c) c.name = name;
+        saved();
+      },
+      duplicate: (id) => {
+        studio.duplicate(indexOf(id));
+        saved();
+      },
+      move: (id, folder) => {
+        const c = studio.characters[indexOf(id)];
+        if (!c) return;
+        if (folder) c.folder = folder;
+        else delete c.folder;
+        saved();
+      },
+      remove: (id) => {
+        const index = indexOf(id);
+        if (index >= 0) studio.removeCharacter(index);
+        saved();
+      },
+      addFolder: (name) => {
+        studio.folders.push(freeFolderName(studio.folders, name));
+        saved();
+      },
+      renameFolder: (from, to) => {
+        renameFolder(studio.folders, studio.characters, from, to);
+        saved();
+      },
+      removeFolder: (name) => {
+        removeFolder(studio.folders, studio.characters, name);
+        saved();
+      },
+      create: {
+        label: 'New character',
+        run: (folder) => {
+          this.createCharacter(true);
+          const made = studio.character;
+          if (made && folder) {
+            made.folder = folder;
+            studio.emit(true);
+          }
+        },
+      },
+    });
+  }
+
   private characterPager(character: Character): HTMLElement {
     const total = this.studio.characters.length;
     const index = this.studio.activeCharacter;
 
-    const name = el('input', { class: 'input', type: 'text', value: character.name });
-    name.addEventListener('change', () => {
-      character.name = name.value.trim() || character.name;
-      this.studio.emit();
-    });
-
-    const go = (next: number) => {
-      this.studio.activeCharacter = ((next % total) + total) % total;
-      this.studio.frame = 0;
-      this.studio.clearHistory();
-      const picked = this.studio.character;
-      if (picked) this.studio.rememberPlayed(picked);
-      this.view.fit();
-      this.refresh();
-    };
-
-    const prev = button('icon-btn', 'Previous character', () => go(index - 1), [icon('chevronLeft', 20)]);
-    const next = button('icon-btn', 'Next character', () => go(index + 1), [icon('chevronRight', 20)]);
-    prev.disabled = total < 2;
-    next.disabled = total < 2;
+    // The name opens the library rather than a text box: on iPad a text box
+    // brings up the keyboard over everything.
+    const thumb = characterThumb(character);
+    const open = button('character-switch', 'Your characters', () => this.openLibrary(), [
+      thumb,
+      el('span', { class: 'character-switch-text' }, [
+        el('span', { text: character.name }),
+        el('span', {
+          class: 'muted',
+          text: `${character.folder ? `${character.folder} · ` : ''}${total === 1 ? '1 character' : `${total} characters`}`,
+        }),
+      ]),
+      icon('chevronDown', 18),
+    ]);
 
     return section('Character', [
-      el('div', { class: 'palette-pager' }, [prev, name, next]),
-      el('div', { class: 'palette-meta' }, [
-        el('span', { text: total > 1 ? `${index + 1} of ${total}` : '' }),
-        el('span', { class: 'muted', text: `${character.w} x ${character.h} px` }),
+      el('div', { class: 'character-header' }, [
+        open,
+        button('icon-btn', 'Rename this character', () => {
+          promptName('Rename character', character.name, (name) => {
+            character.name = name;
+            this.studio.emit(true);
+            this.refresh();
+          });
+        }, [icon('pencilEdit', 18)]),
       ]),
       el('div', { class: 'layer-actions' }, [
         button('icon-btn', 'New character', () => this.createCharacter(true), [icon('plus', 18)]),
-        button('icon-btn', 'Import a sprite sheet', () => this.actions.importSheet(), [icon('upload', 18)]),
-        button('icon-btn danger', 'Delete character', () => {
-          this.studio.removeCharacter(index);
+        button('icon-btn', 'Duplicate: start a new character from this one', () => {
+          this.studio.duplicate(index);
           this.view.fit();
           this.refresh();
+          this.store.toast(`Copied ${character.name}. Draw over the copy.`);
+        }, [icon('copy', 18)]),
+        button('icon-btn', 'Import a sprite sheet', () => this.actions.importSheet(), [icon('upload', 18)]),
+        button('icon-btn danger', 'Delete character', () => {
+          confirmAction(`Delete ${character.name}?`, 'This character is gone for good.', 'Delete', () => {
+            this.studio.removeCharacter(index);
+            this.view.fit();
+            this.refresh();
+          });
         }, [icon('trash', 18)]),
       ]),
+    ]);
+  }
+
+  /** Drawing layers, top first as in most drawing apps. Each has every frame of the walk. */
+  private layersSection(character: Character): HTMLElement {
+    const studio = this.studio;
+    const after = () => {
+      this.view.requestDraw();
+      this.refresh();
+    };
+    const rows = character.layers
+      .map((layer, index) => {
+        const active = index === character.activeLayer;
+        const pick = button('layer-row-name', 'Draw on this layer', () => {
+          studio.selectLayer(index);
+          after();
+        }, [el('span', { text: layer.name })]);
+        return el('div', { class: `layer-row${active ? ' active' : ''}` }, [
+          button('icon-btn', layer.visible ? 'Hide this layer' : 'Show this layer', () => {
+            studio.toggleLayer(index);
+            after();
+          }, [icon(layer.visible ? 'eye' : 'eyeOff', 18)]),
+          pick,
+          button('icon-btn', 'Rename this layer', () => {
+            promptName('Rename layer', layer.name, (name) => {
+              layer.name = name;
+              studio.emit(true);
+              after();
+            });
+          }, [icon('pencilEdit', 16)]),
+          button('icon-btn', 'Move up, in front', () => {
+            studio.moveLayer(index, 1);
+            after();
+          }, [icon('chevronUp', 16)]),
+          button('icon-btn', 'Move down, behind', () => {
+            studio.moveLayer(index, -1);
+            after();
+          }, [icon('chevronDown', 16)]),
+          character.layers.length > 1
+            ? button('icon-btn danger', 'Delete this layer', () => {
+                confirmAction(`Delete ${layer.name}?`, 'Every frame drawn on this layer goes with it.', 'Delete', () => {
+                  studio.removeLayer(index);
+                  after();
+                });
+              }, [icon('trash', 16)])
+            : null,
+        ]);
+      })
+      .reverse();
+
+    return section('Layers', [
+      el('div', { class: 'layer-list' }, rows),
+      button('btn subtle full', 'Add a layer above this one', () => {
+        studio.addLayer();
+        after();
+      }, [icon('plus', 16), el('span', { text: 'Add layer' })]),
+      el('p', {
+        class: 'hint',
+        text: 'Each layer has every pose and frame. Draw clothes or hair on their own layer; Play and export show them all together.',
+      }),
     ]);
   }
 
@@ -283,17 +438,17 @@ export class CharacterPanel {
         const frame = character.frames[frameIndex(this.studio.direction, f, character.frameCount)];
         if (frame) image.data.set(framePixels(frame.data, character.w, character.h));
         ctx.putImageData(image, 0, 0);
-        const reference = character.reference;
-        const picture = reference?.visible ? referenceImage(reference, () => this.refreshOnce()) : null;
-        if (reference && picture) {
-          // Behind the pixels, so the thumbnail matches the canvas.
+        // Behind the pixels, top picture first, so the thumbnail matches the canvas.
+        ctx.globalCompositeOperation = 'destination-over';
+        for (const reference of [...character.references].reverse()) {
+          const picture = reference.visible ? referenceImage(reference, () => this.refreshOnce()) : null;
+          if (!picture) continue;
           const at = referencePlacement(picture.naturalWidth, picture.naturalHeight, character.w, character.h, reference);
-          ctx.globalCompositeOperation = 'destination-over';
           ctx.globalAlpha = reference.opacity;
           ctx.drawImage(picture, at.x, at.y, at.w, at.h);
-          ctx.globalAlpha = 1;
-          ctx.globalCompositeOperation = 'source-over';
         }
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
       }
       thumb.addEventListener('click', () => {
         this.studio.select(this.studio.direction, f);
@@ -367,13 +522,20 @@ export class CharacterPanel {
 
   /** A picture behind the pixels to trace over, like a reference image on the map. */
   private traceSection(character: Character): HTMLElement {
-    const reference = character.reference;
-    const importPicture = async () => {
+    const reference = activeReference(character);
+    /** A new picture on top, or a new file in place of the chosen one. */
+    const importPicture = async (replace: boolean) => {
       const file = await pickFile('image/*');
       if (!file) return;
       try {
         const src = await readFileAsDataUrl(file);
-        character.reference = { src, opacity: reference?.opacity ?? 0.5, visible: true };
+        if (replace && reference) {
+          reference.src = src;
+          delete reference.image;
+        } else {
+          character.references.push({ src, opacity: reference?.opacity ?? 0.5, visible: true });
+          character.activeReference = character.references.length - 1;
+        }
         this.studio.emit(true);
         this.view.requestDraw();
         this.refresh();
@@ -386,14 +548,32 @@ export class CharacterPanel {
       return section('Trace a picture', [
         el('p', {
           class: 'hint',
-          text: 'Put a drawing or photo behind the pixels and draw over it. It stays in place on every pose and is not part of the character.',
+          text: 'Put drawings or photos behind the pixels and draw over them. They stay in place on every pose and are not part of the character.',
         }),
-        button('btn full', 'Import a picture to trace', () => void importPicture(), [
+        button('btn full', 'Import a picture to trace', () => void importPicture(false), [
           icon('image', 16),
           el('span', { text: 'Import a picture' }),
         ]),
       ]);
     }
+
+    const strip = el('div', { class: 'picture-strip' }, [
+      ...character.references.map((picture, index) => {
+        const chip = button(
+          `picture-chip${index === character.activeReference ? ' active' : ''}${picture.visible ? '' : ' hidden-picture'}`,
+          `Picture ${index + 1}${picture.locked ? ', locked' : ''}`,
+          () => {
+            character.activeReference = index;
+            this.studio.emit();
+            this.refresh();
+          },
+          picture.locked ? [icon('lock', 14)] : [],
+        );
+        chip.style.backgroundImage = `url("${picture.src}")`;
+        return chip;
+      }),
+      button('picture-chip add', 'Add another picture to trace', () => void importPicture(false), [icon('plus', 18)]),
+    ]);
 
     const opacity = el('input', {
       class: 'slider',
@@ -423,7 +603,14 @@ export class CharacterPanel {
     size.addEventListener('change', () => this.studio.emit());
 
     const locked = reference.locked === true;
-    return section('Trace a picture', [
+    return section('Trace pictures', [
+      strip,
+      el('p', {
+        class: 'hint',
+        text: character.references.length > 1
+          ? 'Tap a picture to adjust it. Fingers move the chosen one while it is unlocked.'
+          : 'Add more with + to trace from several drawings at once.',
+      }),
       el('label', { class: 'field' }, [
         el('span', { class: 'field-label', text: 'Fade' }),
         el('div', { class: 'slider-row' }, [opacity, readout]),
@@ -462,12 +649,13 @@ export class CharacterPanel {
           this.view.requestDraw();
           this.refresh();
         }),
-        button('chip', 'Replace the picture', () => void importPicture(), [
+        button('chip', 'Replace the picture', () => void importPicture(true), [
           icon('image', 17),
           el('span', { class: 'chip-text', text: 'Replace' }),
         ]),
         button('chip danger', 'Remove the picture', () => {
-          delete character.reference;
+          character.references.splice(character.references.indexOf(reference), 1);
+          character.activeReference = Math.max(0, Math.min(character.activeReference, character.references.length - 1));
           this.studio.emit(true);
           this.view.requestDraw();
           this.refresh();

@@ -764,6 +764,231 @@ textarea {
   padding: 0 12px 10px;
 }
 
+/* Characters and maps: cards in a grid, folders first. */
+.library {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.library-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.library-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+}
+
+.library-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.library-card.current {
+  border-color: var(--accent);
+}
+
+.library-card.folder .library-thumb {
+  color: var(--accent);
+}
+
+.library-thumb {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  background: var(--panel-2);
+  overflow: hidden;
+  color: var(--muted);
+}
+
+.library-thumb canvas,
+.library-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  image-rendering: pixelated;
+}
+
+.library-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-note {
+  min-height: 1.2em;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.library-menu {
+  position: absolute;
+  z-index: 2;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+
+.library-move {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.library-empty {
+  padding: 24px 0;
+  text-align: center;
+}
+
+.character-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.character-switch {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.character-switch canvas {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 8px;
+  background: var(--panel-2);
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
+.character-switch-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.character-switch-text span:first-child {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.layer-row.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.layer-row-name {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.picture-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.picture-chip {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  padding: 0;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2) center / contain no-repeat;
+  cursor: pointer;
+}
+
+.picture-chip.active {
+  border-color: var(--accent);
+}
+
+.picture-chip.hidden-picture {
+  opacity: 0.4;
+}
+
+.picture-chip.add {
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  border-style: dashed;
+}
+
 /* Ground or props: two equal halves, so the current choice is obvious. */
 .order-group {
   display: inline-flex;

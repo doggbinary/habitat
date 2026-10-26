@@ -13,6 +13,21 @@ export function standingFrame(character: Character): Frame | undefined {
   return inked(front) ? front : (character.frames.find(inked) ?? front);
 }
 
+/** The standing pose as a small picture, for lists of characters. */
+export function characterThumb(character: Character): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = character.w;
+  canvas.height = character.h;
+  const frame = standingFrame(character);
+  const ctx = canvas.getContext('2d');
+  if (ctx && frame) {
+    const image = ctx.createImageData(character.w, character.h);
+    image.data.set(framePixels(frame.data, character.w, character.h));
+    ctx.putImageData(image, 0, 0);
+  }
+  return canvas;
+}
+
 /**
  * Puts a character's standing pose on the Characters page and returns where.
  *

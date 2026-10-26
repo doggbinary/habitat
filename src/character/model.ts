@@ -33,13 +33,32 @@ export interface Character {
   h: number;
   /** Steps per direction in the walk cycle. */
   frameCount: number;
-  /** `DIRECTIONS.length * frameCount` frames, direction-major. */
+  /**
+   * `DIRECTIONS.length * frameCount` frames, direction-major: every visible
+   * layer flattened, which is what Play, export and previews show. Drawing
+   * happens on `layers`; `composeFrames` brings this up to date.
+   */
   frames: Frame[];
+  /** Drawing layers, bottom first, each with its own frames laid out like `frames`. */
+  layers: CharacterLayer[];
+  /** Index into `layers` of the one being drawn on. */
+  activeLayer: number;
   palette: string[];
   /** Milliseconds per frame when previewing. */
   frameMs: number;
-  /** A picture to trace over. It is never part of the sprite Play walks. */
-  reference?: CharacterReference;
+  /** Pictures to trace over, bottom first. They are never part of the sprite Play walks. */
+  references: CharacterReference[];
+  /** Index into `references` of the one the panel and fingers move. */
+  activeReference: number;
+  /** Folder in the character library, absent when it is loose. */
+  folder?: string;
+}
+
+export interface CharacterLayer {
+  id: string;
+  name: string;
+  visible: boolean;
+  frames: Frame[];
 }
 
 export interface CharacterReference {
@@ -56,6 +75,11 @@ export interface CharacterReference {
   locked?: boolean;
   /** Loaded from `src`; not saved. */
   image?: HTMLImageElement;
+}
+
+/** The traced picture the panel and fingers act on, if there is any. */
+export function activeReference(character: Character): CharacterReference | null {
+  return character.references[character.activeReference] ?? character.references[character.references.length - 1] ?? null;
 }
 
 /** The decoded picture for a reference, created on first use. */
@@ -171,6 +195,33 @@ function emptyFrame(w: number, h: number): Frame {
   return { id: uid('frame'), data: new Uint8ClampedArray(w * h * 4) };
 }
 
+function copyFrames(frames: Frame[]): Frame[] {
+  return frames.map((f) => ({ id: uid('frame'), data: new Uint8ClampedArray(f.data) }));
+}
+
+export function createLayer(character: Pick<Character, 'w' | 'h' | 'frameCount'>, name: string): CharacterLayer {
+  const frames: Frame[] = [];
+  for (let i = 0; i < DIRECTIONS.length * character.frameCount; i++) frames.push(emptyFrame(character.w, character.h));
+  return { id: uid('layer'), name, visible: true, frames };
+}
+
+/**
+ * A character from flattened frames alone, as sprite sheets and older saves
+ * provide: those frames become its one layer.
+ */
+export function characterFromFrames(
+  base: Omit<Character, 'layers' | 'activeLayer' | 'references' | 'activeReference'> &
+    Partial<Pick<Character, 'references' | 'activeReference'>>,
+): Character {
+  return {
+    ...base,
+    layers: [{ id: uid('layer'), name: 'Layer 1', visible: true, frames: copyFrames(base.frames) }],
+    activeLayer: 0,
+    references: base.references ?? [],
+    activeReference: base.activeReference ?? 0,
+  };
+}
+
 export function createCharacter(
   tileSize: number,
   tilesW = 2,
@@ -182,7 +233,7 @@ export function createCharacter(
   const h = tilesH * tileSize;
   const frames: Frame[] = [];
   for (let i = 0; i < DIRECTIONS.length * frameCount; i++) frames.push(emptyFrame(w, h));
-  return {
+  return characterFromFrames({
     id: uid('char'),
     name,
     tilesW,
@@ -193,6 +244,61 @@ export function createCharacter(
     frames,
     palette: [...STARTER_PALETTE],
     frameMs: 140,
+  });
+}
+
+/**
+ * Flattens the visible layers into `frames`, every frame or just one.
+ * Layers stack bottom first; a pixel partly see-through blends with what is
+ * under it.
+ */
+export function composeFrames(character: Character, only?: number): void {
+  const count = character.frames.length;
+  const size = character.w * character.h * 4;
+  for (let index = 0; index < count; index++) {
+    if (only !== undefined && index !== only) continue;
+    const out = character.frames[index];
+    if (out.data.length !== size) out.data = new Uint8ClampedArray(size);
+    out.data.fill(0);
+    for (const layer of character.layers) {
+      if (!layer.visible) continue;
+      const src = layer.frames[index]?.data;
+      if (!src) continue;
+      for (let i = 0; i < size; i += 4) {
+        const a = src[i + 3];
+        if (a === 0) continue;
+        if (a === 255 || out.data[i + 3] === 0) {
+          out.data[i] = src[i];
+          out.data[i + 1] = src[i + 1];
+          out.data[i + 2] = src[i + 2];
+          out.data[i + 3] = a;
+          continue;
+        }
+        const sa = a / 255;
+        const da = out.data[i + 3] / 255;
+        const oa = sa + da * (1 - sa);
+        for (let c = 0; c < 3; c++) {
+          out.data[i + c] = Math.round((src[i + c] * sa + out.data[i + c] * da * (1 - sa)) / oa);
+        }
+        out.data[i + 3] = Math.round(oa * 255);
+      }
+    }
+  }
+}
+
+/** A separate copy to carry on from: new ids, same pixels, layers and pictures. */
+export function duplicateCharacter(character: Character, name = `${character.name} copy`): Character {
+  return {
+    ...character,
+    id: uid('char'),
+    name,
+    palette: [...character.palette],
+    frames: copyFrames(character.frames),
+    layers: character.layers.map((layer) => ({ ...layer, id: uid('layer'), frames: copyFrames(layer.frames) })),
+    references: character.references.map(({ image, ...reference }) => {
+      void image;
+      return { ...reference };
+    }),
   };
 }
 
@@ -293,11 +399,13 @@ export function applyTemplate(character: Character): void {
   const legY = bodyY + bodyH;
   const legH = h - legY - px(1);
   const armW = px(3);
+  const layer = character.layers[character.activeLayer] ?? character.layers[0];
+  if (!layer) return;
 
   for (let d = 0; d < DIRECTIONS.length; d++) {
     const dir = DIRECTIONS[d];
     for (let f = 0; f < frameCount; f++) {
-      const frame = character.frames[frameIndex(d, f, frameCount)];
+      const frame = layer.frames[frameIndex(d, f, frameCount)];
       frame.data.fill(0);
 
       // Frames 0 and 2 stand; 1 and 3 are the two opposite steps. That gives a
@@ -357,14 +465,18 @@ export function applyTemplate(character: Character): void {
       }
     }
   }
+  composeFrames(character);
 }
 
 /** Deep copy, used by undo snapshots. */
 export function cloneCharacter(character: Character): Character {
+  const copy = (frames: Frame[]) => frames.map((f) => ({ id: f.id, data: new Uint8ClampedArray(f.data) }));
   return {
     ...character,
     palette: [...character.palette],
-    frames: character.frames.map((f) => ({ id: f.id, data: new Uint8ClampedArray(f.data) })),
+    frames: copy(character.frames),
+    layers: character.layers.map((layer) => ({ ...layer, frames: copy(layer.frames) })),
+    references: character.references.map((reference) => ({ ...reference })),
   };
 }
 
@@ -381,7 +493,7 @@ export function resizeCharacter(character: Character, tileSize: number, tilesW: 
   const dx = Math.round((nextW - character.w) / 2);
   const dy = nextH - character.h;
 
-  for (const frame of character.frames) {
+  for (const frame of [...character.frames, ...character.layers.flatMap((layer) => layer.frames)]) {
     const next = new Uint8ClampedArray(nextW * nextH * 4);
     for (let y = 0; y < character.h; y++) {
       const ty = y + dy;

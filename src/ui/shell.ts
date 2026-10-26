@@ -1,4 +1,4 @@
-import { CANVAS_PRESETS } from '../character/model';
+import { CANVAS_PRESETS, activeReference } from '../character/model';
 import type { PixelTool, Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
 import { flipStampH, flipStampV, rotateStampCW, type Stamp } from '../core/stamp';
@@ -36,6 +36,7 @@ export interface ShellActions {
   newMap: () => void;
   newMapFromPicture: () => void;
   openProject: () => void;
+  openMaps: () => void;
   exportMap: () => void;
   fitToView: () => void;
   playTest: () => void;
@@ -163,7 +164,11 @@ export class Shell {
       ]),
     );
 
-    this.title.addEventListener('click', () => this.openTab('map'));
+    // The name at the top opens the list it belongs to: your maps, or your characters.
+    this.title.addEventListener('click', () => {
+      if (this.mode === 'character') this.characterPanel.openLibrary();
+      else this.actions.openMaps();
+    });
 
     this.buildModeBar();
     this.buildTabs();
@@ -499,7 +504,7 @@ export class Shell {
 
     if (this.mode === 'character') {
       const character = this.studio.character;
-      const reference = character?.reference;
+      const reference = character ? activeReference(character) : null;
       const fingersMovePicture = !!reference && reference.visible && !reference.locked;
       chips.push(
         el('span', {

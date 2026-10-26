@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCharacter } from '../character/model';
+import { composeFrames, createCharacter } from '../character/model';
 import { createDoc, createObjectLayer, type ObjectLayer, type TileLayer } from '../core/doc';
 import { EMPTY, pack } from '../core/tiles';
 import { fakeObject, fakeTileset } from '../test-support/fakes';
@@ -127,27 +127,55 @@ describe('saving and loading a project', () => {
 
   it('keeps the picture traced over and the last canvas size', () => {
     const character = createCharacter(16, 2, 2, 1, 'Tracer');
-    character.reference = { src: 'data:image/png;base64,AAAA', opacity: 0.3, visible: false };
+    character.references = [{ src: 'data:image/png;base64,AAAA', opacity: 0.3, visible: false }];
     const saved = throughJson(serializeProject(createDoc(), [character], character.id, { tilesW: 3, tilesH: 4 }));
     const [back] = deserializeCharacters(saved);
-    expect(back.reference).toEqual({ src: 'data:image/png;base64,AAAA', opacity: 0.3, visible: false, locked: false });
+    expect(back.references).toEqual([{ src: 'data:image/png;base64,AAAA', opacity: 0.3, visible: false, locked: false }]);
     expect(saved.lastCharacterSize).toEqual({ tilesW: 3, tilesH: 4 });
   });
 
-  it('keeps the traced picture enlarged, moved and locked', () => {
+  it('keeps several traced pictures, enlarged, moved and locked, and which one is chosen', () => {
     const character = createCharacter(16, 2, 2, 1, 'Tracer');
-    character.reference = { src: 'data:image/png;base64,AAAA', opacity: 0.4, visible: true, scale: 2.5, x: -3, y: 4.5, locked: true };
+    character.references = [
+      { src: 'data:image/png;base64,AAAA', opacity: 0.4, visible: true, scale: 2.5, x: -3, y: 4.5, locked: true },
+      { src: 'data:image/png;base64,BBBB', opacity: 0.7, visible: true, locked: false },
+    ];
+    character.activeReference = 1;
     const [back] = deserializeCharacters(throughJson(serializeProject(createDoc(), [character])));
-    expect(back.reference).toEqual(character.reference);
+    expect(back.references).toEqual(character.references);
+    expect(back.activeReference).toBe(1);
   });
 
-  it('loads a picture saved before locking existed as locked, so fingers still draw', () => {
+  it('loads the one picture of an older save, locked, so fingers still draw', () => {
     const character = createCharacter(16, 2, 2, 1, 'Tracer');
-    character.reference = { src: 'data:image/png;base64,AAAA', opacity: 0.4, visible: true };
     const saved = throughJson(serializeProject(createDoc(), [character]));
-    delete (saved.characters![0].reference as { locked?: boolean }).locked;
+    saved.characters![0].reference = { src: 'data:image/png;base64,AAAA', opacity: 0.4, visible: true };
     const [back] = deserializeCharacters(saved);
-    expect(back.reference?.locked).toBe(true);
+    expect(back.references).toHaveLength(1);
+    expect(back.references[0].locked).toBe(true);
+  });
+
+  it('keeps layers, flattened into the frames Play walks', () => {
+    const character = createCharacter(16, 1, 1, 1, 'Layered');
+    // Body on the bottom layer, a hat over it on a second one.
+    character.layers[0].frames[0].data.set([10, 20, 30, 255], 0);
+    character.layers.push({
+      id: 'hat',
+      name: 'Hat',
+      visible: true,
+      frames: character.layers[0].frames.map((f) => ({ id: `${f.id}-hat`, data: new Uint8ClampedArray(f.data.length) })),
+    });
+    character.layers[1].frames[0].data.set([200, 0, 0, 255], 4);
+    character.activeLayer = 1;
+    composeFrames(character);
+    const [back] = deserializeCharacters(throughJson(serializeProject(createDoc(), [character])));
+    expect(back.layers.map((l) => l.name)).toEqual(['Layer 1', 'Hat']);
+    expect(back.activeLayer).toBe(1);
+    expect([...back.frames[0].data.subarray(0, 8)]).toEqual([10, 20, 30, 255, 200, 0, 0, 255]);
+    // Hiding the hat takes it out of what Play shows.
+    back.layers[1].visible = false;
+    composeFrames(back);
+    expect(back.frames[0].data[7]).toBe(0);
   });
 
   it('keeps pixels that live in part of a larger buffer', () => {
