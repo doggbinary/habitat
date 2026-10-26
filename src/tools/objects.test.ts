@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDoc, createObjectLayer, objectSize, type MapObject, type ObjectLayer } from '../core/doc';
+import { checkGrid, createDoc, createObjectLayer, objectSize, type MapObject, type ObjectLayer } from '../core/doc';
 import { Store } from '../core/store';
 import { fakeObject, fakeRenderer, fakeTileset } from '../test-support/fakes';
-import { MAX_SCALE, MIN_SCALE, ObjectTools, keepTouchingMap, lineUpObjects, onWholePixels, scaleFromCorner } from './objects';
+import {
+  MAX_SCALE,
+  MIN_SCALE,
+  ObjectTools,
+  keepTouchingMap,
+  lineUpObjects,
+  onWholePixels,
+  scaleFromCorner,
+  snapToGrid,
+} from './objects';
 
 let store: Store;
 let tools: ObjectTools;
@@ -119,10 +128,48 @@ describe('resizing', () => {
     expect(lineUpObjects(store.doc)).toBe(1);
     const { w, h } = objectSize(loose);
     expect(h % 16).toBe(0);
-    expect((loose.x - w / 2) % 16).toBe(0);
+    // 24 px wide covers two squares, so it sits 4 px in from each side.
+    expect(w).toBe(24);
+    expect((loose.x - w / 2) % 16).toBe(4);
     expect((loose.y - h / 2) % 16).toBe(0);
     expect(fixed.x).toBe(43);
     expect(lineUpObjects(store.doc)).toBe(0);
+  });
+
+  it('centres a narrow post in its square', () => {
+    // 14 px wide on 32 px squares: 9 px of grass either side, rounded to whole pixels.
+    const at = snapToGrid(14, 32, 70, 48, 32);
+    expect(at.x - 7).toBe(64 + 9);
+    expect(at.y - 16).toBe(32);
+  });
+
+  it('mirrors two posts dropped either side of a path', () => {
+    // The path is the square from 96 to 128; the posts land in the squares beside it.
+    const left = snapToGrid(14, 32, 80, 48, 32);
+    const right = snapToGrid(14, 32, 145, 48, 32);
+    const gapLeft = 96 - (left.x + 7);
+    const gapRight = right.x - 7 - 128;
+    expect(gapLeft).toBe(gapRight);
+  });
+
+  it('centres a shop four and a half squares wide across five', () => {
+    // Five squares from 128 to 288 is 160 px: 8 px either side of 144 px of shop.
+    const at = snapToGrid(144, 96, 200, 100, 32);
+    expect(at.x - 72).toBe(128 + 8);
+    expect(288 - (at.x + 72)).toBe(8);
+  });
+
+  it('counts centred objects as on the grid, and corner-snapped narrow ones as off it', () => {
+    const centred = snapToGrid(14, 32, 70, 48, 32);
+    const [post, leaning] = withObjects(
+      fakeObject({ rect: { x: 0, y: 0, w: 14, h: 32 }, ...centred }),
+      fakeObject({ rect: { x: 0, y: 0, w: 14, h: 32 }, x: 64 + 7, y: 48 }),
+    );
+    store.doc.tileSize = 32;
+    expect(checkGrid(store.doc).offGrid).toBe(1);
+    expect(lineUpObjects(store.doc)).toBe(1);
+    expect(leaning.x).toBe(post.x);
+    expect(checkGrid(store.doc).offGrid).toBe(0);
   });
 
   it('hangs off the edge, keeping one square on the map', () => {

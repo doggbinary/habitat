@@ -2,6 +2,8 @@ import {
   createObjectLayer,
   isObjectLayer,
   objectSize,
+  spanOffset,
+  spanSquares,
   uid,
   type AssetRect,
   type Doc,
@@ -77,18 +79,20 @@ export function scaleFromCorner(
 }
 
 /**
- * Lets a box hang off the edge of the map, keeping at least one square of it
- * on the map so it can still be reached. The limits fall on grid lines, so a
- * box whose corner is on the grid stays there and the part left on the map
- * still lines up with the squares.
+ * Lets an object hang off the edge of the map, keeping at least one of the
+ * squares it covers on the map so it can still be reached. The limits apply
+ * to those whole squares and fall on grid lines, so art centred in its
+ * squares stays centred and the part left on the map still lines up.
  */
 export function keepTouchingMap(obj: MapObject, mapW: number, mapH: number, tile: number): void {
   const { w, h } = objectSize(obj);
-  const axis = (start: number, size: number, map: number) => {
-    const keep = Math.min(tile, size, map);
-    const min = Math.ceil((keep - size) / tile) * tile;
+  const axis = (artStart: number, size: number, map: number) => {
+    const span = spanSquares(size, tile) * tile;
+    const offset = spanOffset(size, tile);
+    const keep = Math.min(tile, span, map);
+    const min = Math.ceil((keep - span) / tile) * tile;
     const max = Math.floor((map - keep) / tile) * tile;
-    return Math.max(min, Math.min(max, start));
+    return Math.max(min, Math.min(max, artStart - offset)) + offset;
   };
   obj.x = axis(obj.x - w / 2, w, mapW) + w / 2;
   obj.y = axis(obj.y - h / 2, h, mapH) + h / 2;
@@ -96,7 +100,7 @@ export function keepTouchingMap(obj: MapObject, mapW: number, mapH: number, tile
 
 /**
  * Lines every unlocked object up with the grid: whole squares on its longer
- * side, its corner on a grid line. Returns how many moved or changed size.
+ * side, centred in the squares it covers. Returns how many moved or changed size.
  */
 export function lineUpObjects(doc: Doc): number {
   const tile = doc.tileSize;
@@ -118,12 +122,20 @@ export function lineUpObjects(doc: Doc): number {
   return changed;
 }
 
-/** Centre of a box whose top-left corner sits on a grid line. */
+/**
+ * Centre for art of this size, centred in the whole squares it covers. Art
+ * rarely fills its squares exactly, and pushed into a corner it leans: two
+ * posts either side of a path would not mirror each other, and a door would
+ * sit to one side of the path below it.
+ */
 export function snapToGrid(w: number, h: number, x: number, y: number, tile: number): { x: number; y: number } {
   if (tile <= 0) return { x, y };
-  const left = Math.round((x - w / 2) / tile) * tile;
-  const top = Math.round((y - h / 2) / tile) * tile;
-  return { x: left + w / 2, y: top + h / 2 };
+  const axis = (centre: number, size: number) => {
+    const span = spanSquares(size, tile) * tile;
+    const start = Math.round((centre - span / 2) / tile) * tile;
+    return start + spanOffset(size, tile) + size / 2;
+  };
+  return { x: axis(x, w), y: axis(y, h) };
 }
 
 /** True when two placed assets cover some of the same ground. */
@@ -571,8 +583,8 @@ export class ObjectTools {
   }
 
   /**
-   * Where a box of this size should sit: its top-left corner on a grid line,
-   * so every object occupies whole squares.
+   * Where a box of this size should sit: centred in the whole squares it
+   * covers, so every object occupies whole squares.
    */
   aligned(w: number, h: number, x: number, y: number, ignoreId?: string): { x: number; y: number } {
     void ignoreId;
@@ -582,7 +594,7 @@ export class ObjectTools {
 
   /**
    * Grows or shrinks in whole map squares, measured on the longer side.
-   * The corner of the box stays on a grid line.
+   * The art stays centred in the squares it covers.
    */
   scaleTo(obj: MapObject, scale: number): void {
     if (obj.locked) return;

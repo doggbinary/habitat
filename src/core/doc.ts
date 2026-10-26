@@ -363,12 +363,25 @@ function scalesEvenly(art: number, tile: number): boolean {
   return art > 0 && tile > 0 && (art % tile === 0 || tile % art === 0);
 }
 
+/** How many whole squares a length of art covers, never fewer than one. */
+export function spanSquares(size: number, tile: number): number {
+  return Math.max(1, Math.ceil(size / tile - 1e-6));
+}
+
+/**
+ * How far art of this length sits into the whole squares it covers so that
+ * it is centred in them, rounded to a whole pixel.
+ */
+export function spanOffset(size: number, tile: number): number {
+  return Math.round((spanSquares(size, tile) * tile - size) / 2);
+}
+
 export interface GridCheck {
   /** Sheets the map uses whose art is drawn on a different square size, so it is stretched or shrunk. */
   mismatched: { name: string; tileW: number; uses: number }[];
   /** The square size most of the map's art is drawn on, when that is not the map's own. */
   suggested: number | null;
-  /** Placed objects whose corner is not on a grid line. */
+  /** Placed objects whose art is not centred in the whole squares it covers. */
   offGrid: number;
 }
 
@@ -391,8 +404,8 @@ export function checkGrid(doc: Doc): GridCheck {
       const index = doc.tilesets.findIndex((t) => t.id === obj.tilesetId);
       if (index >= 0) uses.set(index, (uses.get(index) ?? 0) + 1);
       const { w, h } = objectSize(obj);
-      const left = obj.x - w / 2;
-      const top = obj.y - h / 2;
+      const left = obj.x - w / 2 - spanOffset(w, tile);
+      const top = obj.y - h / 2 - spanOffset(h, tile);
       const on = (v: number) => Math.abs(v / tile - Math.round(v / tile)) < 1e-6;
       if (!on(left) || !on(top)) offGrid += 1;
     }

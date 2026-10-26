@@ -149,7 +149,10 @@ export class MapPanel {
 
     if (check.offGrid > 0) {
       items.push(
-        el('p', { class: 'hint', text: `${check.offGrid} object${check.offGrid === 1 ? ' sits' : 's sit'} between grid squares.` }),
+        el('p', {
+          class: 'hint',
+          text: `${check.offGrid} object${check.offGrid === 1 ? ' is' : 's are'} not centred in ${check.offGrid === 1 ? 'its' : 'their'} squares.`,
+        }),
         button('btn subtle full', 'Line objects up with the grid', () => {
           let moved = 0;
           this.editor.structural('Line up objects', () => {
@@ -160,7 +163,7 @@ export class MapPanel {
         }, [el('span', { text: 'Line objects up with the grid' })]),
       );
     } else {
-      items.push(el('p', { class: 'hint', text: 'Every object sits on the grid.' }));
+      items.push(el('p', { class: 'hint', text: 'Every object sits centred in its squares.' }));
     }
 
     return section('Check the grid', items);
