@@ -1,7 +1,7 @@
 import { DIRECTIONS, frameIndex, framePixels, type Character, type Frame } from '../character/model';
 import { createLayer, objectSize, type Doc, type MapObject, type TileLayer } from '../core/doc';
 import type { Store } from '../core/store';
-import { EMPTY, pack } from '../core/tiles';
+import { EMPTY } from '../core/tiles';
 import { drawObject } from '../render/object-draw';
 import { drawTile } from '../render/tile-draw';
 import { scaleFromCorner, type ObjectTools } from '../tools/objects';
@@ -88,6 +88,7 @@ export class PlayMode {
   private readonly menu: HTMLElement;
   private readonly sizeButton: HTMLButtonElement;
   private readonly blockButton: HTMLButtonElement;
+  private readonly lockButton: HTMLButtonElement;
   private readonly smallerButton: HTMLButtonElement;
   private readonly biggerButton: HTMLButtonElement;
   private readonly undoButton: HTMLButtonElement;
@@ -145,18 +146,20 @@ export class PlayMode {
     this.smallerButton = button('play-menu-btn play-menu-step', '−', () => this.stepSize(-1));
     this.biggerButton = button('play-menu-btn play-menu-step', '+', () => this.stepSize(1));
     this.blockButton = button('play-menu-btn', 'Block', () => this.toggleBlock());
+    this.lockButton = button('play-menu-btn', 'Lock', () => this.toggleLock());
     this.menu = element('div', 'play-object-menu', [
       this.sizeButton,
       this.smallerButton,
       this.biggerButton,
       this.blockButton,
+      this.lockButton,
     ]);
     // A press on the menu must not reach the map underneath and deselect.
     this.menu.addEventListener('pointerdown', (e) => e.stopPropagation());
 
     const hint = element('div', 'play-hint');
     hint.textContent =
-      'Walk with the stick. Tap an object to move, size or block it. Pinch to zoom. Two-finger tap undoes, three redoes.';
+      'Walk with the stick. Tap an object to move, size, block or lock it. Pinch to zoom. Two-finger tap undoes, three redoes.';
 
     this.root = element('div', 'play-root', [
       this.canvas,
@@ -365,6 +368,8 @@ export class PlayMode {
     } else if (this.gesture === 'move') {
       this.objects.moveSelected(found.obj, world.x - this.grabDx, world.y - this.grabDy);
     }
+    // A blocking object takes its blocked squares along as it moves and resizes.
+    if (found.obj.blocks) this.refreshSolid();
   }
 
   private finishGesture(): void {
@@ -379,7 +384,10 @@ export class PlayMode {
 
   /** A second finger turns the gesture into a zoom and puts back anything the first finger dragged. */
   private startPinch(): void {
-    if (this.gesture === 'move' || this.gesture === 'size') this.objects.revertGesture();
+    if (this.gesture === 'move' || this.gesture === 'size') {
+      this.objects.revertGesture();
+      this.refreshSolid();
+    }
     const [a, b] = [...this.pointers.values()];
     this.pinchDistance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
     this.pinchZoom = this.zoom;
@@ -411,31 +419,43 @@ export class PlayMode {
     this.objects.beginGesture();
     this.objects.stepSize(found.obj, squares);
     this.objects.endGesture('Resize');
+    this.refreshSolid();
   }
 
-  /** Makes the squares under the object stop the character, or frees them again. */
+  /**
+   * Makes the object stop the character, or lets it through again. Block
+   * belongs to the object, so the blocked squares move and resize with it.
+   * Unblocking also clears squares an older version painted under it.
+   */
   private toggleBlock(): void {
     const found = this.objects.selected();
     if (!found) return;
-    const cells = objectCells(this.doc, found.obj);
-    if (cells.length === 0) return;
     const blocked = this.isBlocked(found.obj);
-    const marker = this.markerTile();
-    this.store.history.transact(blocked ? 'Unblock' : 'Block', () => {
-      const layer = ensureCollisionLayer(this.doc);
-      for (const index of cells) layer.data[index] = blocked ? EMPTY : marker;
-    });
+    this.objects.beginGesture();
+    if (blocked) {
+      delete found.obj.blocks;
+      const cells = objectCells(this.doc, found.obj);
+      for (const layer of this.doc.layers) {
+        if (layer.kind !== 'tiles' || !layer.collider) continue;
+        for (const index of cells) layer.data[index] = EMPTY;
+      }
+    } else {
+      found.obj.blocks = true;
+    }
+    this.objects.endGesture(blocked ? 'Unblock' : 'Block');
     this.refreshSolid();
   }
 
   private isBlocked(obj: MapObject): boolean {
+    if (obj.blocks) return true;
     const cells = objectCells(this.doc, obj);
     return cells.length > 0 && cells.every((index) => this.solid[index] === 1);
   }
 
-  private markerTile(): number {
-    for (const tile of this.store.stamp.tiles) if (tile !== EMPTY) return tile;
-    return this.doc.tilesets.length > 0 ? pack(0, 0) : EMPTY;
+  private toggleLock(): void {
+    if (!this.objects.selected()) return;
+    this.objects.toggleLock();
+    this.sizeOpen = false;
   }
 
   private refreshSolid(): void {
@@ -649,10 +669,14 @@ export class PlayMode {
   private placeMenu(obj: MapObject, x: number, y: number, w: number): void {
     const menu = this.menu;
     menu.classList.add('visible');
+    const locked = !!obj.locked;
     this.sizeButton.classList.toggle('active', this.sizeOpen);
+    this.sizeButton.disabled = locked;
     this.smallerButton.hidden = !this.sizeOpen;
     this.biggerButton.hidden = !this.sizeOpen;
     this.blockButton.classList.toggle('active', this.isBlocked(obj));
+    this.lockButton.classList.toggle('active', locked);
+    this.lockButton.textContent = locked ? 'Unlock' : 'Lock';
     const mw = menu.offsetWidth;
     const mh = menu.offsetHeight;
     const left = clamp(x + w / 2 - mw / 2, 8, this.viewW - mw - 8);
@@ -775,10 +799,21 @@ export function ensureCollisionLayer(doc: Doc): TileLayer {
   return layer;
 }
 
-/** Any tile on a collision layer is solid. */
+/**
+ * Any tile on a collision layer is solid, and so is every square under an
+ * object set to Block, measured from where the object is now.
+ */
 export function buildCollision(doc: Doc): Uint8Array {
   const solid = new Uint8Array(doc.width * doc.height);
   for (const layer of doc.layers) {
+    if (layer.kind === 'objects') {
+      if (!layer.visible) continue;
+      for (const obj of layer.objects) {
+        if (!obj.blocks) continue;
+        for (const index of objectCells(doc, obj)) solid[index] = 1;
+      }
+      continue;
+    }
     if (layer.kind !== 'tiles' || !layer.collider) continue;
     for (let i = 0; i < solid.length; i++) {
       if (layer.data[i] !== EMPTY) solid[i] = 1;

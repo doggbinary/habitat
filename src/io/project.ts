@@ -15,6 +15,9 @@ import type { AssetFolder, AssetRef } from '../ui/packs';
 const finite = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 
+const stringList = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+
 /**
  * Rebuilds a placed object, filling anything missing with a neutral value.
  * A file edited by hand or written by an older build should load with its
@@ -40,6 +43,9 @@ function readObject(raw: Partial<MapObject>): MapObject {
     hueShift: finite(raw.hueShift, 0),
     saturation: finite(raw.saturation, 1),
     brightness: finite(raw.brightness, 1),
+    ...(finite(raw.contrast, 1) !== 1 ? { contrast: finite(raw.contrast, 1) } : {}),
+    ...(finite(raw.clarity, 0) !== 0 ? { clarity: finite(raw.clarity, 0) } : {}),
+    ...(raw.blocks ? { blocks: true } : {}),
     ...(raw.locked ? { locked: true } : {}),
     ...(typeof raw.groupId === 'string' && raw.groupId ? { groupId: raw.groupId } : {}),
   };
@@ -146,6 +152,8 @@ export interface SerializedProject {
   lastCharacterSize?: { tilesW: number; tilesH: number };
   pins?: AssetRef[];
   folders?: AssetFolder[];
+  removedSheets?: string[];
+  pinnedPacks?: string[];
 }
 
 function toBase64(buffer: ArrayBufferLike): string {
@@ -203,6 +211,8 @@ export function serializeProject(
           })),
         }
       : {}),
+    ...(doc.removedSheets.length ? { removedSheets: [...doc.removedSheets] } : {}),
+    ...(doc.pinnedPacks.length ? { pinnedPacks: [...doc.pinnedPacks] } : {}),
     width: doc.width,
     height: doc.height,
     tileSize: doc.tileSize,
@@ -406,6 +416,8 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
     tilesets,
     pins: data.pins ?? [],
     folders: data.folders ?? [],
+    removedSheets: stringList(data.removedSheets),
+    pinnedPacks: stringList(data.pinnedPacks),
     layers,
     activeLayer: Math.min(Math.max(0, data.activeLayer ?? 0), Math.max(0, layers.length - 1)),
   };

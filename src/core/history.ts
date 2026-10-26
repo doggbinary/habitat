@@ -28,6 +28,10 @@ export interface DocSnapshot {
   activeLayer: number;
   layers: Layer[];
   tilesets: Tileset[];
+  pins: Doc['pins'];
+  folders: Doc['folders'];
+  removedSheets: string[];
+  pinnedPacks: string[];
 }
 
 interface SnapshotEntry {
@@ -60,6 +64,10 @@ export function snapshot(doc: Doc): DocSnapshot {
     activeLayer: doc.activeLayer,
     layers: doc.layers.map(copyLayer),
     tilesets: doc.tilesets.map((t) => ({ ...t, assets: t.assets?.map((a) => ({ ...a })) })),
+    pins: [...(doc.pins ?? [])],
+    folders: (doc.folders ?? []).map((f) => ({ ...f, assets: [...f.assets] })),
+    removedSheets: [...(doc.removedSheets ?? [])],
+    pinnedPacks: [...(doc.pinnedPacks ?? [])],
   };
 }
 
@@ -72,6 +80,10 @@ function restore(doc: Doc, snap: DocSnapshot): void {
   doc.activeLayer = snap.activeLayer;
   doc.layers = snap.layers.map(copyLayer);
   doc.tilesets = snap.tilesets.map((t) => ({ ...t }));
+  doc.pins = [...snap.pins];
+  doc.folders = snap.folders.map((f) => ({ ...f, assets: [...f.assets] }));
+  doc.removedSheets = [...snap.removedSheets];
+  doc.pinnedPacks = [...snap.pinnedPacks];
 }
 
 /**

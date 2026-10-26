@@ -56,6 +56,11 @@ export function bindKeyboard(options: {
       return;
     }
 
+    if ((key === 'delete' || key === 'backspace') && shell.deleteSelected()) {
+      e.preventDefault();
+      return;
+    }
+
     if (shell.selectToolByKey(key)) {
       e.preventDefault();
       return;

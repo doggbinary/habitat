@@ -8,12 +8,6 @@ export function isLibrarySheet(folders: string[], file: string): boolean {
   return /^tile-b-\d+\.png$/i.test(file) || /^\d+\.png$/i.test(file);
 }
 
-/** Floor pages (RPG Maker A2) are the road, grass, gravel and brick squares. */
-export function isPathSheet(folders: string[], file: string): boolean {
-  if (folders.some((folder) => /\(\d+\)$/.test(folder))) return false;
-  return /(?:^|[^a-z0-9])a2(?:[^0-9]|$)/i.test(file);
-}
-
 export function libraryUrl(folders: string[], file: string): string {
   return `library/${[...folders, file].map((part) => encodeURIComponent(part)).join('/')}`;
 }
@@ -21,11 +15,6 @@ export function libraryUrl(folders: string[], file: string): string {
 export interface LibraryFile {
   folders: string[];
   file: string;
-  /**
-   * Identity of the picture. Path pages with the same id are the same sheet
-   * copied into several packs, and only the first is kept.
-   */
-  id?: string;
   /** Square size the pack was drawn on, when it is not 48 px. */
   tile?: number;
   /** The page holds only whole objects. */
@@ -34,39 +23,21 @@ export interface LibraryFile {
   assets?: { x: number; y: number; w: number; h: number }[];
 }
 
-/**
- * Object pages keep their pack names. Packs repeat the same floor page, so
- * each distinct one is kept once as Floors 1, Floors 2, and so on, listed
- * first.
- */
+/** Object pages, named after their pack and listed in pack order. */
 export function buildLibraryEntries(files: LibraryFile[]): LibraryEntry[] {
   const objects: LibraryEntry[] = [];
-  const paths: LibraryEntry[] = [];
-  const seenPath = new Set<string>();
   for (const item of files) {
-    const url = libraryUrl(item.folders, item.file);
-    if (isLibrarySheet(item.folders, item.file)) {
-      objects.push({
-        name: librarySheetName(item.folders, item.file),
-        url,
-        ...(item.tile ? { tile: item.tile } : {}),
-        ...(item.props ? { props: true } : {}),
-        ...(item.assets?.length ? { assets: item.assets } : {}),
-      });
-    }
-    else if (isPathSheet(item.folders, item.file)) {
-      const id = item.id ?? url;
-      if (seenPath.has(id)) continue;
-      seenPath.add(id);
-      paths.push({ name: url, url });
-    }
+    if (!isLibrarySheet(item.folders, item.file)) continue;
+    objects.push({
+      name: librarySheetName(item.folders, item.file),
+      url: libraryUrl(item.folders, item.file),
+      ...(item.tile ? { tile: item.tile } : {}),
+      ...(item.props ? { props: true } : {}),
+      ...(item.assets?.length ? { assets: item.assets } : {}),
+    });
   }
   objects.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-  paths.sort((a, b) => a.url.localeCompare(b.url, undefined, { numeric: true }));
-  paths.forEach((entry, index) => {
-    entry.name = `Floors ${index + 1}`;
-  });
-  return [...paths, ...objects];
+  return objects;
 }
 
 /** "Nature Park" + "tile-B-01.png" becomes "Nature Park 1". */

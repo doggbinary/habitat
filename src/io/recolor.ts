@@ -15,7 +15,55 @@ export interface RecolorOptions {
   saturation: number;
   /** Brightness multiplier, 1 leaves it alone. */
   brightness: number;
+  /** Pushes light and dark apart around mid-grey; 1 leaves it alone. */
+  contrast?: number;
+  /** Sharpens each pixel against its neighbours, 0 to 1; 0 leaves it alone. */
+  clarity?: number;
 }
+
+/** Strength of full clarity: how far a pixel is pushed away from its neighbours' average. */
+const CLARITY_STRENGTH = 1.5;
+
+/**
+ * Sharpens pixel art: each pixel moves away from the average of its four
+ * neighbours. Only opaque neighbours count, so an outline against a clear
+ * background does not grow a dark halo.
+ */
+export function sharpenPixels(data: Uint8ClampedArray, w: number, h: number, amount: number): void {
+  if (amount <= 0) return;
+  const source = data.slice();
+  const k = amount * CLARITY_STRENGTH;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      if (source[o + 3] === 0) continue;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let n = 0;
+      const add = (nx: number, ny: number) => {
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
+        const p = (ny * w + nx) * 4;
+        if (source[p + 3] === 0) return;
+        r += source[p];
+        g += source[p + 1];
+        b += source[p + 2];
+        n += 1;
+      };
+      add(x - 1, y);
+      add(x + 1, y);
+      add(x, y - 1);
+      add(x, y + 1);
+      if (n === 0) continue;
+      data[o] = source[o] + k * (source[o] - r / n);
+      data[o + 1] = source[o + 1] + k * (source[o + 1] - g / n);
+      data[o + 2] = source[o + 2] + k * (source[o + 2] - b / n);
+    }
+  }
+}
+
+/** Leaves the art as it is. The recolour dialog starts here. */
+export const NO_RECOLOR: RecolorOptions = { hueShift: 0, saturation: 1, brightness: 1 };
 
 /**
  * The hue the art is "about", weighted by how colourful each pixel is.
@@ -99,6 +147,7 @@ export function recolorToCanvas(
 
   const image_ = ctx.getImageData(0, 0, w, h);
   const data = image_.data;
+  const contrast = options.contrast ?? 1;
 
   for (let o = 0; o < data.length; o += 4) {
     // Transparent pixels carry no colour worth shifting.
@@ -110,10 +159,12 @@ export function recolorToCanvas(
     hsv.v = Math.max(0, Math.min(1, hsv.v * options.brightness));
 
     const [r, g, b] = hsvToRgb(hsv);
-    data[o] = r;
-    data[o + 1] = g;
-    data[o + 2] = b;
+    // Clamped by the pixel array itself.
+    data[o] = (r - 128) * contrast + 128;
+    data[o + 1] = (g - 128) * contrast + 128;
+    data[o + 2] = (b - 128) * contrast + 128;
   }
+  sharpenPixels(data, w, h, options.clarity ?? 0);
 
   ctx.putImageData(image_, 0, 0);
   return canvas;

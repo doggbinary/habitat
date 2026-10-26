@@ -1,5 +1,4 @@
-import { assetIsGround, assetsOf, tileIsGround } from '../core/assets';
-import { EMPTY, indexOf, tilesetOf } from '../core/tiles';
+import { assetIsGround, assetsOf } from '../core/assets';
 import { isMovableImage, objectSize, type ImageLayer, type MapObject } from '../core/doc';
 import type { Shape, Store } from '../core/store';
 import { clampZoom, screenToCell, screenToWorld, snapZoom, zoomAt } from '../render/camera';
@@ -7,7 +6,7 @@ import type { Renderer } from '../render/renderer';
 import type { Editor } from '../tools/edit';
 import { lineCells } from '../tools/geometry';
 import { hitsHandle, scaleFromHandle, snapPlacement } from '../tools/image-transform';
-import { HANDLE_HIT, objectHandlePoint, scaleFromCorner, type ObjectTools } from '../tools/objects';
+import { HANDLE_HIT, scaleFromCorner, type ObjectTools } from '../tools/objects';
 
 interface TrackedPointer {
   id: number;
@@ -98,6 +97,8 @@ export class PointerInput {
   private grab = { dx: 0, dy: 0 };
   private objectMoved = false;
   private scaleStart = 1;
+  /** The grip being dragged belongs to a selection of several assets. */
+  private scalingGroup = false;
   private scaleAnchor = { x: 0, y: 0 };
   private scaleStartSize = { w: 1, h: 1 };
 
@@ -174,9 +175,8 @@ export class PointerInput {
   // --- Assets --------------------------------------------------------------
 
   private onSelectedHandle(x: number, y: number): boolean {
-    const found = this.objects.selected();
-    if (!found) return false;
-    const handle = objectHandlePoint(this.store.camera, found.obj);
+    const handle = this.objects.handlePoint();
+    if (!handle) return false;
     return Math.hypot(x - handle.x, y - handle.y) <= HANDLE_HIT;
   }
 
@@ -195,9 +195,13 @@ export class PointerInput {
     this.mode = 'object-scale';
     this.activeId = pointer.id;
     const world = this.worldAt(pointer.x, pointer.y);
-    const size = objectSize(found.obj);
-    const anchor = { x: found.obj.x - size.w / 2, y: found.obj.y - size.h / 2 };
-    this.scaleStart = found.obj.scale;
+    // Several assets resize as one picture, from the corner of their box.
+    const box = this.objects.selectionBox();
+    this.scalingGroup = !!box;
+    if (box) this.objects.beginGroupScale();
+    const size = box ?? objectSize(found.obj);
+    const anchor = box ? { x: box.x, y: box.y } : { x: found.obj.x - size.w / 2, y: found.obj.y - size.h / 2 };
+    this.scaleStart = box ? 1 : found.obj.scale;
     this.scaleAnchor = anchor;
     this.scaleStartSize = {
       w: Math.max(1, world.x - anchor.x),
@@ -317,21 +321,6 @@ export class PointerInput {
     this.editor.beginImageTransform();
   }
 
-  /**
-   * A finger may paint only while a path square is the brush, and only with
-   * "Finger paints paths" on. Objects are placed, not stroked, so picking a
-   * bench must not turn the next touch into a draw. The eraser follows the
-   * same switch, so a finger never wipes the map by surprise.
-   */
-  private fingerPaints(): boolean {
-    if (this.spaceHeld || this.store.tool === 'pan' || this.store.tool === 'select') return false;
-    if (!this.store.settings.fingerDraws) return false;
-    const tool = this.store.tool;
-    if (tool === 'eraser') return true;
-    if (tool !== 'brush' && tool !== 'fill' && tool !== 'rect' && tool !== 'line') return false;
-    return this.stampIsGround();
-  }
-
   /** The character left standing on the map opens its menu instead of painting under it. */
   private pressCharacter(pointer: TrackedPointer, e: PointerEvent): boolean {
     const preview = this.store.characterPreview;
@@ -348,34 +337,16 @@ export class PointerInput {
   private lastPanHint = 0;
 
   /**
-   * A finger on a painting tool pans when the brush is not a floor square.
+   * A finger never paints the map, so a finger on a painting tool pans.
    * Say so, at most every few seconds, so it does not look like the tool broke.
    */
   private explainFingerPan(): void {
     const tool = this.store.tool;
-    if (tool !== 'brush' && tool !== 'fill' && tool !== 'rect' && tool !== 'line') return;
+    if (tool !== 'brush' && tool !== 'fill' && tool !== 'rect' && tool !== 'line' && tool !== 'eraser') return;
     const now = performance.now();
     if (now - this.lastPanHint < 5000) return;
     this.lastPanHint = now;
-    const name = tool === 'rect' ? 'Rectangle' : tool === 'line' ? 'Line' : tool === 'fill' ? 'Fill' : 'The brush';
-    this.store.toast(
-      this.store.settings.fingerDraws
-        ? `${name} paints floor squares with a finger. Pick a floor square, or use the Pencil.`
-        : `Turn on Finger paints floors to use ${name.toLowerCase()} with a finger.`,
-    );
-  }
-
-  /** True when every square of the brush is a path or floor square. */
-  private stampIsGround(): boolean {
-    const { stamp, doc } = this.store;
-    let any = false;
-    for (const tile of stamp.tiles) {
-      if (tile === EMPTY) continue;
-      const sheet = doc.tilesets[tilesetOf(tile)];
-      if (!sheet || !tileIsGround(sheet, indexOf(tile))) return false;
-      any = true;
-    }
-    return any;
+    this.store.toast('Draw with the Pencil. One finger moves the map.');
   }
 
   /** The Pencil, a mouse, or a drawing finger has touched down. */
@@ -395,8 +366,9 @@ export class PointerInput {
     }
 
     // The picked object stays armed: a tap on empty map drops another copy,
-    // and a tap on one already there selects it instead of painting.
-    if (!penEraser && !this.spaceHeld && this.armedObject()) {
+    // and a tap on one already there selects it instead of painting. Only
+    // the brush places; Pick tile and the other tools do their own job.
+    if (!penEraser && !this.spaceHeld && this.store.tool === 'brush' && this.armedObject()) {
       if (this.pressAsset(pointer, pointer.type !== 'touch')) return;
       if (this.beginPlace(pointer, true)) return;
     }
@@ -564,7 +536,7 @@ export class PointerInput {
    * meanwhile pans, so a drag does not drop a copy.
    */
   private beginPlace(pointer: TrackedPointer, precise: boolean): boolean {
-    if (!this.armedObject()) return false;
+    if (this.store.tool !== 'brush' || !this.armedObject()) return false;
     this.placeArmed = true;
     this.gestureStart = performance.now();
     this.gestureMoved = false;
@@ -639,7 +611,6 @@ export class PointerInput {
         this.startDraw(pointer, false);
         return;
       }
-      // A finger can select an object even while it is allowed to paint floors.
       if (!this.spaceHeld && this.pressAsset(pointer, false)) return;
       if (this.tapObject) {
         this.beginPan(pointer);
@@ -651,11 +622,8 @@ export class PointerInput {
         this.startSelect(pointer);
         return;
       }
-      if (this.fingerPaints()) this.startDraw(pointer, false);
-      else {
-        this.explainFingerPan();
-        this.beginPan(pointer);
-      }
+      this.explainFingerPan();
+      this.beginPan(pointer);
       return;
     }
 
@@ -715,18 +683,17 @@ export class PointerInput {
       const found = this.objects.selected();
       if (found) {
         const world = this.worldAt(x, y);
-        this.objects.scaleTo(
-          found.obj,
-          scaleFromCorner(
-            this.scaleStart,
-            this.scaleStartSize.w,
-            this.scaleStartSize.h,
-            this.scaleAnchor.x,
-            this.scaleAnchor.y,
-            world.x,
-            world.y,
-          ),
+        const scale = scaleFromCorner(
+          this.scaleStart,
+          this.scaleStartSize.w,
+          this.scaleStartSize.h,
+          this.scaleAnchor.x,
+          this.scaleAnchor.y,
+          world.x,
+          world.y,
         );
+        if (this.scalingGroup) this.objects.scaleSelection(scale);
+        else this.objects.scaleTo(found.obj, scale);
       }
       return;
     }
@@ -1068,7 +1035,8 @@ export class PointerInput {
     if (touches.length < 2 || !found) return;
     const [a, b] = touches;
     const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-    this.objects.scaleTo(found.obj, this.scaleStart * (distance / this.pinchDistance));
+    if (this.scalingGroup) this.objects.scaleSelection(distance / this.pinchDistance);
+    else this.objects.scaleTo(found.obj, this.scaleStart * (distance / this.pinchDistance));
   }
 
   /** Two quick taps on the same ground cell open that tile's menu. */

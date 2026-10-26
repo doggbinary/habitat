@@ -191,7 +191,13 @@ export function buildObjectLayers(doc: Doc): Record<string, unknown>[] {
       if (obj.flipX) entry.flipX = true;
       if (obj.flipY) entry.flipY = true;
       if (isRecolored(obj)) {
-        entry.color = { hueShift: obj.hueShift, saturation: obj.saturation, brightness: obj.brightness };
+        entry.color = {
+          hueShift: obj.hueShift,
+          saturation: obj.saturation,
+          brightness: obj.brightness,
+          contrast: obj.contrast ?? 1,
+          clarity: obj.clarity ?? 0,
+        };
       }
       return entry;
     });

@@ -421,3 +421,70 @@ describe('duplicate and delete', () => {
     expect((store.doc.layers.find((l) => l.id === layer.id) as ObjectLayer).objects).toHaveLength(1);
   });
 });
+
+describe('several assets at once', () => {
+  const pick = (...objs: MapObject[]) => tools.selectMany(objs.map((obj) => ({ layer, obj })));
+
+  it('deletes everything selected as one undo step, keeping locked ones', () => {
+    const [a, b, c, keep] = withObjects(
+      fakeObject({ id: 'a' }),
+      fakeObject({ id: 'b', x: 120 }),
+      fakeObject({ id: 'c', x: 40, y: 120, locked: true }),
+      fakeObject({ id: 'keep', x: 140, y: 140 }),
+    );
+    void keep;
+    pick(a, b, c);
+    tools.remove();
+    expect(layer.objects.map((o) => o.id)).toEqual(['c', 'keep']);
+    expect(store.selectedGroup).toEqual([]);
+    store.history.undo();
+    expect((store.doc.layers.find((l) => l.id === layer.id) as ObjectLayer).objects).toHaveLength(4);
+  });
+
+  it('duplicates everything selected, and a copied group is a new group of its own', () => {
+    const [a, b] = withObjects(fakeObject({ id: 'a', groupId: 'g1' }), fakeObject({ id: 'b', x: 72, groupId: 'g1' }));
+    tools.select(layer, a);
+    tools.duplicate();
+    const copies = layer.objects.filter((o) => o.id !== 'a' && o.id !== 'b');
+    expect(copies).toHaveLength(2);
+    expect(copies[0].groupId).toBeDefined();
+    expect(copies[0].groupId).not.toBe('g1');
+    expect(copies[1].groupId).toBe(copies[0].groupId);
+    expect(store.selectedGroup.map((sel) => sel.objectId).sort()).toEqual(copies.map((o) => o.id).sort());
+    // The copies keep their spacing.
+    expect(copies[1].x - copies[0].x).toBe(b.x - a.x);
+  });
+
+  it('offers Ungroup only when the selection is one whole group', () => {
+    const [a, b, c] = withObjects(
+      fakeObject({ id: 'a', groupId: 'g1' }),
+      fakeObject({ id: 'b', groupId: 'g1' }),
+      fakeObject({ id: 'c' }),
+    );
+    tools.select(layer, a);
+    expect(tools.sharedGroup()).toBe('g1');
+    pick(a, b, c);
+    expect(tools.sharedGroup()).toBeNull();
+  });
+
+  it('resizes a selection from its top-left corner, keeping each asset in its place', () => {
+    // Two 16 x 32 assets side by side, one square apart: a box 48 wide.
+    const [a, b] = withObjects(fakeObject({ id: 'a', x: 40, y: 48 }), fakeObject({ id: 'b', x: 72, y: 48 }));
+    pick(a, b);
+    const box = tools.selectionBox()!;
+    expect(box).toEqual({ x: 32, y: 32, w: 48, h: 32 });
+    tools.beginGroupScale();
+    tools.beginGesture();
+    tools.scaleSelection(2);
+    expect(a.scale).toBe(2);
+    expect(b.scale).toBe(2);
+    // The corner stays put and the gap doubles along with everything else.
+    expect(a.x - 16).toBe(32);
+    expect(a.y - 32).toBe(32);
+    expect(b.x - 16).toBe(32 + 64);
+    tools.endGesture('Resize');
+    store.history.undo();
+    const restored = (store.doc.layers.find((l) => l.id === layer.id) as ObjectLayer).objects;
+    expect(restored.map((o) => o.scale)).toEqual([1, 1]);
+  });
+});

@@ -13,12 +13,14 @@ export function openColorPopover(options: {
   initial: string;
   onChange: (hex: string) => void;
   onClose?: () => void;
+  /** More controls, placed under the wheel's Brightness slider. */
+  extra?: HTMLElement[];
 }): void {
   const backdrop = el('div', { class: 'popover-backdrop' });
   const panel = el('div', { class: 'popover' });
 
   const wheel = new ColorWheel(options.initial, options.onChange);
-  panel.append(wheel.element);
+  panel.append(wheel.element, ...(options.extra ?? []));
   backdrop.append(panel);
   document.body.append(backdrop);
 

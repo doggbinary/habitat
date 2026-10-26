@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clearWhiteBackdrop } from './background';
+import { clearShadows, clearWhiteBackdrop } from './background';
 
 /** A w x h picture filled with one colour, with a block of another painted on it. */
 function picture(w: number, h: number, fill: number[], block?: { x: number; y: number; size: number; rgba: number[] }) {
@@ -14,6 +14,33 @@ function picture(w: number, h: number, fill: number[], block?: { x: number; y: n
 }
 
 const alphaAt = (rgba: Uint8ClampedArray, w: number, x: number, y: number) => rgba[(y * w + x) * 4 + 3];
+
+describe('clearShadows', () => {
+  it('clears a see-through dark shadow under an object, keeping its soft outline and light glass', () => {
+    // An object in the top rows, then a shadow below it.
+    const w = 6;
+    const rgba = picture(w, 6, [0, 0, 0, 0], { x: 1, y: 0, size: 2, rgba: [200, 120, 60, 255] });
+    for (let x = 0; x < w; x++) for (let y = 2; y < 6; y++) rgba.set([0, 0, 0, 120], (y * w + x) * 4);
+    rgba.set([230, 240, 255, 100], (5 * w + 5) * 4);
+
+    expect(clearShadows(rgba, w, 6)).toBe(true);
+
+    // Right under the object: its soft outline stays.
+    expect(alphaAt(rgba, w, 1, 2)).toBe(120);
+    // Further down, the shadow is gone.
+    expect(alphaAt(rgba, w, 1, 4)).toBe(0);
+    expect(alphaAt(rgba, w, 4, 3)).toBe(0);
+    // A light see-through pixel is glass or a highlight, not shadow.
+    expect(alphaAt(rgba, w, 5, 5)).toBe(100);
+    // The object itself is untouched.
+    expect(alphaAt(rgba, w, 1, 0)).toBe(255);
+  });
+
+  it('leaves an opaque picture alone', () => {
+    const rgba = picture(4, 4, [20, 20, 20, 255]);
+    expect(clearShadows(rgba, 4, 4)).toBe(false);
+  });
+});
 
 describe('clearWhiteBackdrop', () => {
   it('clears the white around an object, but not white inside it', () => {

@@ -187,7 +187,7 @@ describe('structural edits', () => {
     set(1, 0, T(4, 1));
     set(2, 0, T(5, 2));
 
-    editor.removeTileset(1);
+    editor.removeTilesets([1]);
 
     expect(at(0, 0)).toBe(T(3, 0));
     expect(at(1, 0)).toBe(EMPTY);
@@ -202,9 +202,30 @@ describe('structural edits', () => {
     objects.objects = [fakeObject({ id: 'keep', tilesetId: 'a' }), fakeObject({ id: 'drop', tilesetId: 'b' })];
     store.doc.layers.push(objects);
 
-    editor.removeTileset(1);
+    editor.removeTilesets([1]);
 
     expect((store.doc.layers[1] as ObjectLayer).objects.map((o) => o.id)).toEqual(['keep']);
+  });
+
+  it('removing a whole pack is one undo step, and remembers the pages so the library skips them', () => {
+    store.doc.tilesets = [fakeTileset('a'), fakeTileset('b'), fakeTileset('c')];
+    store.doc.tilesets.forEach((t, i) => {
+      t.name = i === 1 ? 'Other 1' : `Town ${i + 1}`;
+    });
+    store.doc.pinnedPacks = ['Town', 'Other'];
+    set(1, 0, T(4, 1));
+
+    editor.removeTilesets([0, 2], 'Delete pack');
+
+    expect(store.doc.tilesets.map((t) => t.id)).toEqual(['b']);
+    expect(tilesetOf(at(1, 0))).toBe(0);
+    expect(store.doc.removedSheets).toEqual(['Town 1', 'Town 3']);
+    expect(store.doc.pinnedPacks).toEqual(['Other']);
+
+    editor.undo();
+    expect(store.doc.tilesets.map((t) => t.id)).toEqual(['a', 'b', 'c']);
+    expect(store.doc.removedSheets).toEqual([]);
+    expect(store.doc.pinnedPacks).toEqual(['Town', 'Other']);
   });
 
   it('adds another object layer above the one that is open', () => {

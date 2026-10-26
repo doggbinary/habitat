@@ -70,9 +70,7 @@ beforeEach(() => {
 });
 
 describe('fingers and placed objects', () => {
-  it('selects an object with a finger tap, even while fingers paint floors', () => {
-    store.doc.tilesets[0].name = 'Floors 1';
-    store.settings.fingerDraws = true;
+  it('selects an object with a finger tap while the brush is out', () => {
     store.setTool('brush');
     objects.place('a', { x: 0, y: 0, w: 16, h: 16 }, 40, 40);
     const placed = objects.selected()!.obj;
@@ -97,6 +95,22 @@ describe('fingers and placed objects', () => {
 });
 
 describe('an object picked in Assets', () => {
+  it('is placed only by the brush, not by Pick tile', () => {
+    store.doc.tilesets[0].assets = [{ x: 0, y: 0, w: 16, h: 16 }];
+    store.libraryPick = { tilesetId: 'a', index: 0 };
+    const placed = () => (store.doc.layers.find((l) => l.kind === 'objects') as ObjectLayer | undefined)?.objects ?? [];
+    store.setTool('picker');
+    handlers.pointerdown(touch(24, 24));
+    handlers.pointerup(touch(24, 24));
+    handlers.pointerdown(pen(72, 24));
+    handlers.pointerup(pen(72, 24));
+    expect(placed()).toHaveLength(0);
+    store.setTool('brush');
+    handlers.pointerdown(touch(24, 24));
+    handlers.pointerup(touch(24, 24));
+    expect(placed()).toHaveLength(1);
+  });
+
   it('a two-finger tap undoes instead of placing a copy', () => {
     store.doc.tilesets[0].assets = [{ x: 0, y: 0, w: 16, h: 16 }];
     store.libraryPick = { tilesetId: 'a', index: 0 };
@@ -131,14 +145,18 @@ describe('tools with a finger', () => {
     expect(store.selection).toBeNull();
   });
 
-  it('draws a rectangle of floor squares', () => {
-    store.doc.tilesets[0].name = 'Floors 1';
-    store.settings.fingerDraws = true;
+  it('never paints the map with a finger; the Pencil draws', () => {
     store.setTool('rect');
     handlers.pointerdown(touch(2, 2));
     handlers.pointermove(touch(50, 50));
     handlers.pointerup(touch(50, 50));
-    expect(painted()).toBe(16);
+    expect(painted()).toBe(0);
+    store.setTool('eraser');
+    layer.data.fill(pack(0, 1));
+    handlers.pointerdown(touch(2, 2));
+    handlers.pointermove(touch(50, 50));
+    handlers.pointerup(touch(50, 50));
+    expect(painted()).toBe(64);
   });
 
   it('undoes with a two-finger tap', () => {

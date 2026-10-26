@@ -37,20 +37,8 @@ export function extractTile(doc: Doc, tile: PackedTile): HTMLCanvasElement | nul
  * are kept per size because every tile in a sheet must share dimensions.
  */
 export function ensureGeneratedSheet(doc: Doc, tileW: number, tileH: number): number {
-  return ensureSheet(doc, 'Edited tiles', tileW, tileH);
-}
-
-/** The page of seamless floor squares made from shaped objects. */
-export const MY_FLOORS = 'My floors';
-
-export function ensureFloorSheet(doc: Doc, tileW: number, tileH: number): number {
-  return ensureSheet(doc, MY_FLOORS, tileW, tileH);
-}
-
-function ensureSheet(doc: Doc, name: string, tileW: number, tileH: number): number {
-  const existing = doc.tilesets.findIndex(
-    (t) => t.generated && (t.name === MY_FLOORS) === (name === MY_FLOORS) && t.tileW === tileW && t.tileH === tileH,
-  );
+  const name = 'Edited tiles';
+  const existing = doc.tilesets.findIndex((t) => t.generated && t.tileW === tileW && t.tileH === tileH);
   if (existing !== -1) return existing;
 
   const canvas = document.createElement('canvas');

@@ -140,7 +140,7 @@ export function isGroundSheetName(name: string): boolean {
 
 /** Floor pages are a grid of floor squares, one asset per square. */
 export function sheetIsAllTiles(name: string): boolean {
-  return isGroundSheetName(name) || /^(?:(?:paths|floors) \d+|my floors)$/i.test(name);
+  return isGroundSheetName(name);
 }
 
 /** Whether this library sticker is a floor square, painted with a finger, not placed. */

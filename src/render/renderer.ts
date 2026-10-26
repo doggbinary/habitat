@@ -1,5 +1,5 @@
 import { isMovableImage, type Doc, type ImageLayer, type MapObject, type TileLayer } from '../core/doc';
-import { HANDLE_RADIUS, objectHandlePoint, objectScreenRect } from '../tools/objects';
+import { HANDLE_RADIUS, boundsOf, boxScreenRect, objectHandlePoint, objectScreenRect } from '../tools/objects';
 import { drawObject } from './object-draw';
 import { brushFootprint, isEmptyStamp, stampTileAt } from '../core/stamp';
 import type { Store } from '../core/store';
@@ -282,34 +282,33 @@ export class Renderer {
     const group = this.store.selectedGroup;
     const ids = group.length > 0 ? group : this.store.selectedObject ? [this.store.selectedObject] : [];
     if (ids.length === 0) return;
+    const objs: import('../core/doc').MapObject[] = [];
     for (const sel of ids) {
       const layer = this.store.doc.layers.find((l) => l.id === sel.layerId);
       if (layer?.kind !== 'objects') continue;
       const obj = layer.objects.find((o) => o.id === sel.objectId);
-      if (obj) this.strokeObject(obj);
+      if (obj) objs.push(obj);
     }
+    // Several assets resize together, so they share one grip on their box.
+    const many = objs.length > 1;
+    for (const obj of objs) this.strokeObject(obj, !many);
+    const box = many ? boundsOf(objs) : null;
+    if (!box) return;
+    const { ctx } = this;
+    const r = boxScreenRect(this.store.camera, box);
+    ctx.save();
+    ctx.strokeStyle = COLOR_SELECT;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 4]);
+    ctx.strokeRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8);
+    ctx.setLineDash([]);
+    ctx.restore();
+    if (objs.some((obj) => !obj.locked)) this.drawHandle({ x: r.x + r.w, y: r.y + r.h });
   }
 
-  private strokeObject(obj: import('../core/doc').MapObject): void {
+  private drawHandle(handle: { x: number; y: number }): void {
     const { ctx } = this;
-    const r = objectScreenRect(this.store.camera, obj);
-
     ctx.save();
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
-    ctx.strokeStyle = obj.locked ? '#ffb020' : COLOR_SELECT;
-    ctx.lineWidth = 2;
-    ctx.setLineDash(obj.locked ? [] : [7, 5]);
-    ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
-    ctx.setLineDash([]);
-
-    if (obj.locked) {
-      ctx.restore();
-      return;
-    }
-
-    const handle = objectHandlePoint(this.store.camera, obj);
     ctx.beginPath();
     ctx.arc(handle.x, handle.y, HANDLE_RADIUS, 0, Math.PI * 2);
     ctx.fillStyle = COLOR_SELECT;
@@ -323,6 +322,24 @@ export class Renderer {
     ctx.lineTo(handle.x + 4, handle.y + 4);
     ctx.stroke();
     ctx.restore();
+  }
+
+  private strokeObject(obj: import('../core/doc').MapObject, withHandle: boolean): void {
+    const { ctx } = this;
+    const r = objectScreenRect(this.store.camera, obj);
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
+    ctx.strokeStyle = obj.locked ? '#ffb020' : COLOR_SELECT;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(obj.locked ? [] : [7, 5]);
+    ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
+    ctx.setLineDash([]);
+
+    ctx.restore();
+    if (withHandle && !obj.locked) this.drawHandle(objectHandlePoint(this.store.camera, obj));
   }
 
   /**

@@ -28,6 +28,8 @@ export class LayersPanel {
   readonly element: HTMLElement;
   private readonly list: HTMLElement;
   private readonly footer: HTMLElement;
+  /** Set while a tap changes the open layer, so the rows under the finger stay put. */
+  private selecting = false;
 
   constructor(
     private readonly store: Store,
@@ -36,12 +38,31 @@ export class LayersPanel {
   ) {
     this.list = el('div', { class: 'layer-list' });
     this.footer = el('div', { class: 'layer-footer' });
-    this.element = el('div', { class: 'layers' }, [this.list, this.footer]);
+    const add = el('div', { class: 'layer-add' }, [
+      button('btn subtle', 'Add an object layer for props', () => this.editor.addObjectLayer(), [
+        icon('plus', 16),
+        el('span', { text: 'Objects' }),
+      ]),
+      button('btn subtle', 'Add tile layer', () => this.editor.addLayer(), [icon('plus', 16), el('span', { text: 'Tiles' })]),
+      button('btn subtle', 'Add reference image', () => this.actions.addImageLayer(), [
+        icon('image', 16),
+        el('span', { text: 'Picture' }),
+      ]),
+    ]);
+    this.element = el('div', { class: 'layers' }, [add, this.list, this.footer]);
   }
 
   refresh(): void {
-    this.buildList();
+    if (this.selecting) this.markActive();
+    else this.buildList();
     this.buildFooter();
+  }
+
+  private markActive(): void {
+    const active = String(this.store.doc.activeLayer);
+    for (const row of this.list.children) {
+      if (row instanceof HTMLElement) row.classList.toggle('active', row.dataset.index === active);
+    }
   }
 
   private buildList(): void {
@@ -70,7 +91,10 @@ export class LayersPanel {
         'div',
         {
           class: `layer-row${active ? ' active' : ''}${layer.visible ? '' : ' hidden-layer'}`,
-          on: { pointerdown: () => this.select(index) },
+          dataset: { index: String(index) },
+          // Selecting on the lift, not the press: changing the panel under a
+          // finger that is still down would hand its lift to another button.
+          on: { pointerup: () => this.select(index) },
         },
         [
           button(
@@ -110,7 +134,12 @@ export class LayersPanel {
   private select(index: number): void {
     if (this.store.doc.activeLayer === index) return;
     this.store.doc.activeLayer = index;
-    this.store.restructured();
+    this.selecting = true;
+    try {
+      this.store.restructured();
+    } finally {
+      this.selecting = false;
+    }
   }
 
   private buildFooter(): void {
@@ -120,15 +149,7 @@ export class LayersPanel {
     const layer = doc.layers[index];
 
     this.footer.append(
-      button('btn full', 'Add an object layer for props', () => this.editor.addObjectLayer(), [
-        icon('plus', 16),
-        el('span', { text: 'Object layer' }),
-      ]),
-    );
-    this.footer.append(
       el('div', { class: 'layer-actions' }, [
-        button('icon-btn', 'Add tile layer', () => this.editor.addLayer(), [icon('plus', 18)]),
-        button('icon-btn', 'Add reference image', () => this.actions.addImageLayer(), [icon('image', 18)]),
         button('icon-btn', 'Duplicate layer', () => this.editor.duplicateLayer(index), [icon('copy', 18)]),
         button('icon-btn', 'Move layer up', () => this.editor.moveLayer(index, 1), [icon('chevronUp', 18)]),
         button('icon-btn', 'Move layer down', () => this.editor.moveLayer(index, -1), [icon('chevronDown', 18)]),

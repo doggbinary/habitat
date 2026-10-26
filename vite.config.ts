@@ -1,10 +1,9 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
-import { buildLibraryEntries, isLibrarySheet, isPathSheet, libraryUrl, type LibraryFile } from './src/library.ts';
+import { buildLibraryEntries, isLibrarySheet, libraryUrl, type LibraryFile } from './src/library.ts';
 
 /**
  * Serves the object pages from the tileset folders next to this project.
@@ -29,14 +28,11 @@ function assetLibrary(): Plugin {
         walk(path.join(dir, entry.name), [...folders, entry.name], pack);
         continue;
       }
-      if (!isLibrarySheet(folders, entry.name) && !isPathSheet(folders, entry.name)) continue;
+      if (!isLibrarySheet(folders, entry.name)) continue;
       const abs = path.join(dir, entry.name);
-      const id = isPathSheet(folders, entry.name)
-        ? crypto.createHash('sha1').update(fs.readFileSync(abs)).digest('hex')
-        : undefined;
       const props = pack.props?.includes(entry.name) ?? false;
       const assets = pack.assets?.[entry.name];
-      found.push({ folders, file: entry.name, id, tile: pack.tile, ...(props ? { props } : {}), ...(assets ? { assets } : {}) });
+      found.push({ folders, file: entry.name, tile: pack.tile, ...(props ? { props } : {}), ...(assets ? { assets } : {}) });
       located.set(libraryUrl(folders, entry.name), abs);
     }
   };

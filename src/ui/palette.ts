@@ -1,9 +1,9 @@
 import { assetsOf, type AssetEdit } from '../core/assets';
-import { MY_FLOORS } from '../core/custom-tiles';
 import type { AssetRect, Tileset } from '../core/doc';
 import type { Store } from '../core/store';
 import { button, clear, el } from './dom';
 import { icon, type IconName } from './icons';
+import { openPackList } from './pack-list';
 import { packNames, packOf, sameAsset, type AssetRef } from './packs';
 
 /**
@@ -53,6 +53,10 @@ export interface PaletteActions {
   fileAssets: (folderId: string | null, name: string, refs: AssetRef[]) => void;
   /** Empties and removes a folder. The stickers themselves are untouched. */
   removeFolder: (folderId: string) => void;
+  /** Lists a pack first in the pack list, or puts it back in order. */
+  pinPack: (pack: string, pinned: boolean) => void;
+  /** Takes every page of a pack out of the map, after asking. */
+  removePack: (pack: string) => void;
 }
 
 /**
@@ -409,16 +413,12 @@ export class PalettePanel {
     const current = this.store.activeTileset;
     const currentPack = packOf(doc.tilesets[current]?.name ?? '');
 
-    const packs = el('select', { class: 'select' });
-    for (const name of packNames(doc.tilesets.map((t) => t.name))) {
-      const option = el('option', { value: name, text: name });
-      if (name === currentPack) option.selected = true;
-      packs.append(option);
-    }
-    packs.addEventListener('change', () => {
-      const first = doc.tilesets.findIndex((t) => packOf(t.name) === packs.value);
-      if (first >= 0) this.showPage(first);
-    });
+    const pinned = currentPack !== '' && doc.pinnedPacks.includes(currentPack);
+    const packs = button('select pack-button', 'Choose a pack. Press and hold one to pin or delete it.', () => this.openPacks(), [
+      pinned ? icon('star', 16) : null,
+      el('span', { class: 'pack-name', text: currentPack }),
+      icon('chevronDown', 18),
+    ]);
 
     const inPack = doc.tilesets
       .map((t, i) => ({ name: t.name, index: i }))
@@ -442,6 +442,25 @@ export class PalettePanel {
     next.disabled = inPack[inPack.length - 1]?.index === current;
 
     return el('div', { class: 'palette-picker' }, [packs, el('div', { class: 'palette-pager' }, [prev, pages, next])]);
+  }
+
+  private openPacks(): void {
+    const doc = this.store.doc;
+    const names = doc.tilesets.map((t) => t.name);
+    openPackList({
+      packs: packNames(names, doc.pinnedPacks).map((name) => ({
+        name,
+        pages: names.filter((sheet) => packOf(sheet) === name).length,
+        pinned: doc.pinnedPacks.includes(name),
+      })),
+      current: packOf(doc.tilesets[this.store.activeTileset]?.name ?? ''),
+      onPick: (pack) => {
+        const first = doc.tilesets.findIndex((t) => packOf(t.name) === pack);
+        if (first >= 0) this.showPage(first);
+      },
+      onPin: (pack, pin) => this.actions.pinPack(pack, pin),
+      onDelete: (pack) => this.actions.removePack(pack),
+    });
   }
 
   /**
@@ -506,7 +525,7 @@ export class PalettePanel {
                 ? view.kind === 'pins'
                   ? 'Nothing pinned yet. On a sheet, tap Edit, choose assets, then Pin.'
                   : 'This folder is empty. On a sheet, tap Edit, choose assets, then File.'
-                : 'Floor squares come first: tap one, then draw or use Rectangle. Tap any other asset to add it, or press and hold to drag it.',
+                : 'Ground squares come first: tap one, then draw with the Pencil or use Rectangle. Tap any other asset to add it, or press and hold to drag it.',
           }),
     );
   }
@@ -542,8 +561,7 @@ export class PalettePanel {
         this.actions.editAssets(sheetIndex, op, indices);
       };
       const floor = new Set(this.activeTileset()?.groundAssets ?? []);
-      const mine = this.activeTileset()?.generated && this.activeTileset()?.name === MY_FLOORS;
-      const allFloor = indices.length > 0 && (mine || indices.every((i) => floor.has(i)));
+      const allFloor = indices.length > 0 && indices.every((i) => floor.has(i));
       const floorChip = allFloor
         ? button('chip', 'Turn these back into objects you place', () => run('toObjects'), [
             el('span', { text: 'Not a floor' }),

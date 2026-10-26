@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   deleteAssets,
   detectAssetsInMask,
@@ -259,7 +259,6 @@ describe('telling ground from props', () => {
     expect(isGroundSheetName('tile-B-01')).toBe(false);
     expect(isGroundSheetName('1')).toBe(false);
     expect(isGroundSheetName('Area 51')).toBe(false);
-    expect(sheetIsAllTiles('Paths 1')).toBe(true);
     expect(sheetIsAllTiles('Nature Park 1')).toBe(false);
   });
 
@@ -345,6 +344,5 @@ describe('telling ground from props', () => {
     } as import('./doc').Tileset;
     expect(assetIsGround(sheet, 3)).toBe(true);
     expect(assetIsGround(sheet, 0)).toBe(false);
-    expect(assetIsGround({ ...sheet, name: 'Paths 2' }, 0)).toBe(true);
   });
 });

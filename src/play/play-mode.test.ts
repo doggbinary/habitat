@@ -17,6 +17,26 @@ describe('blocking under an object', () => {
     const cells = objectCells(doc, fakeObject({ x: 64, y: 64 }));
     expect(cells).toEqual([3 * 4 + 3]);
   });
+
+  it('follows a blocking object when it moves and resizes, and only blocks where it is now', () => {
+    const doc = createDoc(10, 10, 16);
+    const obj = fakeObject({ x: 40, y: 48, blocks: true });
+    doc.layers.push({ id: 'o', kind: 'objects', name: 'Objects', visible: true, locked: false, opacity: 1, objects: [obj] });
+    const blockedAt = () => [...buildCollision(doc)].flatMap((v, i) => (v ? [i] : []));
+    expect(blockedAt()).toEqual([22, 32]);
+
+    obj.x += 64;
+    expect(blockedAt()).toEqual([26, 36]);
+
+    // Twice the size from the same top-left corner: 2 x 4 squares.
+    obj.scale = 2;
+    obj.x = 96 + 16;
+    obj.y = 32 + 32;
+    expect(blockedAt()).toEqual([26, 27, 36, 37, 46, 47, 56, 57]);
+
+    delete obj.blocks;
+    expect(blockedAt()).toEqual([]);
+  });
 });
 
 describe('collision tiles', () => {

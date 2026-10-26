@@ -26,6 +26,8 @@ export interface ShellActions {
   setPinned: PaletteActions['setPinned'];
   fileAssets: PaletteActions['fileAssets'];
   removeFolder: PaletteActions['removeFolder'];
+  pinPack: PaletteActions['pinPack'];
+  removePack: PaletteActions['removePack'];
   recolorObject: (anchor: HTMLElement) => void;
   recolorHeldTiles: (anchor: HTMLElement) => void;
   addImageLayer: () => void;
@@ -110,6 +112,8 @@ export class Shell {
       setPinned: actions.setPinned,
       fileAssets: actions.fileAssets,
       removeFolder: actions.removeFolder,
+      pinPack: actions.pinPack,
+      removePack: actions.removePack,
     });
     this.layersPanel = new LayersPanel(store, editor, {
       addImageLayer: actions.addImageLayer,
@@ -217,6 +221,17 @@ export class Shell {
     const tool = TOOLS.find((t) => t.key.toLowerCase() === key);
     if (!tool) return false;
     this.store.setTool(tool.id);
+    return true;
+  }
+
+  /** Deletes the selected assets, or the held tiles, on the map. False when nothing is selected. */
+  deleteSelected(): boolean {
+    if (this.mode !== 'map') return false;
+    if (this.objects.members().length > 0) this.objects.remove();
+    else if (this.store.selection) this.editor.deleteSelection();
+    else return false;
+    this.refreshChrome();
+    this.renderer.requestDraw();
     return true;
   }
 
@@ -366,14 +381,16 @@ export class Shell {
         node.disabled = locked;
         return node;
       };
-      // Several assets picked at once can be joined, so they move as one.
+      // Several assets picked at once can be joined, so they move as one; a
+      // group that is already one shows Ungroup instead.
       const picked = this.store.selectedGroup.length;
       const grouping =
-        picked > 1
-          ? this.selectionChip('layers', 'Group', () => this.objects.groupSelected(), '', `Group ${picked}`)
-          : found.obj.groupId
-            ? this.selectionChip('layers', 'Ungroup', () => this.objects.ungroupSelected(), '', 'Ungroup')
+        this.objects.sharedGroup() || (picked <= 1 && found.obj.groupId)
+          ? this.selectionChip('layers', 'Ungroup', () => this.objects.ungroupSelected(), '', 'Ungroup')
+          : picked > 1
+            ? this.selectionChip('layers', 'Group', () => this.objects.groupSelected(), '', `Group ${picked}`)
             : null;
+      const many = picked > 1 ? ` ${picked}` : '';
 
       const adding = this.store.addingToSelection;
       this.optionsBar.append(
@@ -384,7 +401,7 @@ export class Shell {
         }),
         this.chipToggle(locked ? 'lock' : 'unlock', locked ? 'Unlock' : 'Lock', locked, () => this.objects.toggleLock()),
         ...(grouping ? [grouping] : []),
-        guard(this.selectionChip('trash', 'Delete', () => this.objects.remove(), 'danger', 'Delete')),
+        guard(this.selectionChip('trash', `Delete${many}`, () => this.objects.remove(), 'danger', `Delete${many}`)),
         this.chipToggle('grid', 'Guides', this.store.settings.alignGuides, () => {
           this.store.settings.alignGuides = !this.store.settings.alignGuides;
           if (!this.store.settings.alignGuides) this.store.alignLines = null;
@@ -401,7 +418,7 @@ export class Shell {
         el('div', { class: 'divider vertical' }),
         this.orderGroup(locked),
         el('div', { class: 'divider vertical' }),
-        guard(this.selectionChip('copy', 'Duplicate', () => this.objects.duplicate())),
+        guard(this.selectionChip('copy', `Duplicate${many}`, () => this.objects.duplicate(), '', many ? `Duplicate${many}` : undefined)),
       );
       this.appendPlay();
       return;
@@ -456,11 +473,7 @@ export class Shell {
       chips.push(
         el('span', {
           class: 'chip-label',
-          text: !this.studio.character
-            ? 'No character yet'
-            : store.settings.fingerDraws
-              ? 'Pencil or finger draws'
-              : 'Pencil draws',
+          text: !this.studio.character ? 'No character yet' : 'Pencil or finger draws',
         }),
         el('div', { class: 'divider vertical' }),
         this.chipToggle('flipH', 'Symmetry', this.studio.mirrorX, () => {
@@ -544,10 +557,6 @@ export class Shell {
         store.settings.showGrid = !store.settings.showGrid;
         store.emit('ui');
         store.emit('doc');
-      }),
-      this.chipToggle('pencilTip', 'Finger paints floors', store.settings.fingerDraws, () => {
-        store.settings.fingerDraws = !store.settings.fingerDraws;
-        store.emit('ui');
       }),
     );
 

@@ -4,7 +4,7 @@
  * production build, so a new deploy evicts the old assets instead of serving
  * a half-updated mix.
  */
-const CACHE = 'pixel-fusion-v3';
+const CACHE = 'pixel-fusion-v4';
 
 self.addEventListener('install', (event) => {
   // The app shell is tiny; everything else is picked up on first use.

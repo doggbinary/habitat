@@ -1,3 +1,33 @@
+/** Shadow pixels are see-through and dark; glass and highlights are see-through and light. */
+const SHADOW_MAX_ALPHA = 235;
+const SHADOW_MAX_VALUE = 120;
+const SOLID_ALPHA = 250;
+
+/**
+ * Takes the drop shadows out from under a pack's objects. Packs paint them
+ * as see-through dark pixels. A see-through dark pixel right against a solid
+ * one is the object's soft outline and stays; the rest is shadow and is
+ * cleared. Returns whether anything changed.
+ */
+export function clearShadows(rgba: Uint8ClampedArray, w: number, h: number): boolean {
+  const solid = (i: number) => rgba[i * 4 + 3] >= SOLID_ALPHA;
+  const doomed: number[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const at = i * 4;
+      const a = rgba[at + 3];
+      if (a === 0 || a > SHADOW_MAX_ALPHA) continue;
+      if (Math.max(rgba[at], rgba[at + 1], rgba[at + 2]) >= SHADOW_MAX_VALUE) continue;
+      const outline = (x > 0 && solid(i - 1)) || (x < w - 1 && solid(i + 1)) || (y > 0 && solid(i - w)) || (y < h - 1 && solid(i + w));
+      if (!outline) doomed.push(at);
+    }
+  }
+  // Cleared afterwards, so a pixel's neighbours are judged as the pack drew them.
+  for (const at of doomed) rgba[at + 3] = 0;
+  return doomed.length > 0;
+}
+
 const isWhite = (rgba: Uint8ClampedArray, i: number) =>
   rgba[i * 4 + 3] > 24 && rgba[i * 4] > 245 && rgba[i * 4 + 1] > 245 && rgba[i * 4 + 2] > 245;
 

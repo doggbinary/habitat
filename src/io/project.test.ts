@@ -34,7 +34,7 @@ describe('saving and loading a project', () => {
     const objects = createObjectLayer('Props');
     objects.objects = [
       fakeObject({ id: 'tree', x: 10, y: 20, scale: 1.5, rotation: 3, flipX: true }),
-      fakeObject({ id: 'rock', hueShift: 42, saturation: 0.5, brightness: 1.2 }),
+      fakeObject({ id: 'rock', hueShift: 42, saturation: 0.5, brightness: 1.2, contrast: 1.4, clarity: 0.6 }),
     ];
     doc.layers.push(objects);
 
@@ -95,6 +95,15 @@ describe('saving and loading a project', () => {
     const data = (loaded.layers[0] as TileLayer).data;
     expect(data.length).toBe(12);
     expect(data[11]).toBe(EMPTY);
+  });
+
+  it('remembers removed library pages and pinned packs', async () => {
+    const doc = createDoc(2, 2, 16);
+    doc.removedSheets = ['Zoo 1', 'Zoo 2'];
+    doc.pinnedPacks = ['Pixel Town 2'];
+    const loaded = await deserializeProject(throughJson(serializeProject(doc)));
+    expect(loaded.removedSheets).toEqual(['Zoo 1', 'Zoo 2']);
+    expect(loaded.pinnedPacks).toEqual(['Pixel Town 2']);
   });
 
   it('keeps characters, frames and all', () => {

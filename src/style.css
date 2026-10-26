@@ -634,6 +634,66 @@ textarea {
   text-align-last: center;
 }
 
+.pack-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-image: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pack-button .pack-name,
+.pack-label .pack-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The pack list. Rows are held for their menu, so the system's own
+   long-press callout and text selection are kept out of the way. */
+.pack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.pack-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.pack-row.active {
+  border-color: var(--accent);
+}
+
+.pack-row.holding {
+  background: var(--surface-2, var(--bg));
+}
+
+.pack-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+  cursor: pointer;
+  touch-action: pan-y;
+}
+
+.pack-menu {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 10px;
+}
+
 /* Ground or props: two equal halves, so the current choice is obvious. */
 .order-group {
   display: inline-flex;
@@ -795,6 +855,20 @@ textarea {
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
+}
+
+/* New layers are added from above the list, so nothing that adds a layer
+   ever sits where a row was a moment ago. */
+.layer-add {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 8px 8px 0;
+}
+
+.layer-add .btn {
+  flex: 1;
+  min-width: 0;
 }
 
 /* --- Map panel ---------------------------------------------------------- */
@@ -1297,6 +1371,13 @@ textarea {
   width: 100%;
 }
 
+/* Contrast and Clarity sit under the wheel's Brightness slider. */
+.tone-field {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+}
+
 .wheel-canvas {
   border-radius: 50%;
   /* The wheel owns the drag; the panel must not scroll underneath it. */
@@ -1632,8 +1713,21 @@ textarea {
     border-top: none;
   }
 
+  /* The sheet is short, so the panel scrolls as one: every layer row stays
+     in view above the settings instead of being squeezed under them. */
+  .layers {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .layer-list {
+    flex: none;
+    overflow: visible;
+  }
+
   .layer-footer {
     max-height: none;
+    overflow: visible;
   }
 }
 

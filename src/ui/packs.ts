@@ -12,9 +12,8 @@ export interface AssetFolder {
   assets: AssetRef[];
 }
 
-/** "Nature Park 1" belongs with "Nature Park 2". Floor pages share one pack. */
+/** "Nature Park 1" belongs with "Nature Park 2". */
 export function packOf(name: string): string {
-  if (/^(?:(?:paths|floors) \d+|my floors)$/i.test(name)) return 'Floors';
   return name.replace(/ \d+$/, '') || name;
 }
 
@@ -22,14 +21,10 @@ export function sameAsset(a: AssetRef, b: AssetRef): boolean {
   return a.tilesetId === b.tilesetId && a.rect.x === b.rect.x && a.rect.y === b.rect.y && a.rect.w === b.rect.w && a.rect.h === b.rect.h;
 }
 
-/** Packs in alphabetical order, Floors first because every map starts there. */
-export function packNames(sheetNames: string[]): string[] {
+/** Packs in alphabetical order, with pinned packs first in the order they were pinned. */
+export function packNames(sheetNames: string[], pinned: string[] = []): string[] {
   const names = [...new Set(sheetNames.map(packOf))];
   names.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  const floors = names.indexOf('Floors');
-  if (floors > 0) {
-    names.splice(floors, 1);
-    names.unshift('Floors');
-  }
-  return names;
+  const first = pinned.filter((name) => names.includes(name));
+  return [...first, ...names.filter((name) => !first.includes(name))];
 }

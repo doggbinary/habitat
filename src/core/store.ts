@@ -40,12 +40,6 @@ export interface Settings {
   showGrid: boolean;
   /** Dim everything outside the active layer so it is easy to see what you edit. */
   highlightActiveLayer: boolean;
-  /**
-   * When false, fingers only pan and zoom and drawing is reserved for the
-   * Apple Pencil. This is the whole point of the iPad build, so it defaults
-   * off on devices that report a pen.
-   */
-  fingerDraws: boolean;
   /** Scatter mode: pick a random tile from the stamp per cell. */
   randomize: boolean;
   /** Continue painting a drag past the tile where it started. */
@@ -83,7 +77,6 @@ export class Store {
   settings: Settings = {
     showGrid: true,
     highlightActiveLayer: false,
-    fingerDraws: true,
     randomize: false,
     snapToStamp: false,
     showTileOutlines: false,

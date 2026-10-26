@@ -26,7 +26,13 @@ export function cropAsset(
 }
 
 export function isRecolored(obj: MapObject): boolean {
-  return obj.hueShift !== 0 || obj.saturation !== 1 || obj.brightness !== 1;
+  return (
+    obj.hueShift !== 0 ||
+    obj.saturation !== 1 ||
+    obj.brightness !== 1 ||
+    (obj.contrast ?? 1) !== 1 ||
+    (obj.clarity ?? 0) !== 0
+  );
 }
 
 interface Art {
@@ -56,6 +62,8 @@ function artFor(doc: Doc, obj: MapObject): Art | null {
     obj.hueShift.toFixed(1),
     obj.saturation.toFixed(3),
     obj.brightness.toFixed(3),
+    (obj.contrast ?? 1).toFixed(3),
+    (obj.clarity ?? 0).toFixed(3),
   ].join(':');
 
   let canvas = recolorCache.get(key);
@@ -64,6 +72,8 @@ function artFor(doc: Doc, obj: MapObject): Art | null {
       hueShift: obj.hueShift,
       saturation: obj.saturation,
       brightness: obj.brightness,
+      contrast: obj.contrast ?? 1,
+      clarity: obj.clarity ?? 0,
     });
     recolorCache.set(key, canvas);
     // Map iteration order is insertion order, so the first key is the oldest.

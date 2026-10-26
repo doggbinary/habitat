@@ -108,6 +108,82 @@ export function objectHandlePoint(camera: Camera, obj: MapObject): { x: number; 
   return { x: r.x + r.w, y: r.y + r.h };
 }
 
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** The box around several assets, in world pixels. */
+export function boundsOf(objs: MapObject[]): Box | null {
+  if (objs.length === 0) return null;
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const obj of objs) {
+    const { w, h } = objectSize(obj);
+    left = Math.min(left, obj.x - w / 2);
+    top = Math.min(top, obj.y - h / 2);
+    right = Math.max(right, obj.x + w / 2);
+    bottom = Math.max(bottom, obj.y + h / 2);
+  }
+  return { x: left, y: top, w: right - left, h: bottom - top };
+}
+
+/** A world box on screen, in CSS pixels. */
+export function boxScreenRect(camera: Camera, box: Box): Box {
+  return {
+    x: (box.x - camera.x) * camera.zoom,
+    y: (box.y - camera.y) * camera.zoom,
+    w: box.w * camera.zoom,
+    h: box.h * camera.zoom,
+  };
+}
+
+/** Where each asset starts when a whole selection is resized. */
+export interface GroupScaleStart {
+  box: Box;
+  items: { obj: MapObject; scale: number; left: number; top: number }[];
+}
+
+export function groupScaleStart(objs: MapObject[]): GroupScaleStart | null {
+  const box = boundsOf(objs);
+  if (!box) return null;
+  return {
+    box,
+    items: objs.map((obj) => {
+      const { w, h } = objectSize(obj);
+      return { obj, scale: obj.scale, left: obj.x - w / 2, top: obj.y - h / 2 };
+    }),
+  };
+}
+
+/**
+ * Resizes a selection as one picture, from its top-left corner. The factor
+ * is rounded so the longer side of the whole box is a whole number of map
+ * squares, and every asset keeps its place within the box.
+ */
+export function scaleGroup(start: GroupScaleStart, factor: number, tile: number): void {
+  const { box } = start;
+  const wide = Math.max(box.w, box.h, 1);
+  const squares = gridSquares(wide * Math.max(0, factor), tile);
+  const smallest = Math.min(...start.items.map((item) => item.scale));
+  const largest = Math.max(...start.items.map((item) => item.scale));
+  const f = Math.max(MIN_SCALE / smallest, Math.min(MAX_SCALE / largest, (squares * tile) / wide));
+  for (const item of start.items) {
+    if (item.obj.locked) continue;
+    item.obj.scale = item.scale * f;
+    const { w, h } = objectSize(item.obj);
+    const left = box.x + (item.left - box.x) * f;
+    const top = box.y + (item.top - box.y) * f;
+    const at = snapToGrid(w, h, left + w / 2, top + h / 2, tile);
+    item.obj.x = at.x;
+    item.obj.y = at.y;
+  }
+}
+
 /**
  * Edits to placed objects.
  *
@@ -248,6 +324,54 @@ export class ObjectTools {
     return out;
   }
 
+  /** What an action applies to: everything selected, or the one selected asset. */
+  members(): { layer: ObjectLayer; obj: MapObject }[] {
+    const many = this.selectedMany();
+    if (many.length > 0) return many;
+    const found = this.selected();
+    return found ? [found] : [];
+  }
+
+  /** The box drawn around a selection of more than one asset, in world pixels. */
+  selectionBox(): Box | null {
+    const members = this.members();
+    return members.length > 1 ? boundsOf(members.map((member) => member.obj)) : null;
+  }
+
+  /** The screen point of the resize grip: the selection box's corner, or the asset's. */
+  handlePoint(): { x: number; y: number } | null {
+    const box = this.selectionBox();
+    if (box) {
+      const r = boxScreenRect(this.store.camera, box);
+      return { x: r.x + r.w, y: r.y + r.h };
+    }
+    const found = this.selected();
+    return found ? objectHandlePoint(this.store.camera, found.obj) : null;
+  }
+
+  /** The group id every selected asset shares, when they are exactly one group. */
+  sharedGroup(): string | null {
+    const members = this.members();
+    const id = members[0]?.obj.groupId;
+    if (!id || members.length < 2) return null;
+    return members.every((member) => member.obj.groupId === id) ? id : null;
+  }
+
+  private groupScale: GroupScaleStart | null = null;
+
+  /** Remembers where every selected asset starts, for resizing them together. */
+  beginGroupScale(): void {
+    this.groupScale = groupScaleStart(this.members().map((member) => member.obj));
+  }
+
+  /** Resizes the whole selection by a factor of its size when the gesture began. */
+  scaleSelection(factor: number): void {
+    if (!this.groupScale) return;
+    scaleGroup(this.groupScale, factor, this.doc.tileSize);
+    this.renderer.requestDraw();
+    this.store.emit('ui');
+  }
+
   private withGroup(groupId: string): { layer: ObjectLayer; obj: MapObject }[] {
     const out: { layer: ObjectLayer; obj: MapObject }[] = [];
     for (const layer of this.doc.layers) {
@@ -368,6 +492,7 @@ export class ObjectTools {
   endGesture(label: string): void {
     const before = this.gestureBefore;
     this.gestureBefore = null;
+    this.groupScale = null;
     this.store.alignLines = null;
     if (!before) return;
     this.store.history.commitSnapshot(label, before);
@@ -376,6 +501,7 @@ export class ObjectTools {
 
   cancelGesture(): void {
     this.gestureBefore = null;
+    this.groupScale = null;
     this.store.alignLines = null;
   }
 
@@ -469,6 +595,19 @@ export class ObjectTools {
     this.renderer.requestDraw();
   }
 
+  /** Contrast (1 is unchanged) and clarity (0 is unchanged), kept off the object when neutral. */
+  setTone(obj: MapObject, tone: { contrast?: number; clarity?: number }): void {
+    if (tone.contrast !== undefined) {
+      if (tone.contrast === 1) delete obj.contrast;
+      else obj.contrast = tone.contrast;
+    }
+    if (tone.clarity !== undefined) {
+      if (tone.clarity === 0) delete obj.clarity;
+      else obj.clarity = tone.clarity;
+    }
+    this.renderer.requestDraw();
+  }
+
   // --- One-shot actions ----------------------------------------------------
 
   private apply(label: string, mutate: (layer: ObjectLayer, obj: MapObject) => void): void {
@@ -504,6 +643,8 @@ export class ObjectTools {
       obj.hueShift = 0;
       obj.saturation = 1;
       obj.brightness = 1;
+      delete obj.contrast;
+      delete obj.clarity;
     });
   }
 
@@ -537,6 +678,8 @@ export class ObjectTools {
       obj.hueShift = 0;
       obj.saturation = 1;
       obj.brightness = 1;
+      delete obj.contrast;
+      delete obj.clarity;
     });
   }
 
@@ -600,43 +743,70 @@ export class ObjectTools {
     });
   }
 
+  /**
+   * Copies everything selected, offset beside the originals so the copies
+   * are visibly new, and selects the copies. Copies never share a group with
+   * the originals, so moving one never drags the other along; a copied group
+   * becomes a group of its own.
+   */
   duplicate(): void {
-    const found = this.selected();
-    if (!found) return;
+    const members = this.members();
+    if (members.length === 0) return;
     const before = snapshot(this.doc);
-    const { w, h } = objectSize(found.obj);
-    // Offset the copy so it is visibly a second object, not hidden on top. It
-    // is its own object: no shared group, so it never drags the original along.
-    const { groupId: _group, ...rest } = found.obj;
-    void _group;
-    const at = snapToGrid(w, h, found.obj.x + Math.max(this.doc.tileSize, Math.round(w / 3)), found.obj.y, this.doc.tileSize);
-    const copy: MapObject = {
-      ...rest,
-      id: uid('obj'),
-      rect: { ...found.obj.rect },
-      x: at.x,
-      y: at.y,
-      locked: false,
-    };
-    this.keepOnMap(copy);
-    const index = found.layer.objects.indexOf(found.obj);
-    found.layer.objects.splice(index + 1, 0, copy);
-    this.store.history.commitSnapshot('Duplicate', before);
-    this.store.selectedGroup = [];
-    this.store.selectedObject = { layerId: found.layer.id, objectId: copy.id };
+    const tile = this.doc.tileSize;
+    const box = boundsOf(members.map((member) => member.obj))!;
+    const dx = Math.max(tile, Math.round(box.w / (members.length > 1 ? 1 : 3) / tile) * tile);
+    const newGroups = new Map<string, string>();
+    const copies: { layerId: string; objectId: string }[] = [];
+    const shared = (id: string) => members.filter((member) => member.obj.groupId === id).length > 1;
+    for (const { layer, obj } of members) {
+      const { w, h } = objectSize(obj);
+      const { groupId, ...rest } = obj;
+      let group: string | undefined;
+      if (groupId && shared(groupId)) {
+        group = newGroups.get(groupId) ?? uid('group');
+        newGroups.set(groupId, group);
+      }
+      const at = snapToGrid(w, h, obj.x + dx, obj.y, tile);
+      const copy: MapObject = {
+        ...rest,
+        ...(group ? { groupId: group } : {}),
+        id: uid('obj'),
+        rect: { ...obj.rect },
+        x: at.x,
+        y: at.y,
+        locked: false,
+      };
+      if (members.length === 1) this.keepOnMap(copy);
+      const index = layer.objects.indexOf(obj);
+      layer.objects.splice(index + 1, 0, copy);
+      copies.push({ layerId: layer.id, objectId: copy.id });
+    }
+    this.store.history.commitSnapshot(members.length > 1 ? `Duplicate ${members.length}` : 'Duplicate', before);
+    this.store.selectedObject = copies[0];
+    this.store.selectedGroup = copies.length > 1 ? copies : [];
     this.store.changed();
     this.renderer.requestDraw();
   }
 
+  /** Deletes everything selected that is not locked, as one undo step. */
   remove(): void {
-    const found = this.selected();
-    if (!found) return;
+    const members = this.members();
+    if (members.length === 0) return;
+    const doomed = new Set(members.filter((member) => !member.obj.locked).map((member) => member.obj));
+    if (doomed.size === 0) {
+      this.store.toast('Unlock it to delete');
+      return;
+    }
     const before = snapshot(this.doc);
-    found.layer.objects = found.layer.objects.filter((o) => o !== found.obj);
-    this.store.history.commitSnapshot('Delete asset', before);
+    for (const layer of this.doc.layers) {
+      if (isObjectLayer(layer)) layer.objects = layer.objects.filter((o) => !doomed.has(o));
+    }
+    this.store.history.commitSnapshot(doomed.size > 1 ? `Delete ${doomed.size}` : 'Delete asset', before);
     this.store.selectedObject = null;
+    this.store.selectedGroup = [];
     this.store.changed();
     this.renderer.requestDraw();
-    this.store.toast('Deleted');
+    this.store.toast(doomed.size > 1 ? `Deleted ${doomed.size}` : 'Deleted');
   }
 }

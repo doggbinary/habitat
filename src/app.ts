@@ -14,7 +14,7 @@ import {
   type Doc,
   type Tileset,
 } from './core/doc';
-import { sameAsset, type AssetRef } from './ui/packs';
+import { packOf, sameAsset, type AssetRef } from './ui/packs';
 import {
   DETECT_VERSION,
   assetIsGround,
@@ -24,21 +24,12 @@ import {
   tileIndexOf,
   type AssetEdit,
 } from './core/assets';
-import { floorIndexFromPath, floorTiles, isRawFloorSheet } from './core/autotile';
-import { clearWhiteBackdrop } from './core/background';
-import { applyTilesetMerge, pathMergePlan } from './core/path-merge';
+import { clearShadows, clearWhiteBackdrop } from './core/background';
+import { dropTilesets, isFloorSheet } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
 import { dominantColor, recolorToCanvas } from './io/recolor';
-import {
-  MY_FLOORS,
-  ensureFloorSheet,
-  ensureGeneratedSheet,
-  extractTile,
-  persistGeneratedSheet,
-  removeGeneratedTiles,
-  writeGeneratedTile,
-} from './core/custom-tiles';
-import { isSolid, seamlessFloor } from './core/seamless';
+import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
+import { isSolid } from './core/seamless';
 import { cropAsset } from './render/object-draw';
 import { gridScale, ObjectTools } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
@@ -100,14 +91,9 @@ function resetPageZoom(): void {
 }
 
 function detectInto(sheet: Tileset): void {
-  // A floor page already built is its squares; building it again would read
-  // them as a raw page.
-  if (isFloorPage(sheet) && sheet.image instanceof HTMLCanvasElement) return;
-  if (sheet.image && isRawFloorSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) {
-    buildFloors(sheet);
-    return;
-  }
-  // The detector reads a white backdrop itself, so it sees the picture first.
+  // Shadows go first, so no asset's box is stretched to take one in. The
+  // detector reads a white backdrop itself, so it sees the picture first.
+  clearSheetShadows(sheet);
   const split = detectSheetSplit(sheet);
   sheet.assets = split.assets;
   sheet.groundAssets = split.ground;
@@ -117,8 +103,8 @@ function detectInto(sheet: Tileset): void {
   clearSheetBackdrop(sheet);
 }
 
-/** Makes a sheet's painted-on white backdrop transparent, so objects sit on the map. */
-function clearSheetBackdrop(sheet: Tileset): void {
+/** Runs a pixel edit over a pack's sheet, keeping the result only when it changed something. */
+function editSheetPixels(sheet: Tileset, edit: (rgba: Uint8ClampedArray, w: number, h: number) => boolean): void {
   const image = sheet.image;
   if (!image || sheet.generated) return;
   const canvas = document.createElement('canvas');
@@ -128,9 +114,19 @@ function clearSheetBackdrop(sheet: Tileset): void {
   if (!ctx) return;
   ctx.drawImage(image, 0, 0);
   const pixels = ctx.getImageData(0, 0, sheet.imgW, sheet.imgH);
-  if (!clearWhiteBackdrop(pixels.data, sheet.imgW, sheet.imgH)) return;
+  if (!edit(pixels.data, sheet.imgW, sheet.imgH)) return;
   ctx.putImageData(pixels, 0, 0);
   sheet.image = canvas;
+}
+
+/** Makes a sheet's painted-on white backdrop transparent, so objects sit on the map. */
+function clearSheetBackdrop(sheet: Tileset): void {
+  editSheetPixels(sheet, clearWhiteBackdrop);
+}
+
+/** Takes the drop shadows out from under a pack's objects. */
+function clearSheetShadows(sheet: Tileset): void {
+  editSheetPixels(sheet, clearShadows);
 }
 
 function sheetPixels(sheet: Tileset): ImageData | null {
@@ -156,85 +152,24 @@ function fillsItsSquares(sheet: Tileset, pixels: ImageData, rect: AssetRect): bo
   return aligned && isSolid(pixels.data, sheet.imgW, rect);
 }
 
-function isFloorPage(sheet: Tileset): boolean {
-  return /^(?:paths|floors) \d+$/i.test(sheet.name);
-}
-
-/** Turns a pack's floor page into one seamless square per floor type. */
-function buildFloors(sheet: Tileset): void {
-  const image = sheet.image;
-  if (!image) return;
-  const canvas = document.createElement('canvas');
-  canvas.width = sheet.imgW;
-  canvas.height = sheet.imgH;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return;
-  ctx.drawImage(image, 0, 0);
-  const src = ctx.getImageData(0, 0, sheet.imgW, sheet.imgH).data;
-  const floors = floorTiles(src, sheet.imgW, sheet.imgH, sheet.tileW);
-  const next = document.createElement('canvas');
-  next.width = floors.width;
-  next.height = floors.height;
-  const out = next.getContext('2d');
-  if (!out) return;
-  const pixels = new Uint8ClampedArray(floors.width * floors.height * 4);
-  pixels.set(floors.rgba);
-  out.putImageData(new ImageData(pixels, floors.width, floors.height), 0, 0);
-  sheet.image = next;
-  sheet.imgW = floors.width;
-  sheet.imgH = floors.height;
-  sheet.cols = floors.cols;
-  sheet.rows = floors.rows;
-  sheet.count = floors.cols * floors.rows;
-  sheet.margin = 0;
-  sheet.spacing = 0;
-  sheet.assets = floors.assets;
-  sheet.groundAssets = floors.assets.map((_, i) => i);
-  sheet.groundBlocks = undefined;
-  sheet.assetsVersion = DETECT_VERSION;
-  sheet.splitMode = 'objects';
-}
-
-/**
- * Older projects painted "Paths" with edge and corner pieces. Each painted
- * square becomes the seamless square of the same floor type instead.
- */
-function pathsToFloors(doc: Doc, sheetIndex: number, pathStride: number): void {
-  for (const layer of doc.layers) {
-    if (layer.kind !== 'tiles') continue;
-    for (let i = 0; i < layer.data.length; i++) {
-      const tile = layer.data[i];
-      if (tile === EMPTY || tilesetOf(tile) !== sheetIndex) continue;
-      layer.data[i] = pack(sheetIndex, floorIndexFromPath(indexOf(tile), pathStride), 0);
-    }
-  }
-}
-
-/** A small grayscale copy, so two sheets of the same floors compare as the same picture. */
-function thumbnail(image: CanvasImageSource, w: number, h: number): Uint8Array | null {
-  const tw = 32;
-  const th = 24;
-  const canvas = document.createElement('canvas');
-  canvas.width = tw;
-  canvas.height = th;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx || w === 0 || h === 0) return null;
-  ctx.drawImage(image, 0, 0, w, h, 0, 0, tw, th);
-  const data = ctx.getImageData(0, 0, tw, th).data;
-  const gray = new Uint8Array(tw * th);
-  for (let i = 0; i < gray.length; i++) gray[i] = (data[i * 4] + data[i * 4 + 1] + data[i * 4 + 2]) / 3;
-  return gray;
-}
-
-/** Takes every repeated ground page out of a project, keeping one of each picture. */
-function collapseDuplicatePaths(doc: Doc): void {
-  const sheets = doc.tilesets.map((sheet) => ({
-    id: sheet.id,
-    name: sheet.name,
-    src: sheet.src,
-    thumb: sheet.image ? thumbnail(sheet.image, sheet.imgW, sheet.imgH) : null,
-  }));
-  applyTilesetMerge(doc, pathMergePlan(sheets));
+/** A labelled percentage slider for the asset colour popover, applied live as it moves. */
+function toneSlider(
+  label: string,
+  min: number,
+  max: number,
+  value: number,
+  onInput: (value: number) => void,
+): HTMLElement {
+  const slider = el('input', { class: 'slider', type: 'range', min, max, step: 5, value });
+  const readout = el('span', { class: 'slider-value', text: `${value}%` });
+  slider.addEventListener('input', () => {
+    readout.textContent = `${slider.value}%`;
+    onInput(Number(slider.value));
+  });
+  return el('label', { class: 'field tone-field' }, [
+    el('span', { class: 'field-label', text: label }),
+    el('div', { class: 'slider-row' }, [slider, readout]),
+  ]);
 }
 
 export class App {
@@ -257,7 +192,7 @@ export class App {
     this.objects = new ObjectTools(this.store, this.renderer);
     this.input = new PointerInput(this.canvas, this.store, this.editor, this.renderer, this.objects);
 
-    this.characterView = new CharacterView(this.studio, this.store.settings);
+    this.characterView = new CharacterView(this.studio);
     this.characterPanel = new CharacterPanel(this.store, this.studio, this.characterView, {
       tryOnMap: () => this.tryCharacterOnMap(),
       importSheet: () => this.importSpriteSheet(),
@@ -275,6 +210,8 @@ export class App {
       setPinned: (refs, pinned) => this.setPinned(refs, pinned),
       fileAssets: (folderId, name, refs) => this.fileAssets(folderId, name, refs),
       removeFolder: (folderId) => this.removeFolder(folderId),
+      pinPack: (pack, pinned) => this.pinPack(pack, pinned),
+      removePack: (pack) => this.removePack(pack),
       recolorObject: (anchor) => this.recolorObject(anchor),
       recolorHeldTiles: (anchor) => this.recolorHeldTiles(anchor),
       addImageLayer: () => void this.addImageLayer(),
@@ -404,12 +341,7 @@ export class App {
     await this.refreshStaleAssets();
 
     const added = await this.loadObjectLibrary();
-    // Packs repeat ground pages, so a freshly loaded library is merged down
-    // before it is ever shown.
-    if (added > 0) {
-      collapseDuplicatePaths(this.store.doc);
-      this.store.restructured();
-    }
+    if (added > 0) this.store.restructured();
     // A brand-new project has nothing to paint with, so send the user
     // straight to the import step.
     if (this.store.doc.tilesets.length === 0) this.addTileset();
@@ -465,7 +397,7 @@ export class App {
       /* a blocked localStorage just means scene pages are checked again */
     }
 
-    const have = new Set(this.store.doc.tilesets.map((sheet) => sheet.name));
+    const have = new Set([...this.store.doc.tilesets.map((sheet) => sheet.name), ...this.store.doc.removedSheets]);
     let added = this.applyLibraryHints(entries);
     let opened = this.store.doc.tilesets.length === 0;
     for (const entry of entries) {
@@ -483,6 +415,8 @@ export class App {
           tileset.groundAssets = [];
           tileset.assetsEdited = true;
           tileset.assetsVersion = DETECT_VERSION;
+          clearSheetShadows(tileset);
+          clearSheetBackdrop(tileset);
         } else {
           detectInto(tileset);
         }
@@ -491,13 +425,14 @@ export class App {
           continue;
         }
         have.add(entry.name);
-        this.insertLibrarySheet(tileset);
+        // Painted squares remember their sheet by position, so a new page
+        // only ever goes on the end; anywhere else would move every map.
+        this.store.doc.tilesets.push(tileset);
         added += 1;
         // Show each page as it lands so the iPad is not empty for minutes.
         if (opened) {
           opened = false;
-          const firstFloors = this.store.doc.tilesets.findIndex((sheet) => sheet.name === 'Floors 1');
-          this.store.activeTileset = firstFloors >= 0 ? firstFloors : 0;
+          this.store.activeTileset = 0;
           this.selectFirstTile();
           this.shell.openTab('tiles');
         }
@@ -551,20 +486,6 @@ export class App {
     return changed;
   }
 
-  /** Floor pages stay at the front; everything else appends. */
-  private insertLibrarySheet(tileset: Tileset): void {
-    if (/^floors \d+$/i.test(tileset.name)) {
-      let at = 0;
-      while (at < this.store.doc.tilesets.length && /^floors \d+$/i.test(this.store.doc.tilesets[at].name)) {
-        at += 1;
-      }
-      this.store.doc.tilesets.splice(at, 0, tileset);
-      if (this.store.activeTileset >= at) this.store.activeTileset += 1;
-      return;
-    }
-    this.store.doc.tilesets.push(tileset);
-  }
-
   /**
    * Re-splits sheets found by an older detector, one page at a time so the
    * editor stays usable on a tablet while that runs.
@@ -587,24 +508,15 @@ export class App {
 
   /** Installs a document and resets everything derived from the old one. */
   private adoptDoc(doc: Doc): void {
-    // Every sheet is a list of whole assets now, including sheets saved when
-    // there was a separate ground view, or by an older detector. Placed
-    // assets keep the rectangle they were placed with, so the map is unchanged.
-    collapseDuplicatePaths(doc);
-    doc.tilesets.forEach((sheet, index) => {
+    // Floor pages are gone from the app. Older maps lose them here, along with
+    // anything painted from them; every other square keeps its picture.
+    dropTilesets(doc, isFloorSheet);
+    // Object pages that need a newer detector are redone after the first
+    // paint, not here.
+    for (const sheet of doc.tilesets) {
+      clearSheetShadows(sheet);
       clearSheetBackdrop(sheet);
-      // Floor pages are built every load: the saved file keeps the pack's
-      // original picture. Object pages that need a newer detector are redone
-      // after the first paint, not here.
-      if (!sheet.image || !isRawFloorSheet(sheet.name, sheet.imgW, sheet.imgH, sheet.tileW)) return;
-      const pathStride = sheet.pathStride;
-      buildFloors(sheet);
-      if (pathStride) {
-        pathsToFloors(doc, index, pathStride);
-        sheet.pathStride = undefined;
-      }
-      sheet.name = sheet.name.replace(/^paths/i, 'Floors');
-    });
+    }
     // Maps made with 16 px squares shrank every library tile to a third,
     // which is what warped the pixels. They move onto the art's own size.
     const upgraded = upgradeTileSize(doc);
@@ -922,23 +834,20 @@ export class App {
   private editAssets(sheetIndex: number, op: AssetEdit, indices: number[]): void {
     const sheet = this.store.doc.tilesets[sheetIndex];
     if (!sheet || indices.length === 0) return;
-    if (sheet.generated && sheet.name === MY_FLOORS) {
-      if (op === 'toObjects' || op === 'delete') this.removeMyFloors(sheetIndex, indices);
-      return;
-    }
     if (!sheet.assets) return;
 
     // A shaped object, such as a dirt plot with rounded corners, would paint
-    // its corners and outline into every square; its middle is made into a
-    // seamless square instead, and the object itself stays.
+    // its corners and outline into every square, so it stays an object.
     if (op === 'toGround') {
       const pixels = sheetPixels(sheet);
       const rects = sheet.assets;
       const shaped = pixels ? indices.filter((i) => !fillsItsSquares(sheet, pixels, rects[i])) : [];
       if (shaped.length > 0) {
-        this.makeFloors(sheetIndex, shaped, pixels!);
         indices = indices.filter((i) => !shaped.includes(i));
-        if (indices.length === 0) return;
+        if (indices.length === 0) {
+          this.store.toast('Only whole, solid squares can be a floor. This stays an object you place.');
+          return;
+        }
       }
     }
 
@@ -960,65 +869,6 @@ export class App {
     if (op === 'toGround') this.store.toast('Now a floor square, first on this page. Paint it with the brush or rectangle.');
     else if (op === 'toObjects') this.store.toast('Back to an object you place');
     else this.store.toast(`${label}: ${next.assets.length} left`);
-  }
-
-  /** Adds a seamless floor square to My floors for each shaped object, and picks the first. */
-  private makeFloors(sheetIndex: number, indices: number[], pixels: ImageData): void {
-    const doc = this.store.doc;
-    const sheet = doc.tilesets[sheetIndex];
-    const rects = assetsOf(sheet);
-    const squares = indices.flatMap((i) => {
-      const square = seamlessFloor(pixels.data, sheet.imgW, rects[i], sheet.tileW);
-      return square ? [square] : [];
-    });
-    if (squares.length === 0) {
-      this.store.toast('Too small to make a floor from: it needs a solid middle at least one square wide');
-      return;
-    }
-
-    let floors = -1;
-    let first = 0;
-    this.editor.structural('Make floor', () => {
-      floors = ensureFloorSheet(doc, sheet.tileW, sheet.tileH);
-      const target = doc.tilesets[floors];
-      first = target.count;
-      for (const square of squares) {
-        const canvas = document.createElement('canvas');
-        canvas.width = sheet.tileW;
-        canvas.height = sheet.tileH;
-        canvas.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(square), sheet.tileW, sheet.tileH), 0, 0);
-        writeGeneratedTile(target, target.count, canvas);
-      }
-      persistGeneratedSheet(target);
-    });
-    this.store.activeTileset = floors;
-    this.store.libraryPick = { tilesetId: doc.tilesets[floors].id, index: first };
-    this.store.setTool('brush');
-    this.store.setStamp(singleStamp(floors, first), null);
-    this.shell.palette.layout();
-    this.store.toast('Made a seamless floor on My floors, in the Floors pack. Paint it with the brush or Rectangle.');
-  }
-
-  /** Takes squares off My floors, and off the map wherever they were painted. */
-  private removeMyFloors(sheetIndex: number, indices: number[]): void {
-    const doc = this.store.doc;
-    const sheet = doc.tilesets[sheetIndex];
-    this.editor.structural('Not a floor', () => {
-      const moved = removeGeneratedTiles(sheet, indices);
-      for (const layer of doc.layers) {
-        if (layer.kind !== 'tiles') continue;
-        for (let i = 0; i < layer.data.length; i++) {
-          const tile = layer.data[i];
-          if (tile === EMPTY || tilesetOf(tile) !== sheetIndex) continue;
-          const to = moved[indexOf(tile)] ?? -1;
-          layer.data[i] = to === -1 ? EMPTY : pack(sheetIndex, to, flagsOf(tile));
-        }
-      }
-      persistGeneratedSheet(sheet);
-    });
-    this.store.libraryPick = null;
-    this.store.setStamp(EMPTY_STAMP);
-    this.store.toast('Taken off My floors and the map. The object it came from is still on its page.');
   }
 
   /** Puts stickers on the Pinned page, or takes them off it. */
@@ -1059,10 +909,9 @@ export class App {
   }
 
   /**
-   * A tap on an asset. A floor square becomes the brush so a finger can
-   * paint floors. Anything else is added to the middle of the view, selected
-   * and ready to move — and the brush is put away, so the next finger on
-   * the map pans or drags that asset instead of drawing.
+   * A tap on an asset. A ground square becomes the brush's paint. Anything
+   * else is armed on the brush: each tap on the map places a copy. Only the
+   * brush places, so the brush is picked up for it.
    */
   private tapAsset(sheetIndex: number, assetIndex: number): void {
     const sheet = this.store.doc.tilesets[sheetIndex];
@@ -1076,10 +925,11 @@ export class App {
       this.store.setTool('brush');
       this.store.setStamp(singleStamp(sheetIndex, tile), null);
       this.shell.palette.draw();
-      this.store.toast('Painting floor. Draw, or use Rectangle to fill an area.');
+      this.store.toast('Painting ground. Draw with the Pencil, or use Rectangle to fill an area.');
       return;
     }
 
+    this.store.setTool('brush');
     this.shell.palette.draw();
     this.store.toast('Tap the map to place it. Each tap adds another.');
   }
@@ -1226,6 +1076,13 @@ export class App {
           })
         : hsvToHex(base);
 
+    const contrast = toneSlider('Contrast', 50, 200, Math.round((first.contrast ?? 1) * 100), (value) => {
+      for (const obj of objs) this.objects.setTone(obj, { contrast: value / 100 });
+    });
+    const clarity = toneSlider('Clarity', 0, 100, Math.round((first.clarity ?? 0) * 100), (value) => {
+      for (const obj of objs) this.objects.setTone(obj, { clarity: value / 100 });
+    });
+
     this.objects.beginGesture();
     openColorPopover({
       anchor,
@@ -1240,6 +1097,7 @@ export class App {
         for (const obj of objs) this.objects.setColor(obj, color);
       },
       onClose: () => this.objects.endGesture(objs.length > 1 ? `Recolour ${objs.length}` : 'Recolour'),
+      extra: [contrast, clarity],
     });
   }
 
@@ -1270,10 +1128,35 @@ export class App {
   private confirmRemoveTileset(index: number): void {
     const tileset = this.store.doc.tilesets[index];
     if (!tileset) return;
-    this.editor.removeTileset(index);
+    this.editor.removeTilesets([index]);
     this.store.activeTileset = Math.max(0, Math.min(this.store.activeTileset, this.store.doc.tilesets.length - 1));
     this.store.setStamp(EMPTY_STAMP);
     this.store.toast(`Removed ${tileset.name}`);
+  }
+
+  /** Takes every page of a pack out of the map, after asking. */
+  private removePack(pack: string): void {
+    const doc = this.store.doc;
+    const indices = doc.tilesets.flatMap((sheet, i) => (packOf(sheet.name) === pack ? [i] : []));
+    if (indices.length === 0) return;
+    const pages = indices.length === 1 ? '1 page' : `${indices.length} pages`;
+    if (!window.confirm(`Delete the ${pack} pack (${pages})? Anything placed from it comes off the map. Undo brings it back.`)) {
+      return;
+    }
+    this.editor.removeTilesets(indices, 'Delete pack');
+    this.store.activeTileset = Math.max(0, Math.min(this.store.activeTileset, doc.tilesets.length - 1));
+    this.store.libraryPick = null;
+    this.store.setStamp(EMPTY_STAMP);
+    this.store.toast(`Deleted ${pack}`);
+  }
+
+  /** Lists a pack first in the pack list, or puts it back in order. */
+  private pinPack(pack: string, pinned: boolean): void {
+    const doc = this.store.doc;
+    this.editor.structural(pinned ? 'Pin pack' : 'Unpin pack', () => {
+      doc.pinnedPacks = pinned ? [...doc.pinnedPacks.filter((p) => p !== pack), pack] : doc.pinnedPacks.filter((p) => p !== pack);
+    });
+    this.store.toast(pinned ? `Pinned ${pack}` : `Unpinned ${pack}`);
   }
 
   /**

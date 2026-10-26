@@ -15,6 +15,8 @@ import {
   type Tileset,
 } from '../core/doc';
 import { snapshot, Stroke, type DocSnapshot } from '../core/history';
+import { dropTilesets } from '../core/path-merge';
+import { packOf } from '../ui/packs';
 import {
   flipStampH,
   flipStampV,
@@ -26,7 +28,7 @@ import {
   type Stamp,
 } from '../core/stamp';
 import type { Store } from '../core/store';
-import { EMPTY, flagsOf, indexOf, pack, tilesetOf, type PackedTile } from '../core/tiles';
+import { EMPTY, type PackedTile } from '../core/tiles';
 import type { Renderer } from '../render/renderer';
 import { normalizeRect, type Cell, type Rect } from './geometry';
 
@@ -658,33 +660,18 @@ export class Editor {
   }
 
   /**
-   * Removes a tileset and repairs every reference to it: tiles from the
-   * removed sheet are cleared, and tiles from later sheets shift down to match
-   * the array's new indices.
+   * Removes sheets as one undo step and repairs every reference to them.
+   * Their names are remembered, so the library does not add them back.
    */
-  removeTileset(index: number): void {
-    const removed = this.doc.tilesets[index];
-    if (!removed) return;
-    this.structural('Remove tileset', () => {
+  removeTilesets(indices: number[], label = 'Remove tileset'): void {
+    const doomed = new Set(indices.filter((i) => this.doc.tilesets[i]));
+    if (doomed.size === 0) return;
+    this.structural(label, () => {
       const doc = this.doc;
-      doc.tilesets.splice(index, 1);
-      for (const layer of doc.layers) {
-        // Objects refer to their sheet by id, so only ones from the removed
-        // sheet need to go; nothing has to be renumbered.
-        if (layer.kind === 'objects') {
-          layer.objects = layer.objects.filter((o) => o.tilesetId !== removed.id);
-          continue;
-        }
-        if (!isTileLayer(layer)) continue;
-        const data = layer.data;
-        for (let i = 0; i < data.length; i++) {
-          const tile = data[i];
-          if (tile === EMPTY) continue;
-          const owner = tilesetOf(tile);
-          if (owner === index) data[i] = EMPTY;
-          else if (owner > index) data[i] = pack(owner - 1, indexOf(tile), flagsOf(tile));
-        }
-      }
+      const names = [...doomed].map((i) => doc.tilesets[i].name);
+      dropTilesets(doc, (_, index) => doomed.has(index));
+      doc.removedSheets = [...new Set([...doc.removedSheets, ...names])];
+      doc.pinnedPacks = doc.pinnedPacks.filter((pack) => doc.tilesets.some((t) => packOf(t.name) === pack));
     });
   }
 

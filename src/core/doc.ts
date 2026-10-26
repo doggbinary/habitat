@@ -92,6 +92,12 @@ export interface MapObject {
   hueShift: number;
   saturation: number;
   brightness: number;
+  /** Spread of light and dark, 1 leaves it alone. Absent in older files. */
+  contrast?: number;
+  /** Sharpening between neighbouring pixels, 0 to 1. Absent in older files. */
+  clarity?: number;
+  /** Stops the character on the squares it covers, wherever it is moved or sized to. */
+  blocks?: boolean;
   /** When set, the asset stays where it was dropped until it is unlocked. */
   locked?: boolean;
   /** Assets that share an id move and select together. */
@@ -187,6 +193,10 @@ export interface Doc {
   pins: AssetRef[];
   /** Groups of stickers the user filed together. */
   folders: AssetFolder[];
+  /** Library pages the user removed, so loading the library does not bring them back. */
+  removedSheets: string[];
+  /** Packs listed first in the pack list, in the order they were pinned. */
+  pinnedPacks: string[];
   layers: Layer[];
   /** Index into `layers`. Layer 0 renders at the bottom. */
   activeLayer: number;
@@ -323,6 +333,8 @@ export function createDoc(width = 32, height = 32, tileSize = ART_TILE): Doc {
     tilesets: [],
     pins: [],
     folders: [],
+    removedSheets: [],
+    pinnedPacks: [],
     layers: [createLayer(width, height, 'Layer 1')],
     activeLayer: 0,
   };

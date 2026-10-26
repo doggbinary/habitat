@@ -1,4 +1,3 @@
-import type { Settings } from '../core/store';
 import { framePixels, referenceImage, referencePlacement, type Character, type Frame } from './model';
 import type { Studio } from './studio';
 
@@ -42,10 +41,7 @@ export class CharacterView {
   private readonly scratch = document.createElement('canvas');
   private readonly scratchCtx: CanvasRenderingContext2D;
 
-  constructor(
-    private readonly studio: Studio,
-    private readonly settings: Settings,
-  ) {
+  constructor(private readonly studio: Studio) {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'sprite-canvas';
     const ctx = this.canvas.getContext('2d', { alpha: false });
@@ -289,7 +285,7 @@ export class CharacterView {
 
         // The canvas is locked, so fingers never pan or zoom it. A second
         // finger is a palm or a slip: take back what the first one drew.
-        if (this.touchCount() === 1 && this.settings.fingerDraws) {
+        if (this.touchCount() === 1) {
           this.startDraw(e.pointerId, x, y);
         } else if (this.touchCount() > 1) {
           if (this.mode === 'draw') {
