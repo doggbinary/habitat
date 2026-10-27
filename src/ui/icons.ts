@@ -59,6 +59,7 @@ const PATHS: Record<string, string> = {
   sendBackward: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 3H5a2 2 0 0 0-2 2v11"/>',
   toFront: '<path d="M5 4h14"/><path d="M12 20V9"/><path d="m7 13 5-5 5 5"/>',
   toBack: '<path d="M5 20h14"/><path d="M12 4v11"/><path d="m7 11 5 5 5-5"/>',
+  shrink: '<path d="M3 8h3a2 2 0 0 0 2-2V3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
   pencilEdit: '<path d="M4 20h4L19 9l-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/>',
   palette:

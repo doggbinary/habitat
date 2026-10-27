@@ -155,6 +155,13 @@ describe('saving and loading a project', () => {
     expect(back.references[0].locked).toBe(true);
   });
 
+  it('keeps a locked layer locked, even when it is the only one', () => {
+    const character = createCharacter(16, 1, 1, 1, 'Safe');
+    character.layers[0].locked = true;
+    const [back] = deserializeCharacters(throughJson(serializeProject(createDoc(), [character])));
+    expect(back.layers[0].locked).toBe(true);
+  });
+
   it('keeps layers, flattened into the frames Play walks', () => {
     const character = createCharacter(16, 1, 1, 1, 'Layered');
     // Body on the bottom layer, a hat over it on a second one.
@@ -172,6 +179,7 @@ describe('saving and loading a project', () => {
     expect(back.layers.map((l) => l.name)).toEqual(['Layer 1', 'Hat']);
     expect(back.activeLayer).toBe(1);
     expect([...back.frames[0].data.subarray(0, 8)]).toEqual([10, 20, 30, 255, 200, 0, 0, 255]);
+    expect(back.layers[1].locked).toBeUndefined();
     // Hiding the hat takes it out of what Play shows.
     back.layers[1].visible = false;
     composeFrames(back);

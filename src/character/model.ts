@@ -58,6 +58,8 @@ export interface CharacterLayer {
   id: string;
   name: string;
   visible: boolean;
+  /** A locked layer cannot be drawn on, so a finished body is safe while you add clothes. */
+  locked?: boolean;
   frames: Frame[];
 }
 

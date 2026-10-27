@@ -1,10 +1,17 @@
-import type { Studio } from '../character/studio';
+import type { PixelTool, Studio } from '../character/studio';
 import { openColorPopover, openPopover } from './color-popover';
 import { button, el } from './dom';
-import { icon } from './icons';
+import { icon, type IconName } from './icons';
 
 const HOLD_MS = 500;
 const MAX_BRUSH = 16;
+
+const TOOLS: { id: PixelTool; icon: IconName; label: string }[] = [
+  { id: 'pencil', icon: 'brush', label: 'Draw' },
+  { id: 'eraser', icon: 'eraser', label: 'Erase' },
+  { id: 'fill', icon: 'fill', label: 'Fill' },
+  { id: 'picker', icon: 'picker', label: 'Pick' },
+];
 
 /**
  * The character's palette, Procreate style: tap a swatch to paint with it,
@@ -58,69 +65,114 @@ export function paletteGrid(studio: Studio, changed: () => void): HTMLElement {
   return grid;
 }
 
+export interface StudioBarActions {
+  /** Redraw the canvas only, for live slider changes. */
+  redraw: () => void;
+  /** Something changed: redraw the canvas and anything showing the same state. */
+  changed: () => void;
+  undo: () => void;
+  redo: () => void;
+  exitFullScreen: () => void;
+}
+
 /**
- * The studio's everyday controls, floating top right of the canvas while the
- * side panel is hidden, so drawing full screen loses nothing you reach for.
+ * Everything you reach for while drawing, down the left edge of the canvas:
+ * the four tools, the colour, the palette and the size. In full screen it
+ * also carries undo, redo, the frame arrows and the way back out, since
+ * nothing else is on screen.
  */
 export class StudioBar {
   readonly element: HTMLElement;
   private closePopover: (() => void) | null = null;
+  private fullScreen = false;
 
   constructor(
     private readonly studio: Studio,
-    private readonly redraw: () => void,
-    /** Something changed: redraw the canvas and anything showing the same state. */
-    private readonly changed: () => void,
+    private readonly actions: StudioBarActions,
   ) {
-    this.element = el('div', { class: 'studio-bar', aria: { label: 'Studio controls' } });
+    this.element = el('div', { class: 'studio-bar', aria: { label: 'Drawing tools' } });
   }
 
-  setVisible(visible: boolean): void {
+  setVisible(visible: boolean, fullScreen = false): void {
     this.element.hidden = !visible;
+    this.fullScreen = fullScreen;
     if (!visible) this.closePopover?.();
   }
 
   refresh(): void {
     const studio = this.studio;
-    const color = el('button', {
-      class: 'current-color studio-bar-color',
-      type: 'button',
-      title: 'Open the colour wheel',
-      style: { background: studio.color },
+    const tools = TOOLS.map((tool) => {
+      const active = studio.tool === tool.id;
+      const node = button(`studio-bar-btn${active ? ' active' : ''}`, tool.label, () => {
+        studio.tool = tool.id;
+        this.actions.changed();
+      }, [icon(tool.icon, 22), el('span', { text: tool.label })]);
+      node.setAttribute('aria-pressed', String(active));
+      return node;
     });
-    color.addEventListener('click', () => {
+
+    const swatch = el('span', { class: 'studio-bar-swatch', style: { background: studio.color } });
+    const color: HTMLButtonElement = button('studio-bar-btn', 'Colour: open the colour wheel', () => {
       openColorPopover({
         anchor: color,
         initial: studio.color,
         onChange: (hex) => {
           studio.color = hex;
           if (studio.tool !== 'pencil') studio.tool = 'pencil';
-          color.style.background = hex;
+          swatch.style.background = hex;
         },
-        onClose: () => this.changed(),
+        onClose: () => this.actions.changed(),
       });
-    });
+    }, [swatch, el('span', { text: 'Colour' })]);
 
-    const palette = button('icon-btn', 'Open the palette', () => this.openPalette(palette), [icon('palette', 20)]);
+    const palette = button('studio-bar-btn', 'Palette', () => this.openPalette(palette), [
+      icon('palette', 22),
+      el('span', { text: 'Palette' }),
+    ]);
 
-    const brush = this.sizeButton('pencil', 'brush', 'Brush size');
-    const eraser = this.sizeButton('eraser', 'eraser', 'Eraser size');
+    // Size belongs to whichever of Draw or Erase is chosen.
+    const sizedTool: 'pencil' | 'eraser' = studio.tool === 'eraser' ? 'eraser' : 'pencil';
+    const size = sizedTool === 'eraser' ? studio.eraserSize : studio.pencilSize;
+    const sizeLabel = sizedTool === 'eraser' ? 'Eraser size' : 'Brush size';
+    const sizeButton: HTMLButtonElement = button('studio-bar-btn', sizeLabel, () => {
+      if (studio.tool !== 'pencil' && studio.tool !== 'eraser') studio.tool = 'pencil';
+      this.openSize(sizeButton, sizedTool, sizeLabel);
+    }, [el('span', { class: 'studio-bar-size', text: String(size) }), el('span', { text: 'Size' })]);
 
-    this.element.replaceChildren(color, palette, brush, eraser);
-  }
+    const parts: HTMLElement[] = [...tools, el('div', { class: 'studio-bar-divider' }), color, palette, sizeButton];
 
-  private sizeButton(tool: 'pencil' | 'eraser', name: 'brush' | 'eraser', label: string): HTMLElement {
-    const studio = this.studio;
-    const size = tool === 'eraser' ? studio.eraserSize : studio.pencilSize;
-    const active = studio.tool === tool;
-    const node = button(`icon-btn studio-bar-tool${active ? ' active' : ''}`, label, () => {
-      studio.tool = tool;
-      // Open first: the refresh that follows replaces this button.
-      this.openSize(node, tool, label);
-      this.changed();
-    }, [icon(name, 20), el('span', { class: 'studio-bar-size', text: String(size) })]);
-    node.setAttribute('aria-pressed', String(active));
-    return node;
+    if (this.fullScreen) {
+      const undo = button('studio-bar-btn', 'Undo', () => this.actions.undo(), [icon('undo', 22), el('span', { text: 'Undo' })]);
+      undo.disabled = !studio.canUndo;
+      const redo = button('studio-bar-btn', 'Redo', () => this.actions.redo(), [icon('redo', 22), el('span', { text: 'Redo' })]);
+      redo.disabled = !studio.canRedo;
+      parts.push(el('div', { class: 'studio-bar-divider' }), undo, redo);
+
+      const count = studio.character?.frameCount ?? 0;
+      if (count > 1) {
+        const step = (by: number) => {
+          studio.stepFrame(by);
+          this.actions.changed();
+        };
+        parts.push(
+          el('div', { class: 'studio-bar-divider' }),
+          el('div', { class: 'studio-bar-frames' }, [
+            button('icon-btn', 'Previous frame', () => step(-1), [icon('chevronLeft', 18)]),
+            button('icon-btn', 'Next frame', () => step(1), [icon('chevronRight', 18)]),
+          ]),
+          el('span', { class: 'studio-bar-note', text: `Frame ${studio.frame + 1} of ${count}` }),
+        );
+      }
+      parts.push(
+        el('div', { class: 'studio-bar-divider' }),
+        button('studio-bar-btn', 'Exit full screen', () => this.actions.exitFullScreen(), [
+          icon('shrink', 22),
+          el('span', { text: 'Exit' }),
+        ]),
+      );
+    }
+
+    this.element.replaceChildren(...parts);
   }
 
   private openPalette(anchor: HTMLElement): void {
@@ -129,10 +181,10 @@ export class StudioBar {
       body.replaceChildren(
         el('div', { class: 'popover-title', text: 'Palette' }),
         paletteGrid(this.studio, () => {
-          this.changed();
+          this.actions.changed();
           fill();
         }),
-        el('p', { class: 'hint', text: 'Tap + to add the colour you are using. Press and hold a colour to remove it.' }),
+        el('p', { class: 'hint', text: 'Tap + to keep your colour. Hold a colour to remove it.' }),
       );
     };
     fill();
@@ -158,7 +210,7 @@ export class StudioBar {
       if (tool === 'eraser') studio.eraserSize = next;
       else studio.pencilSize = next;
       value.textContent = `${next} px`;
-      this.redraw();
+      this.actions.redraw();
     });
     this.closePopover?.();
     this.closePopover = openPopover({
@@ -170,7 +222,7 @@ export class StudioBar {
       ],
       onClose: () => {
         this.closePopover = null;
-        this.changed();
+        this.actions.changed();
       },
     });
   }

@@ -37,6 +37,8 @@ export class CharacterView {
 
   /** Runs when a finger has finished moving or sizing the traced picture. */
   onPictureChanged: (() => void) | null = null;
+  /** Runs when a stroke starts on a locked layer, so the reason can be said. */
+  onLockedLayer: (() => void) | null = null;
 
   private dpr = 1;
   private viewW = 0;
@@ -499,6 +501,12 @@ export class CharacterView {
     if (!character || cell.x < 0 || cell.y < 0 || cell.x >= character.w || cell.y >= character.h) {
       this.mode = 'idle';
       this.activeId = null;
+      return;
+    }
+    if (this.studio.tool !== 'picker' && this.studio.layer?.locked) {
+      this.mode = 'idle';
+      this.activeId = null;
+      this.onLockedLayer?.();
       return;
     }
     this.mode = 'draw';

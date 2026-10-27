@@ -171,6 +171,14 @@ export class Studio {
     this.emit(true);
   }
 
+  lockLayer(index: number, locked: boolean): void {
+    const layer = this.character?.layers[index];
+    if (!layer) return;
+    if (locked) layer.locked = true;
+    else delete layer.locked;
+    this.emit(true);
+  }
+
   toggleLayer(index: number): void {
     const layer = this.character?.layers[index];
     if (!layer) return;
@@ -284,6 +292,9 @@ export class Studio {
     if (!character || !frame) return false;
     const { w, h } = character;
     if (x < 0 || y < 0 || x >= w || y >= h) return false;
+
+    // Picking a colour only reads; everything else needs a layer that is not locked.
+    if (this.tool !== 'picker' && this.layer?.locked) return false;
 
     if (this.tool === 'picker') {
       // What you see, across every layer, even mid-stroke.

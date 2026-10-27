@@ -90,6 +90,11 @@ export class Shell {
   private mode: Mode = 'map';
   private readonly modeBar: HTMLElement;
   private readonly studioBar: StudioBar;
+  private readonly appEl: HTMLElement;
+  /** Says on the canvas itself when a finger is moving a picture rather than drawing. */
+  private readonly pictureChip: HTMLElement;
+  /** The Character studio with nothing but the canvas and the drawing sidebar. */
+  private fullScreen = false;
 
   constructor(
     root: HTMLElement,
@@ -137,22 +142,30 @@ export class Shell {
 
     this.modeBar = el('div', { class: 'mode-bar', role: 'tablist' });
 
-    this.studioBar = new StudioBar(studio, () => characterView.requestDraw(), () => {
-      characterView.requestDraw();
-      characterPanel.refresh();
-      studio.emit();
+    this.studioBar = new StudioBar(studio, {
+      redraw: () => characterView.requestDraw(),
+      changed: () => {
+        characterView.requestDraw();
+        characterPanel.refresh();
+        studio.emit();
+      },
+      undo: () => this.undo(),
+      redo: () => this.redo(),
+      exitFullScreen: () => this.setFullScreen(false),
     });
+
+    this.pictureChip = el('div', { class: 'picture-moving' });
 
     const canvasArea = el('div', { class: 'canvas-area' }, [
       canvas,
       characterView.canvas,
       this.optionsBar,
       this.studioBar.element,
+      this.pictureChip,
       this.status,
     ]);
 
-    root.append(
-      el('div', { class: 'app' }, [
+    this.appEl = el('div', { class: 'app' }, [
         el('header', { class: 'topbar' }, [
           el('div', { class: 'brand' }, [icon('pencilTip', 20), el('span', { text: 'Habitat' })]),
           this.modeBar,
@@ -161,8 +174,8 @@ export class Shell {
         ]),
         el('div', { class: 'workspace' }, [this.toolRail, canvasArea, this.dock]),
         this.toastNode,
-      ]),
-    );
+      ]);
+    root.append(this.appEl);
 
     // The name at the top opens the list it belongs to: your maps, or your characters.
     this.title.addEventListener('click', () => {
@@ -271,8 +284,11 @@ export class Shell {
     if (mode !== 'map') this.editor.commitSelection();
     this.mode = mode;
     const character = mode === 'character';
+    if (!character && this.fullScreen) this.setFullScreen(false);
     this.renderer.canvas.classList.toggle('inactive', character);
     this.characterView.canvas.classList.toggle('inactive', !character);
+    // The studio keeps its tools in the sidebar on the canvas, not the rail.
+    this.appEl.classList.toggle('studio', character);
 
     this.buildModeBar();
     this.buildTabs();
@@ -361,15 +377,30 @@ export class Shell {
           button('icon-btn', 'Fit map to screen', () => this.actions.fitToView(), [icon('fit', 20)]),
         ];
 
+    // In the studio the panel and full screen buttons carry words: anyone
+    // should be able to find their way to just the drawing.
+    const studioButtons = character
+      ? [
+          button('btn subtle top-labelled', 'Full screen: just the canvas and your tools', () => this.setFullScreen(true), [
+            icon('fit', 18),
+            el('span', { text: 'Full screen' }),
+          ]),
+          button(`btn subtle top-labelled${this.dockOpen ? ' active' : ''}`, 'Show or hide the panel', () => this.toggleDock(), [
+            icon('layers', 18),
+            el('span', { text: 'Panel' }),
+          ]),
+        ]
+      : [
+          button('icon-btn dock-toggle', 'Show or hide the side panel', () => this.toggleDock(), [icon('layers', 20)]),
+        ];
+
     this.topActions.append(
       undo,
       redo,
       ...zoom,
       el('div', { class: 'divider' }),
       button('icon-btn', 'Export', () => this.actions.exportMap(), [icon('download', 20)]),
-      button('icon-btn dock-toggle', 'Show or hide the side panel', () => this.toggleDock(), [
-        icon('layers', 20),
-      ]),
+      ...studioButtons,
     );
   }
 
@@ -504,18 +535,11 @@ export class Shell {
 
     if (this.mode === 'character') {
       const character = this.studio.character;
-      const reference = character ? activeReference(character) : null;
-      const fingersMovePicture = !!reference && reference.visible && !reference.locked;
+      if (!character) {
+        this.optionsBar.append(el('span', { class: 'chip-label', text: 'No character yet' }));
+        return;
+      }
       chips.push(
-        el('span', {
-          class: 'chip-label',
-          text: !character
-            ? 'No character yet'
-            : fingersMovePicture
-              ? 'Pencil draws, finger moves the picture'
-              : 'Pencil or finger draws',
-        }),
-        el('div', { class: 'divider vertical' }),
         this.chipToggle('flipH', 'Symmetry', this.studio.mirrorX, () => {
           this.studio.mirrorX = !this.studio.mirrorX;
           this.characterView.requestDraw();
@@ -523,6 +547,11 @@ export class Shell {
         }),
         this.chipToggle('layers', 'Onion skin', this.studio.onionSkin, () => {
           this.studio.onionSkin = !this.studio.onionSkin;
+          this.characterView.requestDraw();
+          this.refreshPanels();
+        }),
+        this.chipToggle('grid', 'Grid', this.studio.showGrid, () => {
+          this.studio.showGrid = !this.studio.showGrid;
           this.characterView.requestDraw();
           this.refreshPanels();
         }),
@@ -783,6 +812,7 @@ export class Shell {
   toggleDock(force?: boolean): void {
     this.dockOpen = force ?? !this.dockOpen;
     this.dock.classList.toggle('collapsed', !this.dockOpen);
+    this.buildTopActions();
     this.refreshStudioBar();
     // The canvas changed size, so the renderer needs new dimensions.
     requestAnimationFrame(() => {
@@ -803,11 +833,61 @@ export class Shell {
     this.refreshStatus();
   }
 
-  /** With the panel hidden, the studio's colour and brush controls float over the canvas instead. */
+  /** The drawing sidebar is always on the studio canvas; full screen adds undo, frames and the way out. */
   private refreshStudioBar(): void {
-    const visible = this.mode === 'character' && !this.dockOpen && !!this.studio.character;
-    this.studioBar.setVisible(visible);
+    const visible = this.mode === 'character' && !!this.studio.character;
+    this.studioBar.setVisible(visible, this.fullScreen);
     if (visible) this.studioBar.refresh();
+    this.refreshPictureChip();
+  }
+
+  /** While fingers move the chosen picture, the canvas says so, with one tap to lock it and draw. */
+  private refreshPictureChip(): void {
+    const character = this.mode === 'character' ? this.studio.character : null;
+    const picture = character ? activeReference(character) : null;
+    const moving = !!picture && picture.visible && !picture.locked;
+    this.pictureChip.hidden = !moving;
+    if (!moving || !picture) {
+      this.pictureChip.replaceChildren();
+      return;
+    }
+    this.pictureChip.replaceChildren(
+      button('picture-moving-btn', 'Lock the picture so your finger draws', () => {
+        picture.locked = true;
+        this.studio.emit(true);
+        this.characterPanel.refresh();
+        this.store.toast('Picture locked. Your finger draws now.');
+      }, [
+        icon('unlock', 18),
+        el('span', { text: 'Moving picture.' }),
+        el('strong', { text: 'Tap to lock' }),
+      ]),
+    );
+  }
+
+  /**
+   * Full screen hides everything but the canvas and the drawing sidebar. On
+   * iPad it also asks Safari for the whole screen where that is allowed.
+   */
+  setFullScreen(on: boolean): void {
+    if (this.fullScreen === on) return;
+    this.fullScreen = on;
+    this.appEl.classList.toggle('full-screen', on);
+    const doc = document as Document & { webkitFullscreenElement?: Element; webkitExitFullscreen?: () => void };
+    const root = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => void };
+    try {
+      if (on && !document.fullscreenElement && !doc.webkitFullscreenElement) {
+        if (root.requestFullscreen) void root.requestFullscreen().catch(() => {});
+        else root.webkitRequestFullscreen?.();
+      } else if (!on && (document.fullscreenElement || doc.webkitFullscreenElement)) {
+        if (document.exitFullscreen) void document.exitFullscreen().catch(() => {});
+        else doc.webkitExitFullscreen?.();
+      }
+    } catch {
+      /* the app's own full screen is enough */
+    }
+    this.refreshChrome();
+    requestAnimationFrame(() => this.characterView.resize());
   }
 
   refreshPanels(): void {

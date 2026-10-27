@@ -8,32 +8,23 @@ import {
   referenceImage,
   referencePlacement,
   type Character,
+  type CharacterReference,
 } from '../character/model';
 import { characterThumb } from '../character/sheet';
-import type { PixelTool, Studio } from '../character/studio';
+import type { Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
 import type { Store } from '../core/store';
 import { freeFolderName, removeFolder, renameFolder } from '../io/library';
-import { openColorPopover } from './color-popover';
 import { pickFile, readFileAsDataUrl } from './dialogs';
 import { button, clear, el } from './dom';
-import { icon, type IconName } from './icons';
+import { icon } from './icons';
 import { confirmAction, openLibrary, promptName } from './library-browser';
-import { paletteGrid } from './studio-bar';
-
-const TOOLS: { id: PixelTool; icon: IconName; label: string }[] = [
-  { id: 'pencil', icon: 'brush', label: 'Draw' },
-  { id: 'eraser', icon: 'eraser', label: 'Erase' },
-  { id: 'fill', icon: 'fill', label: 'Fill' },
-  { id: 'picker', icon: 'picker', label: 'Pick colour' },
-];
+import { STUDIO_TABS, recallTab, rememberTab, type StudioTab } from './studio-tabs';
 
 /**
- * Everything around the sprite canvas: which character, which pose, what
- * colour, and a live preview of the walk cycle.
- *
- * The layout puts colour and frames nearest the canvas because those are what
- * you touch constantly; sizing and template actions sit at the bottom.
+ * Everything around the sprite canvas, in three short tabs: which character
+ * and how it walks, its layers and trace pictures, and its poses and frames.
+ * Drawing tools and colour are in the sidebar on the canvas.
  */
 export class CharacterPanel {
   readonly element: HTMLElement;
@@ -42,6 +33,7 @@ export class CharacterPanel {
   private previewHandle = 0;
   private previewTick = 0;
   private previewLast = 0;
+  private tab: StudioTab = recallTab();
 
   constructor(
     private readonly store: Store,
@@ -52,6 +44,10 @@ export class CharacterPanel {
     this.previewCanvas = el('canvas', { class: 'sprite-preview' });
     this.element = el('div', { class: 'character-panel' });
     this.view.onPictureChanged = () => this.refresh();
+    this.view.onLockedLayer = () => {
+      const name = this.studio.layer?.name ?? 'This layer';
+      this.store.toast(`${name} is locked. Unlock it in Layers to draw on it.`);
+    };
     this.startPreview();
   }
 
@@ -82,23 +78,29 @@ export class CharacterPanel {
       return;
     }
 
-    this.element.append(
-      this.characterPager(character),
-      this.toolsSection(),
-      this.paletteSection(),
-      this.layersSection(character),
-      this.framesSection(character),
-      this.traceSection(character),
-      this.previewSection(character),
-      this.templateSection(character),
+    // Three short pages instead of one long scroll. Drawing tools and colour
+    // live in the sidebar on the canvas.
+    const tabs = el(
+      'div',
+      { class: 'dock-tabs studio-tabs', role: 'tablist' },
+      STUDIO_TABS.map((tab) => {
+        const active = tab.id === this.tab;
+        const node = button(`dock-tab${active ? ' active' : ''}`, tab.label, () => {
+          this.tab = tab.id;
+          rememberTab(tab.id);
+          this.refresh();
+        }, [el('span', { text: tab.label })]);
+        node.setAttribute('role', 'tab');
+        node.setAttribute('aria-selected', String(active));
+        return node;
+      }),
     );
-  }
-
-  /** Colour or palette changed: redraw, rebuild, and let the studio bar catch up. */
-  private changed(): void {
-    this.view.requestDraw();
-    this.refresh();
-    this.studio.emit();
+    const pages: Record<StudioTab, () => HTMLElement[]> = {
+      character: () => [this.characterPager(character), this.previewSection(character), this.templateSection(character)],
+      layers: () => [this.layersSection(character), this.traceSection(character)],
+      frames: () => [this.framesSection(character)],
+    };
+    this.element.append(tabs, ...pages[this.tab]());
   }
 
   private createCharacter(withTemplate: boolean): void {
@@ -250,167 +252,64 @@ export class CharacterPanel {
       this.view.requestDraw();
       this.refresh();
     };
+    // Every row: show or hide, the name (tap to draw on it), lock. The rarer
+    // actions only appear under the layer you are on, so the list stays calm.
     const rows = character.layers
       .map((layer, index) => {
         const active = index === character.activeLayer;
-        const pick = button('layer-row-name', 'Draw on this layer', () => {
+        const pick = button('layer-row-name', `Draw on ${layer.name}`, () => {
           studio.selectLayer(index);
           after();
         }, [el('span', { text: layer.name })]);
-        return el('div', { class: `layer-row${active ? ' active' : ''}` }, [
+        const row = el('div', { class: `layer-row${active ? ' active' : ''}${layer.locked ? ' locked' : ''}` }, [
           button('icon-btn', layer.visible ? 'Hide this layer' : 'Show this layer', () => {
             studio.toggleLayer(index);
             after();
           }, [icon(layer.visible ? 'eye' : 'eyeOff', 18)]),
           pick,
-          button('icon-btn', 'Rename this layer', () => {
+          button(`icon-btn${layer.locked ? ' active' : ''}`, layer.locked ? 'Unlock: draw on this layer again' : 'Lock: keep this layer safe', () => {
+            studio.lockLayer(index, !layer.locked);
+            after();
+          }, [icon(layer.locked ? 'lock' : 'unlock', 18)]),
+        ]);
+        if (!active) return [row];
+        const actions = el('div', { class: 'layer-row-actions' }, [
+          button('chip', 'Rename this layer', () => {
             promptName('Rename layer', layer.name, (name) => {
               layer.name = name;
               studio.emit(true);
               after();
             });
-          }, [icon('pencilEdit', 16)]),
-          button('icon-btn', 'Move up, in front', () => {
+          }, [icon('pencilEdit', 15), el('span', { class: 'chip-text', text: 'Rename' })]),
+          button('chip', 'Move up, in front', () => {
             studio.moveLayer(index, 1);
             after();
-          }, [icon('chevronUp', 16)]),
-          button('icon-btn', 'Move down, behind', () => {
+          }, [icon('chevronUp', 15), el('span', { class: 'chip-text', text: 'Up' })]),
+          button('chip', 'Move down, behind', () => {
             studio.moveLayer(index, -1);
             after();
-          }, [icon('chevronDown', 16)]),
+          }, [icon('chevronDown', 15), el('span', { class: 'chip-text', text: 'Down' })]),
           character.layers.length > 1
-            ? button('icon-btn danger', 'Delete this layer', () => {
-                confirmAction(`Delete ${layer.name}?`, 'Every frame drawn on this layer goes with it.', 'Delete', () => {
+            ? button('chip danger', 'Delete this layer', () => {
+                confirmAction(`Delete ${layer.name}?`, 'Everything drawn on this layer goes with it.', 'Delete', () => {
                   studio.removeLayer(index);
                   after();
                 });
-              }, [icon('trash', 16)])
+              }, [icon('trash', 15), el('span', { class: 'chip-text', text: 'Delete' })])
             : null,
         ]);
+        return [row, actions];
       })
-      .reverse();
+      .reverse()
+      .flat();
 
     return section('Layers', [
+      el('p', { class: 'hint', text: 'Tap a layer to draw on it. Lock it to keep it safe.' }),
       el('div', { class: 'layer-list' }, rows),
       button('btn subtle full', 'Add a layer above this one', () => {
         studio.addLayer();
         after();
       }, [icon('plus', 16), el('span', { text: 'Add layer' })]),
-      el('p', {
-        class: 'hint',
-        text: 'Each layer has every pose and frame. Draw clothes or hair on their own layer; Play and export show them all together.',
-      }),
-    ]);
-  }
-
-  private toolsSection(): HTMLElement {
-    const tools = TOOLS.map((tool) => {
-      const active = this.studio.tool === tool.id;
-      const node = button(`chip${active ? ' active' : ''}`, tool.label, () => {
-        this.studio.tool = tool.id;
-        this.refresh();
-      }, [icon(tool.icon, 17), el('span', { class: 'chip-text', text: tool.label })]);
-      node.setAttribute('aria-pressed', String(active));
-      return node;
-    });
-
-    const toggles = [
-      this.toggleChip('flipH', 'Symmetry', this.studio.mirrorX, 'Draws the same stroke on both sides', () => {
-        this.studio.mirrorX = !this.studio.mirrorX;
-        this.view.requestDraw();
-        this.refresh();
-      }),
-      this.toggleChip('layers', 'Onion skin', this.studio.onionSkin, 'Shows the previous frame faintly behind', () => {
-        this.studio.onionSkin = !this.studio.onionSkin;
-        this.view.requestDraw();
-        this.refresh();
-      }),
-      this.toggleChip('grid', 'Pixel grid', this.studio.showGrid, '', () => {
-        this.studio.showGrid = !this.studio.showGrid;
-        this.view.requestDraw();
-        this.refresh();
-      }),
-    ];
-
-    return section('Tools', [
-      el('div', { class: 'chip-row' }, tools),
-      ...(this.studio.tool === 'pencil' || this.studio.tool === 'eraser' ? [this.brushSizeRow()] : []),
-      el('div', { class: 'chip-row' }, toggles),
-    ]);
-  }
-
-  /** Square brush sizes for the pencil and the eraser, each remembered on its own. */
-  private brushSizeRow(): HTMLElement {
-    const current = this.studio.brushSize;
-    const label = this.studio.tool === 'eraser' ? 'Eraser size' : 'Pencil size';
-    const step = (by: number) => {
-      this.studio.brushSize = current + by;
-      this.view.requestDraw();
-      this.refresh();
-    };
-    const smaller = button('icon-btn', `Smaller ${label.toLowerCase()}`, () => step(-1), [icon('minus', 18)]);
-    const bigger = button('icon-btn', `Bigger ${label.toLowerCase()}`, () => step(1), [icon('plus', 18)]);
-    smaller.disabled = current <= 1;
-    bigger.disabled = current >= 16;
-    const presets = [1, 2, 4, 8].map((size) =>
-      button(`chip${size === current ? ' active' : ''}`, `${size} px`, () => {
-        this.studio.brushSize = size;
-        this.view.requestDraw();
-        this.refresh();
-      }, [el('span', { class: 'chip-text', text: `${size}` })]),
-    );
-    return el('div', { class: 'brush-size-row' }, [
-      el('span', { class: 'field-label', text: label }),
-      el('div', { class: 'chip-row' }, [smaller, el('span', { class: 'slider-value', text: `${current} px` }), bigger, ...presets]),
-    ]);
-  }
-
-  private toggleChip(
-    name: IconName,
-    label: string,
-    active: boolean,
-    hint: string,
-    onPress: () => void,
-  ): HTMLElement {
-    const node = button(`chip${active ? ' active' : ''}`, hint || label, onPress, [
-      icon(name, 17),
-      el('span', { class: 'chip-text', text: label }),
-    ]);
-    node.setAttribute('aria-pressed', String(active));
-    return node;
-  }
-
-  private paletteSection(): HTMLElement {
-    // The current colour doubles as the button that opens the wheel, so the
-    // picker stays out of the way until it is wanted.
-    const current = el('button', {
-      class: 'current-color',
-      type: 'button',
-      title: 'Open the colour wheel',
-      style: { background: this.studio.color },
-    });
-    current.addEventListener('click', () => {
-      openColorPopover({
-        anchor: current,
-        initial: this.studio.color,
-        onChange: (hex) => {
-          this.studio.color = hex;
-          if (this.studio.tool !== 'pencil') this.studio.tool = 'pencil';
-          current.style.background = hex;
-        },
-        onClose: () => this.changed(),
-      });
-    });
-
-    return section('Colour', [
-      el('div', { class: 'color-row' }, [
-        current,
-        el('div', { class: 'color-row-text' }, [
-          el('span', { text: this.studio.color.toUpperCase() }),
-          el('span', { class: 'hint', text: 'Tap to open the wheel. + adds it to the palette; hold a colour to remove it.' }),
-        ]),
-      ]),
-      paletteGrid(this.studio, () => this.changed()),
     ]);
   }
 
@@ -465,7 +364,7 @@ export class CharacterPanel {
       el('div', { class: 'chip-row' }, dirs),
       el('p', {
         class: 'hint',
-        text: 'Frames 1 and 3 stand still; 2 and 4 are the two steps. Onion skin shows the frame before this one.',
+        text: 'Frames 1 and 3 stand; 2 and 4 are steps.',
       }),
       strip,
       el('div', { class: 'layer-actions' }, [
@@ -505,7 +404,7 @@ export class CharacterPanel {
 
     return section('Preview', [
       el('div', { class: 'preview-row' }, [this.previewCanvas]),
-      el('p', { class: 'hint', text: 'Shown at the size it will appear on your map, and at 3x.' }),
+      el('p', { class: 'hint', text: 'Map size, and 3x bigger.' }),
       el('label', { class: 'field' }, [
         el('span', { class: 'field-label', text: 'Step speed' }),
         el('div', { class: 'slider-row' }, [speed, readout]),
@@ -513,10 +412,6 @@ export class CharacterPanel {
       button('btn primary full', 'Try it on the map', () => this.actions.tryOnMap(), [
         el('span', { text: 'Try it on the map' }),
       ]),
-      el('p', {
-        class: 'hint',
-        text: 'Drops the character onto your map next to real tiles, so you can see whether it reads at the right size.',
-      }),
     ]);
   }
 
@@ -544,37 +439,64 @@ export class CharacterPanel {
       }
     };
 
+    const addButton = button('btn subtle full', 'Add a picture to trace over', () => void importPicture(false), [
+      icon('image', 16),
+      el('span', { text: 'Add a picture' }),
+    ]);
+
     if (!reference) {
-      return section('Trace a picture', [
-        el('p', {
-          class: 'hint',
-          text: 'Put drawings or photos behind the pixels and draw over them. They stay in place on every pose and are not part of the character.',
-        }),
-        button('btn full', 'Import a picture to trace', () => void importPicture(false), [
-          icon('image', 16),
-          el('span', { text: 'Import a picture' }),
-        ]),
+      return section('Pictures behind', [
+        el('p', { class: 'hint', text: 'Add a drawing or photo to trace over. It is never part of your character.' }),
+        addButton,
       ]);
     }
 
-    const strip = el('div', { class: 'picture-strip' }, [
-      ...character.references.map((picture, index) => {
-        const chip = button(
-          `picture-chip${index === character.activeReference ? ' active' : ''}${picture.visible ? '' : ' hidden-picture'}`,
-          `Picture ${index + 1}${picture.locked ? ', locked' : ''}`,
-          () => {
+    const after = () => {
+      this.studio.emit(true);
+      this.view.requestDraw();
+      this.refresh();
+    };
+    // Top picture first, like the layers above. Every row: thumbnail, show or
+    // hide, lock. The chosen one opens its controls underneath.
+    const rows = character.references
+      .map((picture, index) => {
+        const active = index === character.activeReference;
+        const thumb = el('span', { class: 'picture-thumb' });
+        thumb.style.backgroundImage = `url("${picture.src}")`;
+        const row = el('div', { class: `layer-row picture-row${active ? ' active' : ''}` }, [
+          button('icon-btn', picture.visible ? 'Hide this picture' : 'Show this picture', () => {
+            picture.visible = !picture.visible;
+            after();
+          }, [icon(picture.visible ? 'eye' : 'eyeOff', 18)]),
+          button('layer-row-name', `Picture ${index + 1}: tap to adjust it`, () => {
             character.activeReference = index;
-            this.studio.emit();
-            this.refresh();
-          },
-          picture.locked ? [icon('lock', 14)] : [],
-        );
-        chip.style.backgroundImage = `url("${picture.src}")`;
-        return chip;
-      }),
-      button('picture-chip add', 'Add another picture to trace', () => void importPicture(false), [icon('plus', 18)]),
-    ]);
+            after();
+          }, [thumb, el('span', { text: `Picture ${index + 1}` })]),
+          button(
+            `icon-btn${picture.locked ? ' active' : ''}`,
+            picture.locked ? 'Unlock: move and size it with a finger' : 'Lock: keep it still so a finger draws',
+            () => {
+              picture.locked = !picture.locked;
+              character.activeReference = index;
+              after();
+            },
+            [icon(picture.locked ? 'lock' : 'unlock', 18)],
+          ),
+        ]);
+        return active ? [row, this.pictureControls(character, picture, () => void importPicture(true))] : [row];
+      })
+      .reverse()
+      .flat();
 
+    return section('Pictures behind', [
+      el('p', { class: 'hint', text: 'Unlocked pictures move with a finger. Lock one to draw over it.' }),
+      el('div', { class: 'layer-list' }, rows),
+      addButton,
+    ]);
+  }
+
+  /** Fade, size and the rest, for the picture chosen in the list. */
+  private pictureControls(character: Character, reference: CharacterReference, replace: () => void): HTMLElement {
     const opacity = el('input', {
       class: 'slider',
       type: 'range',
@@ -602,15 +524,7 @@ export class CharacterPanel {
     });
     size.addEventListener('change', () => this.studio.emit());
 
-    const locked = reference.locked === true;
-    return section('Trace pictures', [
-      strip,
-      el('p', {
-        class: 'hint',
-        text: character.references.length > 1
-          ? 'Tap a picture to adjust it. Fingers move the chosen one while it is unlocked.'
-          : 'Add more with + to trace from several drawings at once.',
-      }),
+    return el('div', { class: 'picture-controls' }, [
       el('label', { class: 'field' }, [
         el('span', { class: 'field-label', text: 'Fade' }),
         el('div', { class: 'slider-row' }, [opacity, readout]),
@@ -620,11 +534,6 @@ export class CharacterPanel {
         el('div', { class: 'slider-row' }, [size, sizeReadout]),
       ]),
       el('div', { class: 'chip-row' }, [
-        this.toggleChip(locked ? 'lock' : 'unlock', locked ? 'Picture locked' : 'Lock picture', locked, 'Lock the picture so fingers draw instead of moving it', () => {
-          reference.locked = !locked;
-          this.studio.emit();
-          this.refresh();
-        }),
         button('chip', 'Put the picture back to its fitted size and place', () => {
           delete reference.scale;
           delete reference.x;
@@ -633,23 +542,7 @@ export class CharacterPanel {
           this.view.requestDraw();
           this.refresh();
         }, [el('span', { class: 'chip-text', text: 'Reset size' })]),
-      ]),
-      el('p', {
-        class: 'hint',
-        text: locked
-          ? 'Fingers and the Pencil draw. Unlock to move the picture.'
-          : reference.visible
-            ? 'Drag with a finger to move the picture, pinch to size it. The Pencil draws. Lock it to draw with a finger.'
-            : 'Show the picture to move it with a finger.',
-      }),
-      el('div', { class: 'chip-row' }, [
-        this.toggleChip(reference.visible ? 'eye' : 'eyeOff', reference.visible ? 'Showing' : 'Hidden', reference.visible, 'Show or hide the picture', () => {
-          reference.visible = !reference.visible;
-          this.studio.emit();
-          this.view.requestDraw();
-          this.refresh();
-        }),
-        button('chip', 'Replace the picture', () => void importPicture(true), [
+        button('chip', 'Replace the picture', replace, [
           icon('image', 17),
           el('span', { class: 'chip-text', text: 'Replace' }),
         ]),
@@ -666,16 +559,15 @@ export class CharacterPanel {
 
   private templateSection(character: Character): HTMLElement {
     return section('Start over', [
-      el('p', {
-        class: 'hint',
-        text: 'Change the canvas size from the size shown on the bottom right of the canvas.',
-      }),
+      el('p', { class: 'hint', text: 'Change the canvas size with the size button under the canvas.' }),
       button('btn subtle full', 'Start over from the template', () => {
-        if (!confirm('Replace every frame of this character with the starter body?')) return;
-        applyTemplate(character);
-        this.studio.clearHistory();
-        this.view.requestDraw();
-        this.refresh();
+        confirmAction('Start over?', 'This layer goes back to the starter body on every frame.', 'Start over', () => {
+          applyTemplate(character);
+          this.studio.clearHistory();
+          this.studio.emit(true);
+          this.view.requestDraw();
+          this.refresh();
+        });
       }, [el('span', { text: 'Start over from the template' })]),
     ]);
   }

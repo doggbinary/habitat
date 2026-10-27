@@ -154,6 +154,20 @@ describe('drawing in the studio', () => {
     expect(getPixel(layers[1].frames[0], 32, 2, 2)[3]).toBe(0);
   });
 
+  it('does not paint on a locked layer, but can still pick a colour from it', () => {
+    const s = studio();
+    s.paint(1, 1);
+    s.lockLayer(0, true);
+    s.color = '#00ff00';
+    expect(s.paint(3, 3)).toBe(false);
+    expect(getPixel(s.currentFrame!, 32, 3, 3)[3]).toBe(0);
+    s.tool = 'picker';
+    s.paint(1, 1);
+    expect(s.color).toBe('#ff0000');
+    s.lockLayer(0, false);
+    expect(s.character!.layers[0].locked).toBeUndefined();
+  });
+
   it('moves layers and always keeps one', () => {
     const s = studio();
     s.addLayer();

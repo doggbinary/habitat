@@ -263,6 +263,15 @@ textarea {
   gap: 18px;
 }
 
+/* The studio's tabs stay in view while the page under them scrolls. */
+.studio-tabs {
+  position: sticky;
+  top: -12px;
+  z-index: 2;
+  margin: -12px -12px 0;
+  background: var(--panel);
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -495,43 +504,211 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* The drawing sidebar: a column down the left of the studio canvas. */
+:root {
+  --studio-bar: 78px;
+}
+
 .studio-bar {
   position: absolute;
   z-index: 5;
-  top: 12px;
-  right: 12px;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--studio-bar);
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px;
-  background: rgba(22, 24, 31, 0.92);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 8px 6px;
+  padding-bottom: calc(8px + var(--sa-bottom));
+  overflow-y: auto;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
 }
 
 .studio-bar[hidden] {
   display: none;
 }
 
-.studio-bar .studio-bar-color {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
+.studio-bar-btn {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 56px;
+  padding: 6px 2px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
 }
 
-.studio-bar-tool {
-  position: relative;
+.studio-bar-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.studio-bar-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.studio-bar-btn:disabled {
+  opacity: 0.35;
+}
+
+.studio-bar-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 .studio-bar-size {
-  position: absolute;
-  right: 2px;
-  bottom: 1px;
-  font-size: 10px;
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  border: 2px solid currentColor;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  line-height: 1;
+}
+
+.studio-bar-divider {
+  flex: none;
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+.studio-bar-frames {
+  display: flex;
+  justify-content: center;
+}
+
+.studio-bar-note {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The studio's tools live in the sidebar, so the rail steps aside, and the
+   canvas starts to the right of the sidebar so nothing hides the sprite. */
+.app.studio .tool-rail {
+  display: none;
+}
+
+.app.studio .sprite-canvas {
+  left: var(--studio-bar);
+  width: calc(100% - var(--studio-bar));
+}
+
+.app.studio .options-bar {
+  left: calc(var(--studio-bar) + 12px);
+  max-width: calc(100% - var(--studio-bar) - 24px);
+}
+
+.top-labelled {
+  min-height: 40px;
+  padding: 0 12px;
+  gap: 6px;
+}
+
+.top-labelled.active {
+  color: var(--accent);
+}
+
+.picture-moving {
+  position: absolute;
+  z-index: 6;
+  top: 12px;
+  left: calc(var(--studio-bar) + (100% - var(--studio-bar)) / 2);
+  transform: translateX(-50%);
+}
+
+.picture-moving[hidden] {
+  display: none;
+}
+
+.picture-moving-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: rgba(22, 24, 31, 0.94);
+  backdrop-filter: blur(12px);
+  color: var(--text);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.picture-moving-btn strong {
+  color: var(--accent);
+}
+
+.app.full-screen .picture-moving {
+  top: calc(12px + var(--sa-top));
+}
+
+.layer-row.locked .layer-row-name {
+  color: var(--muted);
+}
+
+.layer-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 4px 6px 44px;
+}
+
+.picture-thumb {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  margin-right: 8px;
+  flex: none;
+  vertical-align: middle;
+  border-radius: 6px;
+  background: var(--panel-2) center / contain no-repeat;
+}
+
+.picture-row .layer-row-name {
+  display: flex;
+  align-items: center;
+}
+
+.picture-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 4px 8px 44px;
+}
+
+/* Full screen: the canvas and the drawing sidebar, nothing else. */
+.app.full-screen .topbar,
+.app.full-screen .dock,
+.app.full-screen .options-bar,
+.app.full-screen .status-bar,
+.app.full-screen .tool-rail {
+  display: none;
+}
+
+.app.full-screen .studio-bar {
+  padding-top: calc(8px + var(--sa-top));
 }
 
 .studio-palette {
