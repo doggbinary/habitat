@@ -668,6 +668,23 @@ textarea {
   color: var(--muted);
 }
 
+.layers-popover {
+  width: 300px;
+}
+
+.studio-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.studio-layers-fade {
+  padding: 2px 4px 4px 44px;
+  gap: 8px;
+}
+
 .layer-opacity {
   padding: 4px 4px 0 44px;
 }

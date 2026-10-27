@@ -1,3 +1,4 @@
+import { activeReference } from '../character/model';
 import type { PixelTool, Studio } from '../character/studio';
 import { openColorPopover, openPopover } from './color-popover';
 import { button, el } from './dom';
@@ -139,7 +140,40 @@ export class StudioBar {
       this.openSize(sizeButton, sizedTool, sizeLabel);
     }, [el('span', { class: 'studio-bar-size', text: String(size) }), el('span', { text: 'Size' })]);
 
-    const parts: HTMLElement[] = [...tools, el('div', { class: 'studio-bar-divider' }), color, palette, sizeButton];
+    const layerCount = studio.character?.layers.length ?? 0;
+    const layers: HTMLButtonElement = button('studio-bar-btn', 'Layers: choose, show, lock or fade a layer', () => this.openLayers(layers), [
+      icon('layers', 22),
+      el('span', { text: layerCount > 1 ? `Layers ${layerCount}` : 'Layers' }),
+    ]);
+
+    const parts: HTMLElement[] = [
+      ...tools,
+      el('div', { class: 'studio-bar-divider' }),
+      color,
+      palette,
+      sizeButton,
+      el('div', { class: 'studio-bar-divider' }),
+      layers,
+    ];
+
+    // The chosen trace picture's lock, one tap away while drawing.
+    const character = studio.character;
+    const picture = character ? activeReference(character) : null;
+    if (character && picture) {
+      const locked = picture.locked === true;
+      const lock = button(
+        `studio-bar-btn${locked ? ' active' : ''}`,
+        locked ? 'Picture locked: tap to move it with a finger' : 'Picture moves with a finger: tap to lock it',
+        () => {
+          picture.locked = !locked;
+          if (!picture.visible) picture.visible = true;
+          this.actions.changed();
+        },
+        [icon(locked ? 'lock' : 'unlock', 22), el('span', { text: locked ? 'Locked' : 'Picture' })],
+      );
+      lock.setAttribute('aria-pressed', String(locked));
+      parts.push(lock);
+    }
 
     if (this.fullScreen) {
       const undo = button('studio-bar-btn', 'Undo', () => this.actions.undo(), [icon('undo', 22), el('span', { text: 'Undo' })]);
@@ -173,6 +207,91 @@ export class StudioBar {
     }
 
     this.element.replaceChildren(...parts);
+  }
+
+  /** The character's layers, top first, reachable even in full screen. */
+  private openLayers(anchor: HTMLElement): void {
+    const studio = this.studio;
+    const body = el('div', { class: 'studio-layers' });
+    const fill = () => {
+      const character = studio.character;
+      if (!character) return;
+      const after = () => {
+        this.actions.changed();
+        fill();
+      };
+      const rows = character.layers
+        .map((layer, index) => {
+          const active = index === character.activeLayer;
+          const row = el('div', { class: `layer-row${active ? ' active' : ''}${layer.locked ? ' locked' : ''}` }, [
+            button('icon-btn', layer.visible ? 'Hide this layer' : 'Show this layer', () => {
+              studio.toggleLayer(index);
+              after();
+            }, [icon(layer.visible ? 'eye' : 'eyeOff', 18)]),
+            button('layer-row-name', `Draw on ${layer.name}`, () => {
+              studio.selectLayer(index);
+              after();
+            }, [el('span', { text: layer.name })]),
+            button(`icon-btn${layer.locked ? ' active' : ''}`, layer.locked ? 'Unlock this layer' : 'Lock this layer', () => {
+              studio.lockLayer(index, !layer.locked);
+              after();
+            }, [icon(layer.locked ? 'lock' : 'unlock', 18)]),
+          ]);
+          if (!active) return [row];
+          const percent = Math.round((layer.opacity ?? 1) * 100);
+          const fade = el('input', { class: 'slider', type: 'range', min: 0, max: 100, step: 5, value: percent });
+          const readout = el('span', { class: 'slider-value', text: `${percent}%` });
+          fade.addEventListener('input', () => {
+            const value = Number(fade.value);
+            if (value >= 100) delete layer.opacity;
+            else layer.opacity = value / 100;
+            readout.textContent = `${value}%`;
+            this.actions.redraw();
+          });
+          fade.addEventListener('change', () => this.actions.changed());
+          return [row, el('div', { class: 'slider-row studio-layers-fade' }, [el('span', { class: 'field-label', text: 'Opacity' }), fade, readout])];
+        })
+        .reverse()
+        .flat();
+      // Pictures behind, top first: show or hide and lock, the same as on the Layers tab.
+      const pictures = character.references
+        .map((picture, index) => {
+          const active = index === character.activeReference;
+          const thumb = el('span', { class: 'picture-thumb' });
+          thumb.style.backgroundImage = `url("${picture.src}")`;
+          return el('div', { class: `layer-row picture-row${active ? ' active' : ''}` }, [
+            button('icon-btn', picture.visible ? 'Hide this picture' : 'Show this picture', () => {
+              picture.visible = !picture.visible;
+              after();
+            }, [icon(picture.visible ? 'eye' : 'eyeOff', 18)]),
+            button('layer-row-name', `Choose picture ${index + 1}`, () => {
+              character.activeReference = index;
+              after();
+            }, [thumb, el('span', { text: `Picture ${index + 1}` })]),
+            button(`icon-btn${picture.locked ? ' active' : ''}`, picture.locked ? 'Unlock this picture' : 'Lock this picture', () => {
+              picture.locked = !picture.locked;
+              character.activeReference = index;
+              after();
+            }, [icon(picture.locked ? 'lock' : 'unlock', 18)]),
+          ]);
+        })
+        .reverse();
+
+      body.replaceChildren(
+        el('div', { class: 'popover-title', text: 'Layers' }),
+        el('div', { class: 'layer-list' }, rows),
+        button('btn subtle full', 'Add a layer above this one', () => {
+          studio.addLayer();
+          after();
+        }, [icon('plus', 16), el('span', { text: 'Add layer' })]),
+        ...(pictures.length
+          ? [el('div', { class: 'popover-title', text: 'Pictures behind' }), el('div', { class: 'layer-list' }, pictures)]
+          : []),
+      );
+    };
+    fill();
+    this.closePopover?.();
+    this.closePopover = openPopover({ anchor, content: [body], className: 'layers-popover', onClose: () => (this.closePopover = null) });
   }
 
   private openPalette(anchor: HTMLElement): void {
