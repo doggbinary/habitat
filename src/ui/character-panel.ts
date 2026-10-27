@@ -273,6 +273,21 @@ export class CharacterPanel {
           }, [icon(layer.locked ? 'lock' : 'unlock', 18)]),
         ]);
         if (!active) return [row];
+        const percent = Math.round((layer.opacity ?? 1) * 100);
+        const fade = el('input', { class: 'slider', type: 'range', min: 0, max: 100, step: 5, value: percent });
+        const fadeReadout = el('span', { class: 'slider-value', text: `${percent}%` });
+        fade.addEventListener('input', () => {
+          const value = Number(fade.value);
+          if (value >= 100) delete layer.opacity;
+          else layer.opacity = value / 100;
+          fadeReadout.textContent = `${value}%`;
+          this.view.requestDraw();
+        });
+        fade.addEventListener('change', () => studio.emit(true));
+        const opacity = el('label', { class: 'field layer-opacity' }, [
+          el('span', { class: 'field-label', text: 'Opacity' }),
+          el('div', { class: 'slider-row' }, [fade, fadeReadout]),
+        ]);
         const actions = el('div', { class: 'layer-row-actions' }, [
           button('chip', 'Rename this layer', () => {
             promptName('Rename layer', layer.name, (name) => {
@@ -298,7 +313,7 @@ export class CharacterPanel {
               }, [icon('trash', 15), el('span', { class: 'chip-text', text: 'Delete' })])
             : null,
         ]);
-        return [row, actions];
+        return [row, opacity, actions];
       })
       .reverse()
       .flat();

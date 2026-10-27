@@ -150,7 +150,7 @@ export interface SerializedCharacter {
   /** Base64 RGBA buffers, direction-major like `Character.frames`: every layer flattened. */
   frames: string[];
   /** Absent when the character is one plain layer, which `frames` already is. */
-  layers?: { id: string; name: string; visible: boolean; locked?: boolean; frames: string[] }[];
+  layers?: { id: string; name: string; visible: boolean; locked?: boolean; opacity?: number; frames: string[] }[];
   activeLayer?: number;
   /** One picture traced over, from before there could be several. */
   reference?: SerializedReference;
@@ -218,7 +218,8 @@ function serializeReference(r: CharacterReference): SerializedReference {
 }
 
 export function serializeCharacter(c: Character): SerializedCharacter {
-  const plain = c.layers.length === 1 && c.layers[0].visible && !c.layers[0].locked;
+  const plain =
+    c.layers.length === 1 && c.layers[0].visible && !c.layers[0].locked && (c.layers[0].opacity ?? 1) === 1;
   return {
     id: c.id,
     name: c.name,
@@ -238,6 +239,7 @@ export function serializeCharacter(c: Character): SerializedCharacter {
             name: layer.name,
             visible: layer.visible,
             ...(layer.locked ? { locked: true } : {}),
+            ...((layer.opacity ?? 1) !== 1 ? { opacity: layer.opacity } : {}),
             frames: layer.frames.map(encodeFrame),
           })),
           activeLayer: c.activeLayer,
@@ -299,6 +301,7 @@ export function deserializeCharacter(c: SerializedCharacter): Character {
       name: typeof layer.name === 'string' && layer.name ? layer.name : `Layer ${index + 1}`,
       visible: layer.visible !== false,
       ...(layer.locked === true ? { locked: true } : {}),
+      ...(Number.isFinite(layer.opacity) && layer.opacity! >= 0 && layer.opacity! < 1 ? { opacity: layer.opacity } : {}),
       frames: Array.from({ length: frameTotal }, (_, f) =>
         layer.frames?.[f] ? decode(layer.frames[f]) : { id: uid('frame'), data: new Uint8ClampedArray(expected) },
       ),

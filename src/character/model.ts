@@ -60,6 +60,8 @@ export interface CharacterLayer {
   visible: boolean;
   /** A locked layer cannot be drawn on, so a finished body is safe while you add clothes. */
   locked?: boolean;
+  /** How see-through the whole layer is, 0 to 1. Absent means fully solid. */
+  opacity?: number;
   frames: Frame[];
 }
 
@@ -266,8 +268,10 @@ export function composeFrames(character: Character, only?: number): void {
       if (!layer.visible) continue;
       const src = layer.frames[index]?.data;
       if (!src) continue;
+      const fade = Math.max(0, Math.min(1, layer.opacity ?? 1));
+      if (fade === 0) continue;
       for (let i = 0; i < size; i += 4) {
-        const a = src[i + 3];
+        const a = fade === 1 ? src[i + 3] : Math.round(src[i + 3] * fade);
         if (a === 0) continue;
         if (a === 255 || out.data[i + 3] === 0) {
           out.data[i] = src[i];

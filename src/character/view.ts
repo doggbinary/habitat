@@ -182,7 +182,10 @@ export class CharacterView {
     const index = frameIndex(this.studio.direction, this.studio.frame, character.frameCount);
     for (const layer of character.layers) {
       const frame = layer.visible ? layer.frames[index] : null;
-      if (frame) ctx.drawImage(this.frameCanvas(character, frame), x, y, w, h);
+      if (!frame) continue;
+      ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity ?? 1));
+      ctx.drawImage(this.frameCanvas(character, frame), x, y, w, h);
+      ctx.globalAlpha = 1;
     }
 
     this.drawGrid(character, x, y);

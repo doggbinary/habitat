@@ -668,6 +668,10 @@ textarea {
   color: var(--muted);
 }
 
+.layer-opacity {
+  padding: 4px 4px 0 44px;
+}
+
 .layer-row-actions {
   display: flex;
   flex-wrap: wrap;

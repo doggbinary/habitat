@@ -162,6 +162,18 @@ describe('saving and loading a project', () => {
     expect(back.layers[0].locked).toBe(true);
   });
 
+  it('keeps layer opacity, and Play sees the layer that faint', () => {
+    const character = createCharacter(16, 1, 1, 1, 'Ghost');
+    character.layers[0].frames[0].data.set([200, 100, 50, 255], 0);
+    character.layers[0].opacity = 0.5;
+    composeFrames(character);
+    expect(character.frames[0].data[3]).toBe(128);
+    const [back] = deserializeCharacters(throughJson(serializeProject(createDoc(), [character])));
+    expect(back.layers[0].opacity).toBe(0.5);
+    expect(back.frames[0].data[3]).toBe(128);
+    expect([...back.layers[0].frames[0].data.subarray(0, 4)]).toEqual([200, 100, 50, 255]);
+  });
+
   it('keeps layers, flattened into the frames Play walks', () => {
     const character = createCharacter(16, 1, 1, 1, 'Layered');
     // Body on the bottom layer, a hat over it on a second one.
