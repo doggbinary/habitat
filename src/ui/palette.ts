@@ -44,6 +44,8 @@ export interface PaletteActions {
   dragEnd: (clientX: number, clientY: number, dropped: boolean) => void;
   /** Fixes detection by hand: join pieces of one asset, or drop strays. */
   editAssets: (tilesetIndex: number, op: AssetEdit, indices: number[]) => void;
+  /** Looks at this sheet and replaces the guessed cut with the boxes it marks. */
+  cutWithAi: (tilesetIndex: number) => void;
   /** Adds stickers to the Pinned page, or takes them off it. */
   setPinned: (refs: AssetRef[], pinned: boolean) => void;
   /**
@@ -509,6 +511,9 @@ export class PalettePanel {
             button(`chip${this.editing ? ' active' : ''}`, 'Pin, file or fix the assets on this sheet', () =>
               this.setEditing(!this.editing),
             [icon('select', 16), el('span', { text: this.editing ? 'Editing' : 'Edit' })]),
+            button('chip', 'Look at this sheet and cut each object out. The result is saved and not guessed over.', () =>
+              this.actions.cutWithAi(current),
+            [el('span', { text: 'Cut with AI' })]),
           ])
         : el('div', { class: 'palette-row' }, [
             el('div', { class: 'spacer' }),
