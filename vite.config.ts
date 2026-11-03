@@ -79,6 +79,6 @@ export default defineConfig({
     // browser at all. Anything that genuinely needs a canvas stays out of
     // these tests rather than being faked.
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.mjs'],
   },
 });
