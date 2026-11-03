@@ -1619,6 +1619,11 @@ textarea {
   filter: brightness(1.08);
 }
 
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .btn.danger {
   color: var(--danger);
   border-color: rgba(255, 110, 110, 0.35);
@@ -1768,6 +1773,17 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.cutter-stage {
+  max-height: min(420px, 55vh);
+  padding: 8px;
+}
+
+.cutter-canvas {
+  image-rendering: pixelated;
+  touch-action: none;
+  cursor: crosshair;
 }
 
 .preview-wrap {

@@ -26,6 +26,7 @@ import {
   tileIndexOf,
   type AssetEdit,
 } from './core/assets';
+import { replaceAsset } from './core/cut';
 import { clearShadows, clearWhiteBackdrop } from './core/background';
 import { dropTilesets, isFloorSheet } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
@@ -96,6 +97,7 @@ import { openLibrary } from './ui/library-browser';
 import { fitToView, screenToCell, screenToWorld } from './render/camera';
 import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
+import { openCutter } from './ui/cutter';
 import { button, el } from './ui/dom';
 import { openModal } from './ui/modal';
 import { Shell } from './ui/shell';
@@ -267,6 +269,7 @@ export class App {
       dragMove: (x, y) => this.dragMove(x, y),
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
       editAssets: (sheet, op, indices) => this.editAssets(sheet, op, indices),
+      openCutter: (sheet, asset) => this.openCutter(sheet, asset),
       setPinned: (refs, pinned) => this.setPinned(refs, pinned),
       fileAssets: (folderId, name, refs) => this.fileAssets(folderId, name, refs),
       removeFolder: (folderId) => this.removeFolder(folderId),
@@ -1090,6 +1093,35 @@ export class App {
     if (op === 'toGround') this.store.toast('Now a floor square, first on this page. Paint it with the brush or rectangle.');
     else if (op === 'toObjects') this.store.toast('Back to an object you place');
     else this.store.toast(`${label}: ${next.assets.length} left`);
+  }
+
+  /**
+   * Opens the cutter for one asset. Applying the cut marks the sheet as
+   * edited, so a later detector leaves the pieces where the user put them.
+   */
+  private openCutter(sheetIndex: number, assetIndex: number): void {
+    const sheet = this.store.doc.tilesets[sheetIndex];
+    if (!sheet?.assets?.[assetIndex] || !sheet.image) {
+      this.store.toast('This picture has nothing to cut');
+      return;
+    }
+    openCutter({
+      tileset: sheet,
+      assetIndex,
+      onApply: (pieces) => {
+        const next = replaceAsset(sheet, assetIndex, pieces);
+        if (!next) return;
+        this.editor.structural('Cut asset', () => {
+          sheet.assets = next.assets;
+          sheet.groundAssets = next.ground;
+          sheet.groundBlocks = next.patches;
+          sheet.assetsEdited = true;
+          sheet.splitMode = 'objects';
+        });
+        this.store.libraryPick = null;
+        this.store.toast(`Cut into ${pieces.length}`);
+      },
+    });
   }
 
   /** Puts stickers on the Pinned page, or takes them off it. */

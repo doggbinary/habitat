@@ -44,6 +44,8 @@ export interface PaletteActions {
   dragEnd: (clientX: number, clientY: number, dropped: boolean) => void;
   /** Fixes detection by hand: join pieces of one asset, or drop strays. */
   editAssets: (tilesetIndex: number, op: AssetEdit, indices: number[]) => void;
+  /** Opens the cutter for one asset that came out joined to its neighbour. */
+  openCutter: (tilesetIndex: number, assetIndex: number) => void;
   /** Adds stickers to the Pinned page, or takes them off it. */
   setPinned: (refs: AssetRef[], pinned: boolean) => void;
   /**
@@ -571,6 +573,16 @@ export class PalettePanel {
             el('span', { text: 'Make floor' }),
           ]);
       floorChip.disabled = indices.length === 0;
+      const sheet = this.activeTileset();
+      const cut = button('chip', 'Draw a line through this asset to split it', () => {
+        const assetIndex = indices[0];
+        if (assetIndex === undefined) return;
+        this.selected.clear();
+        this.actions.openCutter(sheetIndex, assetIndex);
+        this.buildHeader();
+        this.draw();
+      }, [icon('scissors', 16), el('span', { text: 'Cut' })]);
+      cut.disabled = indices.length !== 1 || !sheet?.assets || !!sheet.generated;
       const merge = button('chip', 'Join the selected pieces into one asset', () => run('merge'), [
         el('span', { text: 'Merge' }),
       ]);
@@ -592,7 +604,7 @@ export class PalettePanel {
       }, [icon('layers', 16), el('span', { text: 'File' })]);
       file.disabled = refs.length === 0;
 
-      chips.push(floorChip, pin, file, merge, remove);
+      chips.push(floorChip, pin, file, cut, merge, remove);
     } else {
       const label = view.kind === 'pins' ? 'Unpin' : 'Take out';
       const take = button('chip danger', `${label} the selected assets`, () => {
@@ -620,7 +632,7 @@ export class PalettePanel {
         text:
           picked.length === 0
             ? view.kind === 'sheet'
-              ? 'Tap assets to select them. Make grass or paving a floor, pin or file them, merge pieces that belong together, or delete stray marks.'
+              ? 'Tap assets to select them. Make grass or paving a floor, pin or file them, cut one apart or merge pieces, or delete stray marks.'
               : 'Tap assets to select them, then take them off this page.'
             : `${picked.length} selected`,
       }),

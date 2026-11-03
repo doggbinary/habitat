@@ -100,6 +100,7 @@ export class MapPanel {
       section('Pencil and fingers', [
         el('div', { class: 'gesture-help' }, [
           gesture('Apple Pencil', 'Does the tool: paint, erase, box tiles, grab assets'),
+          gesture('Edit, then Cut', 'Draw across an asset that came out joined. The line splits it, and slides onto a colour change'),
           gesture('Tap an object in the library', 'Then tap the map to place it. Each tap adds another'),
           gesture('One finger', 'Pans. Tap an object to select it, then drag it on the grid'),
           gesture('Corner handle', 'Drag it to grow or shrink by whole squares, one asset or a whole selection'),
