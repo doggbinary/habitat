@@ -27,6 +27,14 @@ import {
   type AssetEdit,
 } from './core/assets';
 import { clearShadows, clearWhiteBackdrop } from './core/background';
+import {
+  arrangeCut,
+  clearVisionKey,
+  cutSheetWithVision,
+  saveVisionKey,
+  storedVisionKey,
+  VisionCutError,
+} from './ai/vision-cut';
 import { dropTilesets, isFloorSheet } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
 import { dominantColor, recolorToCanvas } from './io/recolor';
@@ -267,6 +275,7 @@ export class App {
       dragMove: (x, y) => this.dragMove(x, y),
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
       editAssets: (sheet, op, indices) => this.editAssets(sheet, op, indices),
+      cutWithAi: (sheet) => void this.cutWithAi(sheet),
       setPinned: (refs, pinned) => this.setPinned(refs, pinned),
       fileAssets: (folderId, name, refs) => this.fileAssets(folderId, name, refs),
       removeFolder: (folderId) => this.removeFolder(folderId),
@@ -1090,6 +1099,90 @@ export class App {
     if (op === 'toGround') this.store.toast('Now a floor square, first on this page. Paint it with the brush or rectangle.');
     else if (op === 'toObjects') this.store.toast('Back to an object you place');
     else this.store.toast(`${label}: ${next.assets.length} left`);
+  }
+
+  /** Replaces the guessed cut with boxes marked by looking at the picture, and keeps them. */
+  private cutting = false;
+  private async cutWithAi(sheetIndex: number): Promise<void> {
+    const sheet = this.store.doc.tilesets[sheetIndex];
+    if (!sheet?.image || sheet.generated || this.cutting) return;
+    const key = await this.visionKey();
+    if (!key) return;
+    this.cutting = true;
+    this.store.toast(`Looking at ${sheet.name}…`);
+    try {
+      const pieces = await cutSheetWithVision(sheet, key);
+      const cut = arrangeCut(pieces);
+      this.editor.structural('Cut with AI', () => {
+        sheet.assets = cut.assets;
+        sheet.groundAssets = cut.ground;
+        sheet.groundBlocks = [];
+        sheet.splitMode = 'objects';
+        sheet.assetsEdited = true;
+        sheet.assetsVersion = DETECT_VERSION;
+        sheet.propsOnly = cut.ground.length === 0;
+      });
+      this.store.libraryPick = null;
+      this.store.activeTileset = sheetIndex;
+      this.shell.openTab('tiles');
+      this.store.toast(`${sheet.name}: ${pieces.length} pieces. This cut is saved and will not be guessed over.`);
+    } catch (error) {
+      if (error instanceof VisionCutError && error.retryKey) clearVisionKey();
+      this.store.toast(error instanceof Error ? error.message : 'The cut failed, so the old one was kept.');
+    } finally {
+      this.cutting = false;
+    }
+  }
+
+  /** The key stays on this device. The sheet itself is sent only when you press the button. */
+  private visionKey(): Promise<string | null> {
+    const existing = storedVisionKey();
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve) => {
+      const input = el('input', {
+        class: 'input',
+        type: 'password',
+        placeholder: 'sk-…',
+      }) as HTMLInputElement;
+      input.autocomplete = 'off';
+      let settled = false;
+      const finish = (value: string | null) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      openModal({
+        title: 'Cut with AI',
+        body: el('div', {}, [
+          el('p', {
+            text: 'Paste an OpenAI API key. Habitat sends this one sheet, then saves the boxes it marks so the guesser never recuts them.',
+          }),
+          el('p', {
+            class: 'hint',
+            text: 'The key stays in this browser. Each sheet you cut is a paid request. Your other sheets are not sent.',
+          }),
+          input,
+        ]),
+        actions: [
+          { label: 'Cancel', onSelect: () => finish(null) },
+          {
+            label: 'Look at this sheet',
+            variant: 'primary',
+            onSelect: () => {
+              const key = input.value.trim();
+              if (!key) {
+                this.store.toast('Paste an API key first.');
+                return false;
+              }
+              saveVisionKey(key);
+              finish(key);
+            },
+          },
+        ],
+        onClose: () => finish(null),
+      });
+      input.focus();
+    });
   }
 
   /** Puts stickers on the Pinned page, or takes them off it. */
