@@ -346,3 +346,62 @@ describe('telling ground from props', () => {
     expect(assetIsGround(sheet, 0)).toBe(false);
   });
 });
+
+describe('pages that are one solid picture', () => {
+  /** A fully opaque RGBA sheet filled with one colour. */
+  const page = (w: number, h: number, shade: [number, number, number]) => {
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < rgba.length; i += 4) rgba.set([...shade, 255], i);
+    return rgba;
+  };
+  const paint = (rgba: Uint8ClampedArray, W: number, x0: number, y0: number, bw: number, bh: number, c: [number, number, number]) => {
+    for (let y = y0; y < y0 + bh; y++) for (let x = x0; x < x0 + bw; x++) rgba.set([...c, 255], (y * W + x) * 4);
+  };
+  const grid48 = (w: number, h: number): SheetGrid => ({ w: 48, h: 48, margin: 0, spacing: 0, cols: w / 48, rows: h / 48 });
+
+  it('keeps wall pieces separated by dark divider lines instead of dropping the page', () => {
+    const W = 192;
+    const H = 96;
+    const rgba = page(W, H, [10, 10, 10]);
+    const colours: [number, number, number][] = [[200, 180, 150], [120, 120, 130], [180, 60, 50], [140, 190, 210]];
+    colours.forEach((c, i) => paint(rgba, W, i * 48 + 2, 2, 44, 92, c));
+    const { assets } = splitSheet(rgba, W, H, grid48(W, H), false);
+    expect(assets).toHaveLength(4);
+    expect(assets.every((a) => a.w === 44 && a.h === 92)).toBe(true);
+  });
+
+  it('lifts props off a flat white panel on an otherwise solid page', () => {
+    const W = 384;
+    const H = 192;
+    const rgba = page(W, H, [70, 120, 60]);
+    paint(rgba, W, 192, 0, 192, 192, [255, 255, 255]);
+    for (let y = 0; y < H; y++) for (let x = 0; x < 192; x++) if ((x + y) % 7 === 0) rgba.set([60, 140, 200, 255], (y * W + x) * 4);
+    paint(rgba, W, 210, 20, 40, 60, [40, 110, 40]);
+    paint(rgba, W, 300, 110, 50, 50, [120, 120, 120]);
+    const { assets } = splitSheet(rgba, W, H, grid48(W, H), false);
+    expect(assets).toContainEqual({ x: 210, y: 20, w: 40, h: 60 });
+    expect(assets).toContainEqual({ x: 300, y: 110, w: 50, h: 50 });
+  });
+
+  it('cuts a solid wall of touching 96 px drawings at their own size, not into quarters', () => {
+    const W = 384;
+    const H = 192;
+    const rgba = page(W, H, [0, 0, 0]);
+    for (let r = 0; r < 2; r++) {
+      for (let c = 0; c < 4; c++) {
+        const x0 = c * 96;
+        const y0 = r * 96;
+        paint(rgba, W, x0, y0, 96, 96, [60, 60, 70]);
+        paint(rgba, W, x0 + 2, y0 + 2, 92, 92, [150 + c * 20, 150, 160 - r * 40]);
+        // Detail like a real appliance, mirrored so the line through the middle matches itself.
+        for (let y = y0 + 8; y < y0 + 88; y += 6) paint(rgba, W, x0 + 8, y, 80, 2, [40 + c * 30, 80 + r * 60, 90]);
+        paint(rgba, W, x0 + 20, y0 + 30, 16, 16, [250, 220, 40]);
+        paint(rgba, W, x0 + 60, y0 + 30, 16, 16, [250, 220, 40]);
+      }
+    }
+    const { assets } = splitSheet(rgba, W, H, grid48(W, H), false);
+    expect(assets).toHaveLength(8);
+    expect(assets.every((a) => a.w === 96 && a.h === 96)).toBe(true);
+  });
+});
+
