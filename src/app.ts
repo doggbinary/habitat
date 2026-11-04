@@ -1188,7 +1188,9 @@ export class App {
   private async terrainTileset(src: string, name: string): Promise<Tileset | null> {
     const bytes = new Uint8Array(await (await fetch(src)).arrayBuffer());
     const source = await readExtractSource(bytes, name);
-    const guess = guessFormat(name, source.image.width, source.image.height);
+    // The file name says which RPG Maker sheet it is; the page name is for people.
+    const file = decodeURIComponent(new URL(src).pathname.split('/').pop() ?? name);
+    const guess = guessFormat(file, source.image.width, source.image.height);
     if (!guess?.autotiles) return null;
     const build = buildAutotiles(source.image, guess, name);
     if (build.sheet.materials.length === 0 || build.sheet.confidence < 0.5) return null;
