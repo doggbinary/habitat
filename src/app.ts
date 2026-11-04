@@ -604,8 +604,26 @@ export class App {
       this.store.toast(`Loading ${entry.name}`);
       await new Promise((resolve) => setTimeout(resolve, 0));
       try {
+        const href = new URL(entry.url, document.baseURI).href;
+        // An RPG Maker A sheet is connected terrain, not a page of objects.
+        if (entry.terrain) {
+          const terrain = await this.terrainTileset(href, entry.name);
+          if (terrain) {
+            have.add(entry.name);
+            this.store.doc.tilesets.push(terrain);
+            added += 1;
+            if (opened) {
+              opened = false;
+              this.store.activeTileset = 0;
+              this.selectFirstTile();
+              this.shell.openTab('tiles');
+            }
+            this.store.emit('library');
+            continue;
+          }
+        }
         const tile = typeof entry.tile === 'number' && entry.tile > 0 ? entry.tile : 48;
-        const tileset = await makeTileset(new URL(entry.url, document.baseURI).href, entry.name, tile, tile);
+        const tileset = await makeTileset(href, entry.name, tile, tile);
         if (entry.props) tileset.propsOnly = true;
         if (Array.isArray(entry.assets) && entry.assets.length > 0) {
           // A page laid out by hand lists its pictures; guessing could only cut them up.
@@ -1160,6 +1178,28 @@ export class App {
       },
       toast: (message) => this.store.toast(message),
     });
+  }
+
+  /**
+   * Builds one library page of RPG Maker terrain, or returns null when the
+   * picture is not a layout this app can assemble (animated A1 water, or a
+   * sheet whose blocks do not join up). The caller then treats it as objects.
+   */
+  private async terrainTileset(src: string, name: string): Promise<Tileset | null> {
+    const bytes = new Uint8Array(await (await fetch(src)).arrayBuffer());
+    const source = await readExtractSource(bytes, name);
+    const guess = guessFormat(name, source.image.width, source.image.height);
+    if (!guess?.autotiles) return null;
+    const build = buildAutotiles(source.image, guess, name);
+    if (build.sheet.materials.length === 0 || build.sheet.confidence < 0.5) return null;
+    const atlas = `data:image/png;base64,${bytesToBase64(await encodePng(build.atlas, streamZlib))}`;
+    const tileset = await makeTileset(atlas, name, build.sheet.cell, build.sheet.cell);
+    Object.assign(tileset, autotileSheetFields(build));
+    tileset.autotile = { ...build.sheet, sourceSrc: src };
+    tileset.exact = true;
+    tileset.assetsEdited = true;
+    tileset.assetsVersion = DETECT_VERSION;
+    return tileset;
   }
 
   /**

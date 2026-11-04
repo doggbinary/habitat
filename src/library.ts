@@ -8,6 +8,17 @@ export function isLibrarySheet(folders: string[], file: string): boolean {
   return /^tile-b-\d+\.png$/i.test(file) || /^\d+\.png$/i.test(file);
 }
 
+/**
+ * An RPG Maker ground, roof or wall sheet. These are not object pages: each
+ * block is one connected material, built by `guessFormat` when the page loads.
+ * A1 (animated water) and A5 (plain tiles) are named here too, so the loader
+ * can say what it is instead of cutting the sheet into objects.
+ */
+export function isTerrainSheet(folders: string[], file: string): boolean {
+  if (folders.some((folder) => /\(\d+\)$/.test(folder))) return false;
+  return /(?:^|[^a-z0-9])a[1-5](?:[^0-9]|$)/i.test(file.replace(/\.png$/i, ''));
+}
+
 export function libraryUrl(folders: string[], file: string): string {
   return `library/${[...folders, file].map((part) => encodeURIComponent(part)).join('/')}`;
 }
@@ -71,4 +82,9 @@ export interface LibraryEntry {
   props?: boolean;
   /** Exact boxes of the pictures on a page that was laid out by hand, so nothing is guessed. */
   assets?: { x: number; y: number; w: number; h: number }[];
+  /**
+   * An RPG Maker A sheet. The loader reads its layout and builds connected
+   * terrain instead of cutting out objects.
+   */
+  terrain?: boolean;
 }

@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { artworkAutotiles, autotileSheetFields, buildAutotiles, guessFormat, sheetNumber, type AutotileBuild } from '../ai/formats';
 import { createImage, fillRect, type RGBAImage } from '../ai/image';
@@ -108,6 +111,29 @@ describe('recognising sheet layouts', () => {
 
 const A2_PATH = env('HABITAT_A2_SHEET') ?? env('HABITAT_TERRAIN_SHEET');
 const haveA2 = fileExists(A2_PATH);
+
+describe('the full library’s floor sheets', () => {
+  const sheets = [
+    'public/library/Autumn Forest/Tile_A2 (2).png',
+    'public/library/Autumn Forest/Tile_A2-1 (2).png',
+    'public/library/apartment-2/Tile_A2-2.png',
+    'public/library/bar street/Tile_A2-3.png',
+  ];
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const present = sheets.filter((file) => existsSync(join(root, file)));
+
+  it.skipIf(present.length === 0)('builds every A2 sheet in the local library as connected floors', async () => {
+    expect(present).toHaveLength(sheets.length);
+    for (const file of present) {
+      const image = await loadPng(repoPath(file));
+      const guess = guessFormat(file, image.width, image.height);
+      expect(guess?.format).toBe('rpgmaker-a2');
+      const build = buildAutotiles(image, guess!, file);
+      expect(build.sheet.materials.length).toBeGreaterThan(0);
+      expect(build.sheet.confidence).toBeGreaterThanOrEqual(0.7);
+    }
+  });
+});
 
 describe.skipIf(!haveA2)('Tile_A2-1 (2): the RPG Maker A2 test sheet', () => {
   let image: RGBAImage;
