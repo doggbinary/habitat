@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 17;
+export const DETECT_VERSION = 18;
 
 /** A ground cell is drawn corner to corner; a prop leaves background showing. */
 const TERRAIN_FILL = 0.92;
@@ -883,6 +883,8 @@ export function splitSheet(
 const PANEL_CELLS = 2;
 /** Pixels this dark, in straight runs a cell long, are divider lines between pieces. */
 const DIVIDER_DARK = 30;
+/** ...no thicker than this: this many pixels to the side, the picture is light again. */
+const DIVIDER_THICK = 4;
 
 /**
  * Takes apart an island that fills the page. Flat white panels and dark
@@ -934,23 +936,35 @@ function rescueRegion(
       if (members.length >= grid.w * grid.h * PANEL_CELLS) for (const i of members) own[i] = 0;
     }
   }
-  // Dark divider lines, a cell long or more, across or down.
+  // Dark divider lines, a cell long or more, across or down. A divider is
+  // thin: a few pixels beside it the picture is light again on at least one
+  // side, which a black oven door or a dark wall never is.
+  const dividers: number[] = [];
   const clearRuns = (lines: number, length: number, index: (line: number, t: number) => number) => {
+    const darkAt = (line: number, t: number) => {
+      if (line < 0 || line >= lines) return false;
+      const i = index(line, t);
+      return own[i] === 1 && dark(i);
+    };
     for (let line = 0; line < lines; line++) {
       let run = 0;
       for (let t = 0; t <= length; t++) {
-        const i = t < length ? index(line, t) : -1;
-        if (i >= 0 && own[i] && dark(i)) {
+        if (t < length && darkAt(line, t)) {
           run++;
           continue;
         }
-        if (run >= Math.min(grid.w, grid.h)) for (let b = t - run; b < t; b++) own[index(line, b)] = 0;
+        if (run >= Math.min(grid.w, grid.h)) {
+          let thin = 0;
+          for (let b = t - run; b < t; b++) if (!darkAt(line - DIVIDER_THICK, b) || !darkAt(line + DIVIDER_THICK, b)) thin++;
+          if (thin >= run * 0.8) for (let b = t - run; b < t; b++) dividers.push(index(line, b));
+        }
         run = 0;
       }
     }
   };
   clearRuns(rect.h, rect.w, (line, t) => (rect.y + line) * w + rect.x + t);
   clearRuns(rect.w, rect.h, (line, t) => (rect.y + t) * w + rect.x + line);
+  for (const i of dividers) own[i] = 0;
 
   const cellArea = grid.w * grid.h;
   const islands = absorbFragments(findIslands(own, w, rect, 0, 1), cellArea * FRAGMENT_SHARE).filter((p) => p.area >= cellArea * PANEL_PIECE_SHARE);
