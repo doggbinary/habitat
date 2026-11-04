@@ -44,6 +44,8 @@ export interface PaletteActions {
   dragEnd: (clientX: number, clientY: number, dropped: boolean) => void;
   /** Fixes detection by hand: join pieces of one asset, or drop strays. */
   editAssets: (tilesetIndex: number, op: AssetEdit, indices: number[]) => void;
+  /** Opens AI Extract on a sheet already in the library, or on a new picture when null. */
+  aiExtract: (tilesetIndex: number | null) => void;
   /** Adds stickers to the Pinned page, or takes them off it. */
   setPinned: (refs: AssetRef[], pinned: boolean) => void;
   /**
@@ -123,6 +125,9 @@ export class PalettePanel {
       button('btn primary', 'Import assets', () => this.actions.addTileset(), [
         icon('upload', 18),
         el('span', { text: 'Import assets' }),
+      ]),
+      button('btn subtle', 'Pick a sheet and let a vision model extract every asset from it', () => this.actions.aiExtract(null), [
+        el('span', { text: 'AI Extract a sheet' }),
       ]),
     ]);
 
@@ -506,6 +511,9 @@ export class PalettePanel {
             button('icon-btn', 'Import another sheet', () => this.actions.addTileset(), [icon('plus', 18)]),
             button('icon-btn danger', 'Remove sheet', () => this.actions.removeTileset(current), [icon('trash', 18)]),
             el('div', { class: 'spacer' }),
+            button('chip', 'Extract every asset on this sheet with a vision model, checked pixel by pixel', () => this.actions.aiExtract(current), [
+              el('span', { text: 'AI Extract' }),
+            ]),
             button(`chip${this.editing ? ' active' : ''}`, 'Pin, file or fix the assets on this sheet', () =>
               this.setEditing(!this.editing),
             [icon('select', 16), el('span', { text: this.editing ? 'Editing' : 'Edit' })]),
@@ -571,10 +579,12 @@ export class PalettePanel {
             el('span', { text: 'Make floor' }),
           ]);
       floorChip.disabled = indices.length === 0;
-      const merge = button('chip', 'Join the selected pieces into one asset', () => run('merge'), [
+      const exact = !!this.activeTileset()?.exact;
+      const merge = button('chip', exact ? 'Merge pieces in AI Extract, where the original sheet is' : 'Join the selected pieces into one asset', () => run('merge'), [
         el('span', { text: 'Merge' }),
       ]);
-      merge.disabled = picked.length < 2;
+      // An AI sheet is a packed atlas: a box around two of its assets would take in whatever lies between.
+      merge.disabled = picked.length < 2 || exact;
       const remove = button('chip danger', 'Remove the selected assets from this sheet', () => run('delete'), [
         el('span', { text: 'Delete' }),
       ]);
@@ -781,8 +791,21 @@ export class PalettePanel {
         Math.round(w),
         Math.round(h),
       );
+      if (tileset.aiAssets && needsReview(tileset, rect)) {
+        ctx.fillStyle = '#ff9a3c';
+        ctx.beginPath();
+        ctx.arc(x + cell - 11, y + 11, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
+}
+
+/** Whether AI Extract left this asset marked for a person to check. */
+function needsReview(tileset: Tileset, rect: AssetRect): boolean {
+  return !!tileset.aiAssets?.some(
+    (info) => info.needsReview && info.rect.x === rect.x && info.rect.y === rect.y && info.rect.w === rect.w && info.rect.h === rect.h,
+  );
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {

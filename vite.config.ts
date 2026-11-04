@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
+import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
+import { configFromEnv, createVisionClient, VisionError, type VisionRequest } from './src/ai/vision';
 
 /**
  * The full version: on this computer, `npm run full` builds the app once and
@@ -59,8 +61,69 @@ function localLibrary(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [localLibrary()],
+/**
+ * AI Extract's model access for `npm run dev` and `npm run full`: the key
+ * stays in this server's environment (or .env.local) and the page only ever
+ * talks to /api/vision. The provider is picked by HABITAT_VISION_PROVIDER,
+ * or by whichever of OPENAI_API_KEY, ANTHROPIC_API_KEY or GEMINI_API_KEY is
+ * set; HABITAT_VISION_MODEL picks the model.
+ */
+function visionProxy(env: Record<string, string | undefined>): Plugin {
+  type Server = Parameters<NonNullable<Plugin['configurePreviewServer']>>[0];
+  const send = (res: import('node:http').ServerResponse, status: number, body: unknown) => {
+    res.statusCode = status;
+    res.setHeader('content-type', 'application/json');
+    res.setHeader('cache-control', 'no-store');
+    res.end(JSON.stringify(body));
+  };
+  const serve = (server: Server) => {
+    server.middlewares.use(async (req, res, next) => {
+      const pathname = (req.url ?? '').split('?')[0];
+      if (!pathname.endsWith('/api/vision/status') && !pathname.endsWith('/api/vision/complete')) {
+        next();
+        return;
+      }
+      let config;
+      try {
+        config = configFromEnv(env);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (pathname.endsWith('/status')) send(res, 200, { available: false, error: message });
+        else send(res, 503, { code: 'no-key', error: { message } });
+        return;
+      }
+      if (pathname.endsWith('/status')) {
+        send(res, 200, { available: true, provider: config.provider, model: config.model });
+        return;
+      }
+      if (req.method !== 'POST') {
+        send(res, 405, { error: { message: 'POST only' } });
+        return;
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+          request: Omit<VisionRequest, 'images'> & { images: { label: string; png: string }[] };
+        };
+        const request: VisionRequest = {
+          ...body.request,
+          images: body.request.images.map((img) => ({ label: img.label, png: new Uint8Array(Buffer.from(img.png, 'base64')) })),
+        };
+        const text = await createVisionClient(config).complete(request);
+        send(res, 200, { text });
+      } catch (error) {
+        const code = error instanceof VisionError ? error.code : 'http';
+        const status = code === 'auth' ? 401 : code === 'no-key' ? 503 : 502;
+        send(res, status, { code, error: { message: error instanceof Error ? error.message : String(error) } });
+      }
+    });
+  };
+  return { name: 'vision-proxy', configureServer: serve, configurePreviewServer: serve };
+}
+
+export default defineConfig(({ mode }) => ({
+  plugins: [localLibrary(), visionProxy({ ...loadEnv(mode, process.cwd(), ''), ...process.env })],
   base: './',
   server: {
     host: '0.0.0.0',
@@ -81,4 +144,4 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
   },
-});
+}));

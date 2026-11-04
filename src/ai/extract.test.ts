@@ -4,7 +4,8 @@ import { loadPng, repoPath, readJson, env, fileExists } from '../test-support/pn
 import { mergeAcrossRegions, parseDetection, planRegions, renderRegion } from './detect';
 import { detectCellSize, findForeground, labelComponents } from './foreground';
 import { createImage, fillRect, type Colour, type Rect, type RGBAImage } from './image';
-import { auditCrops, assetImage, exportBundle, packAtlas } from './output';
+import { auditCrops, assetImage, exportBundle, librarySheet, packAtlas } from './output';
+import { claimBox, deleteSelected, mergeSelected, setKind } from './manual';
 import { extractSheet } from './pipeline';
 import { decodePng, encodePng, streamZlib } from './png';
 import { competeForPixels, refine, type SheetAnalysis } from './refine';
@@ -323,6 +324,48 @@ describe('the irregular object sheet (Ninja Adventure nature, CC0)', () => {
   });
 });
 
+describe('hand corrections', () => {
+  it('merge, draw a box, change kind and delete, keeping every crop exact', () => {
+    const img = createImage(96, 48);
+    fillRect(img, { x: 0, y: 0, w: 48, h: 48 }, [90, 160, 70, 255]);
+    blob(img, 70, 14, 10, 10, [200, 60, 60, 255]);
+    blob(img, 70, 36, 8, 8, [60, 60, 200, 255]);
+    const sheet = analyse(img, 48);
+    const [, top, bottom] = sheet.comps.list;
+    const out = refine(sheet, [proposal('a', top, [top.id]), proposal('b', bottom, [bottom.id])], [
+      { name: 'grass', category: 'terrain', bbox: { x: 0, y: 0, w: 48, h: 48 }, cell: 48, confidence: 0.9, region: 0 },
+    ]);
+    expect(out.assets.map((a) => a.kind)).toEqual(['tile', 'object', 'object']);
+    const merged = mergeSelected(sheet, out, [out.assets[1].id, out.assets[2].id])!;
+    expect(merged.rect).toEqual({ x: top.x, y: top.y, w: Math.max(top.x + top.w, bottom.x + bottom.w) - top.x, h: bottom.y + bottom.h - top.y });
+    const carved = claimBox(sheet, out, { x: 0, y: 0, w: 10, h: 10 }, 'flower')!;
+    expect(carved.pixels.length).toBe(100);
+    expect(out.assets.find((a) => a.kind === 'tile')!.pixels.length).toBe(48 * 48 - 100);
+    expect(auditCrops(img, out.assets)).toEqual([]);
+    expect(setKind(sheet, out, carved.id, 'tile')).toBe(true);
+    expect(out.assets.find((a) => a.id === carved.id)!.rect).toEqual({ x: 0, y: 0, w: 48, h: 48 });
+    expect(setKind(sheet, out, merged.id, 'tile')).toBe(true);
+    expect(out.assets.find((a) => a.id === merged.id)!.rect).toEqual({ x: 48, y: 0, w: 48, h: 48 });
+    expect(auditCrops(img, out.assets)).toEqual([]);
+    expect(deleteSelected(out, [merged.id])).toBe(1);
+    expect(out.owner[14 * 96 + 70]).toBe(-1);
+  });
+
+  it('turns an extraction into a library sheet whose tiles sit on the grid', () => {
+    const img = createImage(96, 48);
+    fillRect(img, { x: 0, y: 0, w: 96, h: 48 }, [90, 160, 70, 255]);
+    const sheet = analyse(img, 48);
+    const out = refine(sheet, [], [{ name: 'grass', category: 'terrain', bbox: { x: 0, y: 0, w: 96, h: 48 }, cell: 48, confidence: 0.9, region: 0 }]);
+    const result = { sheetName: 's', width: 96, height: 48, cell: 48, background: 'none' as const, assets: out.assets, stats: {} as never, log: [], model: null };
+    const atlas = packAtlas(img, out.assets, 48);
+    const lib = librarySheet(result, atlas);
+    expect(lib.groundAssets).toEqual([0, 1]);
+    expect(lib.propsOnly).toBe(false);
+    expect(lib.aiAssets[1].source).toEqual({ x: 48, y: 0, w: 48, h: 48 });
+    expect(lib.assets.every((r) => r.x % 48 === 0 && r.y % 48 === 0)).toBe(true);
+  });
+});
+
 describe('the user’s 48 px terrain sheet', () => {
   const path = env('HABITAT_TERRAIN_SHEET');
 
@@ -428,6 +471,15 @@ describe('vision providers', () => {
     expect(gemini.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/g:generateContent');
     expect(JSON.stringify(gemini.body)).toContain('"inlineData"');
     expect(replyText('anthropic', { content: [{ type: 'text', text: '{}' }] })).toBe('{}');
+  });
+
+  it('stops the whole run with the no-key message rather than producing anything', async () => {
+    const img = createImage(20, 20);
+    fillRect(img, { x: 2, y: 2, w: 8, h: 8 }, [200, 0, 0, 255]);
+    const client = createVisionClient({ provider: 'openai', model: 'm', proxyUrl: 'http://local/api/vision/complete' }, async () =>
+      new Response(JSON.stringify({ code: 'no-key', error: { message: 'none' } }), { status: 503 }),
+    );
+    await expect(extractSheet({ name: 's', image: img, zlib: streamZlib, client })).rejects.toMatchObject({ code: 'no-key' });
   });
 
   it('reports a rejected key as such', async () => {

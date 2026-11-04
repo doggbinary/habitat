@@ -98,6 +98,10 @@ import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
 import { button, el } from './ui/dom';
 import { openModal } from './ui/modal';
+import { openAiExtract, type ExtractSource } from './ui/ai-extract';
+import type { Extraction } from './ai/pipeline';
+import { librarySheet, packAtlas } from './ai/output';
+import { bytesToBase64, decodePng, encodePng, isPng, streamZlib } from './ai/png';
 import { Shell } from './ui/shell';
 
 /**
@@ -126,6 +130,30 @@ function resetPageZoom(): void {
   });
 }
 
+/** A picture's exact pixels: from the PNG data itself when it is one, otherwise as the browser reads it. */
+async function readExtractSource(bytes: Uint8Array, name: string, cellHint?: number): Promise<ExtractSource> {
+  if (isPng(bytes)) {
+    try {
+      return { name, image: await decodePng(bytes, streamZlib), cellHint, decodedBy: 'png' };
+    } catch {
+      /* a PNG layout the decoder does not handle falls through to the browser */
+    }
+  }
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart]));
+  try {
+    const img = await loadImage(url);
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    return { name, image: { width: data.width, height: data.height, data: data.data }, cellHint, decodedBy: 'browser' };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function detectInto(sheet: Tileset): void {
   // Shadows go first, so no asset's box is stretched to take one in. The
   // detector reads a white backdrop itself, so it sees the picture first.
@@ -142,7 +170,7 @@ function detectInto(sheet: Tileset): void {
 /** Runs a pixel edit over a pack's sheet, keeping the result only when it changed something. */
 function editSheetPixels(sheet: Tileset, edit: (rgba: Uint8ClampedArray, w: number, h: number) => boolean): void {
   const image = sheet.image;
-  if (!image || sheet.generated) return;
+  if (!image || sheet.generated || sheet.exact) return;
   const canvas = document.createElement('canvas');
   canvas.width = sheet.imgW;
   canvas.height = sheet.imgH;
@@ -267,6 +295,7 @@ export class App {
       dragMove: (x, y) => this.dragMove(x, y),
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
       editAssets: (sheet, op, indices) => this.editAssets(sheet, op, indices),
+      aiExtract: (sheet) => void this.aiExtract(sheet),
       setPinned: (refs, pinned) => this.setPinned(refs, pinned),
       fileAssets: (folderId, name, refs) => this.fileAssets(folderId, name, refs),
       removeFolder: (folderId) => this.removeFolder(folderId),
@@ -1090,6 +1119,63 @@ export class App {
     if (op === 'toGround') this.store.toast('Now a floor square, first on this page. Paint it with the brush or rectangle.');
     else if (op === 'toObjects') this.store.toast('Back to an object you place');
     else this.store.toast(`${label}: ${next.assets.length} left`);
+  }
+
+  /**
+   * AI Extract on a sheet in the library or a new picture. A library sheet
+   * is read again from its stored PNG, not from the picture on screen, which
+   * may have had its shadows cleaned.
+   */
+  private async aiExtract(sheetIndex: number | null): Promise<void> {
+    let source: ExtractSource;
+    try {
+      if (sheetIndex === null) {
+        const file = await pickFile('image/png,image/*');
+        if (!file) return;
+        source = await readExtractSource(new Uint8Array(await file.arrayBuffer()), file.name.replace(/\.[^.]+$/, ''));
+      } else {
+        const sheet = this.store.doc.tilesets[sheetIndex];
+        if (!sheet || sheet.generated) return;
+        const response = await fetch(sheet.src);
+        source = await readExtractSource(new Uint8Array(await response.arrayBuffer()), sheet.name, sheet.tileW);
+      }
+    } catch {
+      this.store.toast('That picture could not be read');
+      return;
+    }
+    openAiExtract(source, {
+      addToLibrary: (extraction) => this.addExtraction(extraction),
+      saveZip: async (bytes, filename) => {
+        await saveFile(new Blob([bytes as BlobPart], { type: 'application/zip' }), filename);
+      },
+      toast: (message) => this.store.toast(message),
+    });
+  }
+
+  /** Adds an extraction to the library as an exact atlas sheet, ready to place and paint. */
+  private async addExtraction(extraction: Extraction): Promise<void> {
+    const { result, sheet } = extraction;
+    const atlas = packAtlas(sheet.image, result.assets, result.cell);
+    const src = `data:image/png;base64,${bytesToBase64(await encodePng(atlas.image, streamZlib))}`;
+    const names = new Set(this.store.doc.tilesets.map((t) => t.name));
+    let name = `${result.sheetName} (AI)`;
+    for (let n = 2; names.has(name); n++) name = `${result.sheetName} (AI ${n})`;
+    const tileset = await makeTileset(src, name, atlas.cell, atlas.cell);
+    const lib = librarySheet(result, atlas);
+    tileset.exact = true;
+    tileset.splitMode = 'objects';
+    tileset.assets = lib.assets;
+    tileset.groundAssets = lib.groundAssets;
+    tileset.groundBlocks = [];
+    tileset.aiAssets = lib.aiAssets;
+    tileset.propsOnly = lib.propsOnly;
+    tileset.assetsEdited = true;
+    tileset.assetsVersion = DETECT_VERSION;
+    this.editor.addTileset(tileset);
+    this.store.activeTileset = this.store.doc.tilesets.length - 1;
+    this.selectFirstTile();
+    this.shell.openTab('tiles');
+    this.store.toast(`${name}: ${lib.assets.length} assets in the library`);
   }
 
   /** Puts stickers on the Pinned page, or takes them off it. */

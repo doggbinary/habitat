@@ -10,6 +10,7 @@ import {
   loadImage,
   makeTileset,
   uid,
+  type AiAssetInfo,
   type AssetRect,
   type Doc,
   type Layer,
@@ -125,6 +126,8 @@ interface SerializedTileset {
   groundAssets?: number[];
   groundBlocks?: AssetRect[];
   pathStride?: number;
+  exact?: boolean;
+  aiAssets?: AiAssetInfo[];
 }
 
 interface SerializedReference {
@@ -361,6 +364,8 @@ export function serializeProject(
       ...(t.groundAssets?.length ? { groundAssets: [...t.groundAssets] } : {}),
       ...(t.groundBlocks?.length ? { groundBlocks: t.groundBlocks.map((b) => ({ ...b })) } : {}),
       ...(t.pathStride ? { pathStride: t.pathStride } : {}),
+      ...(t.exact ? { exact: true } : {}),
+      ...(t.aiAssets?.length ? { aiAssets: t.aiAssets.map(copyAiInfo) } : {}),
     })),
     layers: doc.layers.map((l): SerializedLayer => {
       const base = {
@@ -378,6 +383,17 @@ export function serializeProject(
       }
       return { ...base, kind: 'tiles', collider: l.collider, data: toBase64(l.data.buffer) };
     }),
+  };
+}
+
+function copyAiInfo(info: AiAssetInfo): AiAssetInfo {
+  return {
+    ...info,
+    rect: { ...info.rect },
+    source: { ...info.source },
+    anchor: { ...info.anchor },
+    flags: [...(info.flags ?? [])],
+    ...(info.animation ? { animation: { ...info.animation } } : {}),
   };
 }
 
@@ -419,6 +435,8 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       if (Array.isArray(t.groundAssets)) tileset.groundAssets = [...t.groundAssets];
       if (Array.isArray(t.groundBlocks)) tileset.groundBlocks = t.groundBlocks.map((b) => ({ ...b }));
       if (t.pathStride) tileset.pathStride = t.pathStride;
+      if (t.exact) tileset.exact = true;
+      if (Array.isArray(t.aiAssets)) tileset.aiAssets = t.aiAssets.map(copyAiInfo);
       tilesets.push(tileset);
     } catch {
       // A tileset that fails to decode would otherwise shift every later
@@ -447,6 +465,8 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
         ...(Array.isArray(t.groundAssets) ? { groundAssets: [...t.groundAssets] } : {}),
         ...(Array.isArray(t.groundBlocks) ? { groundBlocks: t.groundBlocks.map((b) => ({ ...b })) } : {}),
         ...(t.pathStride ? { pathStride: t.pathStride } : {}),
+        ...(t.exact ? { exact: true } : {}),
+        ...(Array.isArray(t.aiAssets) ? { aiAssets: t.aiAssets.map(copyAiInfo) } : {}),
       });
     }
   }

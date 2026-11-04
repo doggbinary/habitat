@@ -24,6 +24,7 @@ export interface ShellActions {
   dragMove: PaletteActions['dragMove'];
   dragEnd: PaletteActions['dragEnd'];
   editAssets: PaletteActions['editAssets'];
+  aiExtract: PaletteActions['aiExtract'];
   setPinned: PaletteActions['setPinned'];
   fileAssets: PaletteActions['fileAssets'];
   removeFolder: PaletteActions['removeFolder'];
@@ -117,6 +118,7 @@ export class Shell {
       dragMove: actions.dragMove,
       dragEnd: actions.dragEnd,
       editAssets: actions.editAssets,
+      aiExtract: actions.aiExtract,
       setPinned: actions.setPinned,
       fileAssets: actions.fileAssets,
       removeFolder: actions.removeFolder,

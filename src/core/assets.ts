@@ -145,6 +145,7 @@ export function sheetIsAllTiles(name: string): boolean {
 
 /** Whether this library sticker is a floor square, painted with a finger, not placed. */
 export function assetIsGround(tileset: Tileset, assetIndex: number): boolean {
+  if (tileset.exact) return (tileset.groundAssets ?? []).includes(assetIndex);
   if (sheetIsAllTiles(tileset.name) || tileset.pathStride) return true;
   return (tileset.groundAssets ?? []).includes(assetIndex);
 }
@@ -1477,7 +1478,7 @@ export function patchTileAt(tileset: Tileset, tileIndex: number, x: number, y: n
 
 /** Whether a painted square of this sheet is ground: a path, floor or grass. */
 export function tileIsGround(tileset: Tileset, tileIndex: number): boolean {
-  if (sheetIsAllTiles(tileset.name) || tileset.pathStride) return true;
+  if (!tileset.exact && (sheetIsAllTiles(tileset.name) || tileset.pathStride)) return true;
   const ground = tileset.groundAssets;
   if (!ground || ground.length === 0) return false;
   const rects = assetsOf(tileset);

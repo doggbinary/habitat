@@ -60,6 +60,30 @@ export interface Tileset {
    * neighbours.
    */
   pathStride?: number;
+  /**
+   * Set on sheets built by AI Extract. Their pixels are exact copies of the
+   * original sheet, so nothing (shadow or backdrop clean-up) may touch them.
+   */
+  exact?: boolean;
+  /** What AI Extract knows about each asset, matched to `assets` by its rectangle. */
+  aiAssets?: AiAssetInfo[];
+}
+
+/** One AI-extracted asset's description, kept with the sheet it lives on. */
+export interface AiAssetInfo {
+  /** Where it sits on this sheet. */
+  rect: AssetRect;
+  name: string;
+  category: string;
+  kind: 'object' | 'tile' | 'frame';
+  /** Where it came from on the original sheet. */
+  source: AssetRect;
+  sourceSheet: string;
+  anchor: { x: number; y: number };
+  confidence: number;
+  needsReview: boolean;
+  flags: string[];
+  animation?: { group: string; frame: number };
 }
 
 /** A rectangle of a sheet image, in source pixels. */

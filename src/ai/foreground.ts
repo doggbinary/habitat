@@ -81,6 +81,13 @@ export function findForeground(image: RGBAImage): Foreground {
       stack.push(j);
     }
   }
+  // A flood that takes nearly everything found a flat ground texture, not a backdrop.
+  let left = 0;
+  for (let i = 0; i < n; i++) left += mask[i];
+  if (left < n * 0.1) {
+    mask.fill(1);
+    return { mask, background: 'none' };
+  }
   return { mask, background: 'colour', colour: [(best >> 16) & 255, (best >> 8) & 255, best & 255] };
 }
 

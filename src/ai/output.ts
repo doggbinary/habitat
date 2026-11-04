@@ -1,4 +1,5 @@
 import { zipBytes, type ZipEntry } from '../io/zip';
+import type { AiAssetInfo } from '../core/doc';
 import { createImage, type Rect, type RGBAImage } from './image';
 import { encodePng, type Zlib } from './png';
 import type { ExtractedAsset, ExtractionResult } from './types';
@@ -135,6 +136,36 @@ export function packAtlas(sheet: RGBAImage, assets: ExtractedAsset[], cellHint: 
     }
   });
   return { image, placements, cell };
+}
+
+/**
+ * The fields of an editor sheet made from an atlas: each asset's place on
+ * it, which are floor tiles, and what AI Extract knows about each one.
+ */
+export function librarySheet(result: ExtractionResult, atlas: Atlas): {
+  assets: Rect[];
+  groundAssets: number[];
+  aiAssets: AiAssetInfo[];
+  propsOnly: boolean;
+} {
+  return {
+    assets: atlas.placements.map((p) => ({ ...p })),
+    groundAssets: result.assets.flatMap((a, i) => (a.kind === 'tile' ? [i] : [])),
+    aiAssets: result.assets.map((a, i) => ({
+      rect: { ...atlas.placements[i] },
+      name: a.name,
+      category: a.category,
+      kind: a.kind,
+      source: { ...a.rect },
+      sourceSheet: result.sheetName,
+      anchor: { ...a.anchor },
+      confidence: a.confidence,
+      needsReview: a.needsReview,
+      flags: a.flags.filter((f) => f.severity !== 'info').map((f) => f.message),
+      ...(a.animation ? { animation: { ...a.animation } } : {}),
+    })),
+    propsOnly: !result.assets.some((a) => a.kind === 'tile'),
+  };
 }
 
 export function slug(name: string): string {

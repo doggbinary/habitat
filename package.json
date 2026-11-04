@@ -16,7 +16,8 @@
     "app-icon": "node scripts/make-app-icon.mjs",
     "sample-village": "node scripts/make-sample-village.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:ai-live": "HABITAT_VISION_LIVE=1 vitest run src/ai/acceptance.live.test.ts"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.3",
