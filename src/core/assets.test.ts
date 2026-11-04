@@ -413,5 +413,52 @@ describe('pages that are one solid picture', () => {
     expect(assets).toHaveLength(8);
     expect(assets.every((a) => a.w === 96 && a.h === 96)).toBe(true);
   });
+
+  it('makes every square of a page of floor tiles paintable, shoreline squares included', () => {
+    const W = 128;
+    const H = 128;
+    const rgba = page(W, H, [250, 240, 200]);
+    paint(rgba, W, 96, 0, 32, 128, [0, 200, 190]);
+    // A curving shore through the third column: sand on one side, sea on the other.
+    for (let y = 0; y < H; y++) {
+      const edge = 64 + Math.round(16 + 12 * Math.sin(y / 14));
+      for (let x = 64; x < 96; x++) {
+        const c: [number, number, number] = x < edge - 3 ? [250, 240, 200] : x < edge ? [255, 255, 255] : [40, 220, 210];
+        rgba.set([...c, 255], (y * W + x) * 4);
+      }
+    }
+    const grid32: SheetGrid = { w: 32, h: 32, margin: 0, spacing: 0, cols: 4, rows: 4 };
+    const { assets, ground } = splitSheet(rgba, W, H, grid32, false);
+    expect(assets).toHaveLength(16);
+    expect(ground).toHaveLength(16);
+    expect(assets.every((a) => a.w === 32 && a.h === 32)).toBe(true);
+  });
+
+  it('keeps a tall cliff whole beside drawings that repeat at a third of its height', () => {
+    const W = 288;
+    const H = 192;
+    const rgba = page(W, H, [0, 0, 0]);
+    // Rock with an outline and cracks, smooth across its middle like a real cliff face.
+    paint(rgba, W, 0, 0, 96, 192, [50, 30, 30]);
+    for (let y = 2; y < H - 2; y++) {
+      for (let x = 2; x < 94; x++) {
+        const crack = Math.abs(y - 96) > 8 && y % 12 < 2 && (x >> 3) % 2 === 0;
+        rgba.set(crack ? [90, 50, 50, 255] : [150 + (y >> 3), 100 + (y >> 4), 90, 255], (y * W + x) * 4);
+      }
+    }
+    for (let r = 0; r < 2; r++) {
+      for (let c = 0; c < 2; c++) {
+        const x0 = 96 + c * 96;
+        const y0 = r * 96;
+        paint(rgba, W, x0, y0, 96, 96, [60, 60, 70]);
+        paint(rgba, W, x0 + 2, y0 + 2, 92, 92, [120 + c * 50, 170, 160 - r * 40]);
+        for (let y = y0 + 8; y < y0 + 88; y += 6) paint(rgba, W, x0 + 8, y, 80, 2, [40 + c * 30, 80 + r * 60, 90]);
+      }
+    }
+    const grid32: SheetGrid = { w: 32, h: 32, margin: 0, spacing: 0, cols: W / 32, rows: H / 32 };
+    const { assets } = splitSheet(rgba, W, H, grid32, false);
+    expect(assets).toContainEqual({ x: 0, y: 0, w: 96, h: 192 });
+    expect(assets.filter((a) => a.x >= 96)).toHaveLength(4);
+  });
 });
 

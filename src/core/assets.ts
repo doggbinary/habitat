@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 18;
+export const DETECT_VERSION = 19;
 
 /** A ground cell is drawn corner to corner; a prop leaves background showing. */
 const TERRAIN_FILL = 0.92;
@@ -838,6 +838,14 @@ export function splitSheet(
   }
 
   const terrain = propsOnly ? new Uint8Array(count) : terrainCells(rgba, alpha, w, h, grid);
+  // A page of nothing but floor squares (a beach running into the sea) has
+  // its shoreline squares between the plain ones, and they are floor too:
+  // cut as drawings they could never be painted along a coast.
+  if (!propsOnly && allFloorPage(alpha, w, h, grid, terrain)) {
+    terrain.fill(1);
+    const assets = readingOrder(Array.from({ length: count }, (_, i) => cellsBox([i], grid)));
+    return { assets, ground: assets.map((_, i) => i), patches: groundPatches(rgba, w, h, grid, terrain) };
+  }
   const squares: AssetRect[] = [];
   for (let i = 0; i < count; i++) if (terrain[i]) squares.push(cellsBox([i], grid));
 
@@ -877,6 +885,26 @@ export function splitSheet(
     ground: assets.flatMap((rect, i) => (isGround.has(rect) ? [i] : [])),
     patches: groundPatches(rgba, w, h, grid, terrain),
   };
+}
+
+/** Share of a page's squares that must be plain floor for its other squares to count as floor too. */
+const ALL_FLOOR_SHARE = 0.6;
+
+/** Whether every square of the page is filled edge to edge and most of them are plain floor. */
+function allFloorPage(alpha: Uint8Array, w: number, h: number, grid: SheetGrid, terrain: Uint8Array): boolean {
+  const count = grid.cols * grid.rows;
+  if (count < 4) return false;
+  let floor = 0;
+  let filled = true;
+  let cells = 0;
+  forEachCell(grid, w, h, (index, x0, y0, cw, ch) => {
+    cells++;
+    if (terrain[index]) floor++;
+    let solid = 0;
+    for (let y = y0; y < y0 + ch; y++) for (let x = x0; x < x0 + cw; x++) if (alpha[y * w + x] > ALPHA_CUTOFF) solid++;
+    if (solid < cw * ch * TERRAIN_FILL) filled = false;
+  });
+  return filled && cells === count && floor >= count * ALL_FLOOR_SHARE;
 }
 
 /** Flat white panels larger than this many cells are a backdrop the art sits on. */
@@ -966,22 +994,33 @@ function rescueRegion(
   clearRuns(rect.w, rect.h, (line, t) => (rect.y + t) * w + rect.x + line);
   for (const i of dividers) own[i] = 0;
 
-  const cellArea = grid.w * grid.h;
-  const islands = absorbFragments(findIslands(own, w, rect, 0, 1), cellArea * FRAGMENT_SHARE).filter((p) => p.area >= cellArea * PANEL_PIECE_SHARE);
   const objects: AssetRect[] = [];
   const ground: AssetRect[] = [];
+  const cellArea = grid.w * grid.h;
+  const islands = absorbFragments(findIslands(own, w, rect, 0, 1), cellArea * FRAGMENT_SHARE).filter((p) => p.area >= cellArea * PANEL_PIECE_SHARE);
   // What is left of the island, with the panels and dividers taken out, so
   // the usual cuts between touching drawings see only real art.
   const remaining = new Uint8Array(alpha.length);
   for (let i = 0; i < remaining.length; i++) if (own[i]) remaining[i] = alpha[i];
   const small = (r: AssetRect) => (r.w * r.h) / (w * h) <= 0.25;
+  const fill = (r: AssetRect) => {
+    let n = 0;
+    for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) if (own[y * w + x]) n++;
+    return n / (r.w * r.h);
+  };
+  // One drawing with its own outline (a cliff, a tree) stays whole; only a
+  // solid block of touching drawings is cut up.
+  const whole = new Set<AssetRect>();
   const parts = islands.flatMap((island) => {
     const box = { x: island.x, y: island.y, w: island.w, h: island.h };
     if (small(box)) return [box];
-    return cutByPeriod(box, rgba, remaining, w, h, grid, 3);
+    const pieces = cutByPeriod(box, rgba, remaining, w, h, grid, 3);
+    if (pieces.length > 1) for (const piece of pieces) whole.add(piece);
+    else if (pieces[0] === box && fill(box) < SOLID_BLOCK) whole.add(box);
+    return pieces;
   });
   for (const box of parts) {
-    if (small(box)) {
+    if (small(box) || whole.has(box)) {
       objects.push(box);
       continue;
     }
@@ -1004,6 +1043,130 @@ function rescueRegion(
     });
   }
   return { objects, ground };
+}
+
+/** A block this solid is drawings butted together, not one drawing with its own outline. */
+const SOLID_BLOCK = 0.85;
+/**
+ * The strongest change across the line within a few pixels of it, as a
+ * function of how far the line is moved. Outlines sit a pixel or two inside a
+ * drawing, so the line itself rarely carries the change.
+ */
+function lineBand(rgba: Uint8ClampedArray, alpha: Uint8Array, w: number, from: number, to: number, sideways: boolean): (line: number) => number {
+  const limit = sideways ? w : alpha.length / w;
+  const lineDiff = (line: number) => {
+    if (line <= 0 || line >= limit) return -1;
+    let sum = 0;
+    let n = 0;
+    for (let t = from; t < to; t++) {
+      const i = sideways ? t * w + line - 1 : (line - 1) * w + t;
+      const j = sideways ? t * w + line : line * w + t;
+      if (alpha[i] <= ALPHA_CUTOFF || alpha[j] <= ALPHA_CUTOFF) continue;
+      sum += Math.abs(rgba[i * 4] - rgba[j * 4]) + Math.abs(rgba[i * 4 + 1] - rgba[j * 4 + 1]) + Math.abs(rgba[i * 4 + 2] - rgba[j * 4 + 2]);
+      n++;
+    }
+    return n ? sum / n : -1;
+  };
+  return (line) => {
+    let best = -1;
+    for (let d = -PERIOD_BAND; d <= PERIOD_BAND; d++) best = Math.max(best, lineDiff(line + d));
+    return best;
+  };
+}
+
+/**
+ * How strongly the picture changes near a line, against the same measure at
+ * the lines around it: near 1 inside one drawing, shading and all, and well
+ * under 1 where the line runs through a smooth stretch of it.
+ */
+function quietRatio(rgba: Uint8ClampedArray, alpha: Uint8Array, w: number, at: number, from: number, to: number, sideways: boolean): number {
+  const band = lineBand(rgba, alpha, w, from, to, sideways);
+  const here = band(at);
+  if (here < 0) return Infinity;
+  const around = [-16, -12, -8, 8, 12, 16].map((d) => band(at + d)).filter((v) => v >= 0).sort((a, b) => a - b);
+  if (around.length === 0) return Infinity;
+  return here / Math.max(around[around.length >> 1], 6);
+}
+
+/** A cut line clearly quieter than the lines around it runs through the middle of one drawing. */
+const SEAM_QUIET = 0.8;
+
+/**
+ * Joins back pairs of neighbouring pieces of a cut where the line between
+ * them runs through a quiet, solidly drawn part of one drawing (the middle of
+ * a cliff, cut only because the drawings beside it repeat at that size), and
+ * the two together stand mostly clear of the rest. Seamless tiles (road, water) are
+ * just as quiet across the line but stay surrounded by more of the same.
+ * Quietest pairs go first and each piece joins at most once.
+ */
+function mergeWeakCuts(pieces: AssetRect[], rgba: Uint8ClampedArray, alpha: Uint8Array, w: number): AssetRect[] {
+  const h = alpha.length / w;
+  const pairs: { i: number; j: number; ratio: number }[] = [];
+  for (let i = 0; i < pieces.length; i++) {
+    for (let j = 0; j < pieces.length; j++) {
+      const a = pieces[i];
+      const b = pieces[j];
+      let ratio = Infinity;
+      if (a.y + a.h === b.y && a.x === b.x && a.w === b.w) ratio = quietRatio(rgba, alpha, w, b.y, a.x, a.x + a.w, false);
+      else if (a.x + a.w === b.x && a.y === b.y && a.h === b.h) ratio = quietRatio(rgba, alpha, w, b.x, a.y, a.y + a.h, true);
+      if (ratio < SEAM_QUIET && surroundShare(unionRect(a, b), alpha, w, h) < SEAM_SURROUND && solidAcross(a, b, alpha, w)) pairs.push({ i, j, ratio });
+    }
+  }
+  pairs.sort((p, q) => p.ratio - q.ratio);
+  const joined = new Set<number>();
+  const out: AssetRect[] = [];
+  for (const { i, j } of pairs) {
+    if (joined.has(i) || joined.has(j)) continue;
+    joined.add(i).add(j);
+    out.push(unionRect(pieces[i], pieces[j]));
+  }
+  return [...out, ...pieces.filter((_, i) => !joined.has(i))];
+}
+
+/** Two pieces joined back must have empty space round less than this share of their edge. */
+const SEAM_SURROUND = 0.5;
+
+/** The share of the pixels just outside a rect (on the page) that are drawn. */
+function surroundShare(rect: AssetRect, alpha: Uint8Array, w: number, h: number): number {
+  let drawn = 0;
+  let n = 0;
+  const at = (x: number, y: number) => {
+    n++;
+    if (x >= 0 && y >= 0 && x < w && y < h && alpha[y * w + x] > ALPHA_CUTOFF) drawn++;
+  };
+  for (let x = rect.x; x < rect.x + rect.w; x++) {
+    at(x, rect.y - 1);
+    at(x, rect.y + rect.h);
+  }
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    at(rect.x - 1, y);
+    at(rect.x + rect.w, y);
+  }
+  return n ? drawn / n : 0;
+}
+
+/** A cut through one drawing has art on both sides of nearly all of the line. */
+const SEAM_SOLID = 0.9;
+
+/** Whether the line between two touching pieces is drawn on both sides for nearly all its length. */
+function solidAcross(a: AssetRect, b: AssetRect, alpha: Uint8Array, w: number): boolean {
+  const sideways = a.x + a.w === b.x;
+  const from = sideways ? a.y : a.x;
+  const to = sideways ? a.y + a.h : a.x + a.w;
+  const line = sideways ? b.x : b.y;
+  let drawn = 0;
+  for (let t = from; t < to; t++) {
+    const i = sideways ? t * w + line - 1 : (line - 1) * w + t;
+    const j = sideways ? t * w + line : line * w + t;
+    if (alpha[i] > ALPHA_CUTOFF && alpha[j] > ALPHA_CUTOFF) drawn++;
+  }
+  return drawn >= (to - from) * SEAM_SOLID;
+}
+
+function unionRect(a: AssetRect, b: AssetRect): AssetRect {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
 }
 
 /** Lines this much stronger than a block's average line are borders between drawings. */
@@ -1102,22 +1265,31 @@ function blockPeriod(rect: AssetRect, rgba: Uint8ClampedArray, alpha: Uint8Array
 function cutByPeriod(rect: AssetRect, rgba: Uint8ClampedArray, alpha: Uint8Array, w: number, h: number, grid: SheetGrid, depth: number): AssetRect[] {
   const period = blockPeriod(rect, rgba, alpha, w, grid);
   if (!period) return [rect];
-  const pieces = cutEvery(rect, period, alpha, w, grid);
+  const pieces = cutEvery(rect, period, rgba, alpha, w, grid);
   if (depth <= 1 || (pieces.length === 1 && pieces[0].w === rect.w && pieces[0].h === rect.h)) return pieces;
   return pieces.flatMap((piece) => ((piece.w * piece.h) / (w * h) > 0.1 ? cutByPeriod(piece, rgba, alpha, w, h, grid, depth - 1) : [piece]));
 }
 
 /** A block cut into the pieces its drawings repeat at, each fitted to its own pixels. */
-function cutEvery(rect: AssetRect, period: number, alpha: Uint8Array, w: number, grid: SheetGrid): AssetRect[] {
-  const pieces: AssetRect[] = [];
+function cutEvery(rect: AssetRect, period: number, rgba: Uint8ClampedArray, alpha: Uint8Array, w: number, grid: SheetGrid): AssetRect[] {
+  const raw: AssetRect[] = [];
   const first = (start: number) => grid.margin + Math.floor((start - grid.margin) / period) * period;
   for (let y = first(rect.y); y < rect.y + rect.h; y += period) {
     for (let x = first(rect.x); x < rect.x + rect.w; x += period) {
       const x0 = Math.max(x, rect.x);
       const y0 = Math.max(y, rect.y);
-      const box = tightBox(alpha, w, x0, y0, Math.min(x + period, rect.x + rect.w), Math.min(y + period, rect.y + rect.h));
-      if (box && box.w * box.h >= grid.w * grid.h * PANEL_PIECE_SHARE) pieces.push(box);
+      raw.push({ x: x0, y: y0, w: Math.min(x + period, rect.x + rect.w) - x0, h: Math.min(y + period, rect.y + rect.h) - y0 });
     }
+  }
+  const minArea = grid.w * grid.h * PANEL_PIECE_SHARE;
+  const drawn = raw.filter((cut) => {
+    const box = tightBox(alpha, w, cut.x, cut.y, cut.x + cut.w, cut.y + cut.h);
+    return box && box.w * box.h >= minArea;
+  });
+  const pieces: AssetRect[] = [];
+  for (const cut of mergeWeakCuts(drawn, rgba, alpha, w)) {
+    const box = tightBox(alpha, w, cut.x, cut.y, cut.x + cut.w, cut.y + cut.h);
+    if (box && box.w * box.h >= minArea) pieces.push(box);
   }
   return pieces.length ? pieces : [rect];
 }
