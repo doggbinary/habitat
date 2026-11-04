@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
-import { configFromEnv, createVisionClient, VisionError, type VisionRequest } from './src/ai/vision';
+import { configFromEnv, createVisionClient, VisionError, type VisionRequest } from './src/ai/vision.ts';
 
 /**
  * The full version: on this computer, `npm run full` builds the app once and

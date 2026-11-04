@@ -300,6 +300,20 @@ export function refine(sheet: SheetAnalysis, proposals: Proposal[], terrain: Ter
   // A claim by box alone covers the box, not the whole island: what lies
   // outside every claiming box is left for verification to report.
   const byBox = new Set<number>();
+  // A mark can be far bigger than the asset named with it: on an opaque
+  // terrain sheet the whole sheet is one island. When every claim's box
+  // leaves much of the island outside, the boxes bound it, not the mark.
+  for (const [id, claimants] of claims) {
+    const pixels = free(id);
+    if (pixels.length === 0) continue;
+    const small = claimants.every((k) => {
+      const box = expand(objects[k].bbox, BOX_SLACK);
+      let inside = 0;
+      for (const i of pixels) if (inBox(box, i % w, Math.floor(i / w))) inside++;
+      return rectArea(objects[k].bbox) > 0 && inside / pixels.length < INSIDE;
+    });
+    if (small) byBox.add(id);
+  }
   for (const c of comps.list) {
     if (claims.has(c.id)) continue;
     const pixels = free(c.id);
@@ -324,7 +338,10 @@ export function refine(sheet: SheetAnalysis, proposals: Proposal[], terrain: Ter
   for (const [id, claimants] of claims) {
     let pixels = free(id);
     if (byBox.has(id)) {
-      const boxes = claimants.map((k) => expand(objects[k].bbox, BOX_SLACK));
+      // A tile is bounded by its grid cell; anything else by its box and a little slack.
+      const boxes = claimants.map((k) =>
+        objects[k].kind === 'tile' && sheet.cell ? snapToCells(objects[k].bbox, sheet.cell, w, h) : expand(objects[k].bbox, BOX_SLACK),
+      );
       pixels = pixels.filter((i) => boxes.some((b) => inBox(b, i % w, Math.floor(i / w))));
     }
     if (pixels.length === 0) continue;
@@ -350,6 +367,15 @@ export function refine(sheet: SheetAnalysis, proposals: Proposal[], terrain: Ter
       });
       return;
     }
+    // A single tile only paints as floor when its box is its whole grid cell.
+    const box = pixelBox(pixels, w)!;
+    const cell = sheet.cell;
+    const cellRect =
+      p.kind === 'tile' && cell && box.w <= cell && box.h <= cell
+        ? { x: Math.floor(box.x / cell) * cell, y: Math.floor(box.y / cell) * cell, w: cell, h: cell }
+        : undefined;
+    const fits = !!cellRect && box.x + box.w <= cellRect.x + cellRect.w && box.y + box.h <= cellRect.y + cellRect.h;
+    const kind = p.kind === 'tile' && !fits ? 'object' : p.kind;
     const index = assets.length;
     for (const i of pixels) owner[i] = index;
     assetOf.set(k, index);
@@ -358,7 +384,7 @@ export function refine(sheet: SheetAnalysis, proposals: Proposal[], terrain: Ter
         {
           name: p.name,
           category: p.category,
-          kind: p.kind,
+          kind,
           confidence: p.confidence,
           source: p.source,
           animation: p.animation,
@@ -366,6 +392,7 @@ export function refine(sheet: SheetAnalysis, proposals: Proposal[], terrain: Ter
         },
         Int32Array.from(pixels).sort(),
         w,
+        kind === 'tile' ? cellRect : undefined,
       ),
     );
   });

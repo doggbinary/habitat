@@ -7,6 +7,9 @@ import { streamZlib } from '../ai/png';
 import { loadVisionSettings, resolveVision, saveVisionSettings, type ResolvedVision } from '../ai/settings';
 import { CATEGORIES, type Category, type ExtractedAsset } from '../ai/types';
 import { createVisionClient, DEFAULT_MODELS, describeConfig, NO_KEY_MESSAGE, PROVIDERS, VisionError, type ProviderId } from '../ai/vision';
+import { artworkAutotiles, buildAutotiles, flagArtworkBuild, guessFormat, type AutotileBuild, type FormatGuess } from '../ai/formats';
+import { nameMaterials } from '../ai/autotile-naming';
+import { FLOOR_PREVIEW } from '../core/autotile';
 import { button, clear, el } from './dom';
 import { openModal } from './modal';
 
@@ -17,15 +20,25 @@ export interface ExtractSource {
   cellHint?: number;
   /** How the pixels were read; anything but the PNG itself is noted on the result. */
   decodedBy: 'png' | 'browser';
+  /** The original file, kept with terrain built from it. */
+  sourceSrc?: string;
 }
 
 export interface ExtractHooks {
   addToLibrary: (extraction: Extraction) => Promise<void>;
+  addAutotiles: (build: AutotileBuild) => Promise<void>;
   saveZip: (bytes: Uint8Array, filename: string) => Promise<void>;
   toast: (message: string) => void;
 }
 
 type Filter = 'all' | 'review' | 'tiles' | 'objects';
+
+/** A model's terrain box snapped to whole cells. */
+function snapBlock(r: { x: number; y: number; w: number; h: number }, cell: number) {
+  const x = Math.round(r.x / cell) * cell;
+  const y = Math.round(r.y / cell) * cell;
+  return { x, y, w: Math.round((r.x + r.w) / cell) * cell - x, h: Math.round((r.y + r.h) / cell) * cell - y };
+}
 
 function toCanvas(img: RGBAImage, className = ''): HTMLCanvasElement {
   const canvas = el('canvas', { class: className });
@@ -69,8 +82,19 @@ export function openAiExtract(source: ExtractSource, hooks: ExtractHooks): void 
 
   // --- Before a run: the model and the start buttons ----------------------
 
+  const guess = guessFormat(source.name, source.image.width, source.image.height);
+  let terrain: AutotileBuild | null = guess?.autotiles ? buildAutotiles(source.image, guess, source.name) : null;
+  let asAssets = !terrain;
+
   const showSetup = async (error?: string) => {
+    if (terrain && !asAssets) {
+      void showTerrain(guess!, error);
+      return;
+    }
     clear(body);
+    const footer = modal.element.querySelector('.modal-actions')!;
+    clear(footer);
+    footer.append(button('btn subtle', 'Close', () => modal.close(), [el('span', { text: 'Close' })]));
     const status = el('p', { class: 'ai-status', text: 'Checking for a vision model…' });
     const errorLine = error ? el('p', { class: 'ai-error', text: error }) : null;
     const settingsBox = el('div', { class: 'ai-settings' });
@@ -93,6 +117,16 @@ export function openAiExtract(source: ExtractSource, hooks: ExtractHooks): void 
       el('div', { class: 'ai-row' }, [start, pixelsOnly, el('div', { class: 'spacer' }), settingsButton]),
       settingsBox,
     );
+    if (guess && !guess.autotiles) body.insertBefore(el('p', { class: 'ai-status', text: guess.note }), status);
+    if (terrain) {
+      body.insertBefore(
+        button('btn subtle', 'Go back to reading this sheet as connected terrain', () => {
+          asAssets = false;
+          void showSetup();
+        }, [el('span', { text: 'Back to terrain' })]),
+        status,
+      );
+    }
     buildSettings(settingsBox, () => void showSetup());
 
     const { resolved, server } = await resolveVision();
@@ -104,7 +138,7 @@ export function openAiExtract(source: ExtractSource, hooks: ExtractHooks): void 
       status.classList.add('ai-error');
       start.disabled = true;
       settingsBox.hidden = false;
-      if (server?.error) status.textContent += ` (Local server: ${server.error})`;
+      if (server?.error && server.error !== NO_KEY_MESSAGE) status.textContent += ` (Local server: ${server.error})`;
     }
   };
 
@@ -141,6 +175,126 @@ export function openAiExtract(source: ExtractSource, hooks: ExtractHooks): void 
           saved();
         }, [el('span', { text: 'Remove key' })]),
       ]),
+    );
+  };
+
+  // --- A recognised terrain sheet ---------------------------------------
+
+  const tileOf = (build: AutotileBuild, row: number, shape: number): RGBAImage => {
+    const c = build.sheet.cell;
+    const out = { width: c, height: c, data: new Uint8ClampedArray(c * c * 4) };
+    for (let y = 0; y < c; y++) {
+      const from = ((row * c + y) * build.atlas.width + shape * c) * 4;
+      out.data.set(build.atlas.data.subarray(from, from + c * 4), y * c * 4);
+    }
+    return out;
+  };
+
+  /** A small patch painted by the rules: what the material looks like on a map. */
+  const sample = (build: AutotileBuild, row: number): RGBAImage => {
+    const c = build.sheet.cell;
+    const floor = build.sheet.materials[row].kind === 'floor';
+    const layout = floor
+      ? [
+          [34, 20, 36, -1],
+          [16, 0, 24, -1],
+          [40, 28, 38, 46],
+        ]
+      : [
+          [3, 2, 6, -1],
+          [9, 8, 12, 15],
+        ];
+    const out = { width: 4 * c, height: layout.length * c, data: new Uint8ClampedArray(4 * c * layout.length * c * 4) };
+    layout.forEach((cells, y) =>
+      cells.forEach((shape, x) => {
+        if (shape < 0) return;
+        const tile = tileOf(build, row, shape);
+        for (let yy = 0; yy < c; yy++) out.data.set(tile.data.subarray(yy * c * 4, (yy + 1) * c * 4), ((y * c + yy) * out.width + x * c) * 4);
+      }),
+    );
+    return out;
+  };
+
+  const showTerrain = async (g: FormatGuess, error?: string) => {
+    const build = terrain!;
+    clear(body);
+    const sheet = build.sheet;
+    const verified = sheet.materials.filter((m) => m.flags.length === 0).length;
+    const label = g.format.replace('rpgmaker-', 'RPG Maker ').replace(/a(\d)$/, 'A$1');
+    const { resolved } = await resolveVision();
+    const nameButton = button('btn subtle', 'Ask the vision model what each material is', () => void nameWithModel(), [
+      el('span', { text: resolved ? `Name with ${describeConfig(resolved.config)}` : 'Name with a vision model' }),
+    ]);
+    nameButton.disabled = !resolved;
+    const nameWithModel = async () => {
+      if (!resolved) return;
+      nameButton.disabled = true;
+      hooks.toast('Asking the model to name each material…');
+      try {
+        const { names } = await nameMaterials(createVisionClient(resolved.config), source.image, g, streamZlib);
+        terrain = buildAutotiles(source.image, g, source.name, names);
+        void showTerrain(g);
+      } catch (e) {
+        void showTerrain(g, e instanceof Error ? e.message : 'The model could not be reached.');
+      }
+    };
+    body.append(
+      el('div', { class: 'ai-status' }, [
+        el('strong', { text: `Recognised: ${label}${g.byName ? ' (from the file name and size)' : ' (from the size)'}` }),
+        el('p', { text: g.note }),
+        ...sheet.notes.slice(1).map((n) => el('p', { class: 'hint', text: n })),
+      ]),
+      ...(error ? [el('p', { class: 'ai-status ai-error', text: error })] : []),
+      el('div', { class: 'ai-summary' }, [
+        el('span', { class: 'ai-pill', text: `${sheet.materials.length} terrain materials` }),
+        el('span', { class: `ai-pill${verified < sheet.materials.length ? ' warn' : ''}`, text: `${verified} of ${sheet.materials.length} verified as autotiles` }),
+        el('span', { class: 'ai-pill muted', text: `${build.empty} empty blocks skipped` }),
+        el('span', { class: 'ai-pill muted', text: `${sheet.cell} px cells, ${sheet.cell / 2} px pieces` }),
+      ]),
+      el('p', {
+        class: 'hint',
+        text: 'Each block becomes one material. Its pieces are assembled by the format’s own rules into every edge, corner and inner corner, and painting picks the right one from the neighbours.',
+      }),
+      el('div', { class: 'ai-row' }, [
+        nameButton,
+        el('div', { class: 'spacer' }),
+        button('btn subtle', 'Ignore the format and extract the pictures on this sheet as separate assets', () => {
+          asAssets = true;
+          void showSetup();
+        }, [el('span', { text: 'Treat as separate assets instead' })]),
+      ]),
+      el(
+        'div',
+        { class: 'ai-terrain' },
+        sheet.materials.map((m, row) => {
+          const name = el('input', { class: 'input ai-name', value: m.name }) as HTMLInputElement;
+          name.addEventListener('change', () => {
+            if (name.value.trim()) m.name = name.value.trim().slice(0, 40);
+          });
+          const role = { floor: 'floor', 'wall-top': 'wall top', 'wall-side': 'wall face', roof: 'roof' }[m.role];
+          return el('div', { class: `ai-item ai-material${m.flags.length ? ' review' : ''}` }, [
+            el('figure', {}, [toCanvas(tileOf(build, row, m.kind === 'floor' ? FLOOR_PREVIEW : 15), 'ai-thumb'), el('figcaption', { text: 'preview' })]),
+            el('figure', {}, [toCanvas(sample(build, row), 'ai-sample'), el('figcaption', { text: 'painted' })]),
+            el('div', { class: 'ai-meta' }, [
+              name,
+              el('div', {
+                class: 'muted',
+                text: `${role} · block at ${m.source.x}, ${m.source.y} · ${Math.round(m.confidence * 100)}%${m.pair !== undefined ? ` · goes with ${sheet.materials[m.pair]?.name}` : ''}`,
+              }),
+              el('div', { class: 'ai-flag info', text: m.edge.note }),
+              ...m.flags.map((f) => el('div', { class: 'ai-flag warn', text: f })),
+            ]),
+          ]);
+        }),
+      ),
+    );
+    const footer = modal.element.querySelector('.modal-actions')!;
+    clear(footer);
+    footer.append(
+      button('btn subtle', 'Close without adding', () => modal.close(), [el('span', { text: 'Close' })]),
+      button('btn primary', 'Add these materials to the library as terrain you paint', () => {
+        void hooks.addAutotiles(build).then(() => modal.close());
+      }, [el('span', { text: `Add ${sheet.materials.length} terrain materials` })]),
     );
   };
 
@@ -221,6 +375,20 @@ export function openAiExtract(source: ExtractSource, hooks: ExtractHooks): void 
     const { width, height } = extraction.result;
     overlayScale = Math.max(2, Math.min(4, Math.floor(1600 / Math.max(width, height))));
     body.append(summary, tools, el('div', { class: 'ai-review' }, [overlayWrap, listBox]));
+    // Blocks the model called terrain may be autotiles even on a sheet of no known format.
+    const cell = extraction.result.cell;
+    const found = cell ? artworkAutotiles(source.image, cell, extraction.terrain.map((t) => snapBlock(t.bbox, cell))) : null;
+    if (found) {
+      body.insertBefore(
+        el('div', { class: 'ai-status' }, [
+          el('p', { text: found.note }),
+          button('btn subtle', 'Add these blocks as connected terrain materials as well', () => {
+            void hooks.addAutotiles(flagArtworkBuild(buildAutotiles(source.image, found, `${source.name} terrain`))).then(() => hooks.toast('Terrain added; it is flagged for checking.'));
+          }, [el('span', { text: `Add ${found.slots.length} as terrain` })]),
+        ]),
+        summary,
+      );
+    }
     const footer = modal.element.querySelector('.modal-actions')!;
     clear(footer);
     footer.append(

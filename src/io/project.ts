@@ -11,6 +11,7 @@ import {
   makeTileset,
   uid,
   type AiAssetInfo,
+  type AutotileSheet,
   type AssetRect,
   type Doc,
   type Layer,
@@ -128,6 +129,7 @@ interface SerializedTileset {
   pathStride?: number;
   exact?: boolean;
   aiAssets?: AiAssetInfo[];
+  autotile?: AutotileSheet;
 }
 
 interface SerializedReference {
@@ -366,6 +368,7 @@ export function serializeProject(
       ...(t.pathStride ? { pathStride: t.pathStride } : {}),
       ...(t.exact ? { exact: true } : {}),
       ...(t.aiAssets?.length ? { aiAssets: t.aiAssets.map(copyAiInfo) } : {}),
+      ...(t.autotile ? { autotile: structuredClone(t.autotile) } : {}),
     })),
     layers: doc.layers.map((l): SerializedLayer => {
       const base = {
@@ -437,6 +440,7 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       if (t.pathStride) tileset.pathStride = t.pathStride;
       if (t.exact) tileset.exact = true;
       if (Array.isArray(t.aiAssets)) tileset.aiAssets = t.aiAssets.map(copyAiInfo);
+      if (t.autotile && Array.isArray(t.autotile.materials)) tileset.autotile = structuredClone(t.autotile);
       tilesets.push(tileset);
     } catch {
       // A tileset that fails to decode would otherwise shift every later
@@ -467,6 +471,7 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
         ...(t.pathStride ? { pathStride: t.pathStride } : {}),
         ...(t.exact ? { exact: true } : {}),
         ...(Array.isArray(t.aiAssets) ? { aiAssets: t.aiAssets.map(copyAiInfo) } : {}),
+        ...(t.autotile && Array.isArray(t.autotile.materials) ? { autotile: structuredClone(t.autotile) } : {}),
       });
     }
   }

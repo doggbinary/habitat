@@ -2573,3 +2573,26 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+
+.ai-extract .btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ai-terrain {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+  gap: 8px;
+}
+
+.ai-material {
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+
+.ai-sample {
+  width: 128px;
+  height: auto;
+  image-rendering: pixelated;
+  background: #2a2d36;
+  border-radius: 6px;
+}

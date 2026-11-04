@@ -29,6 +29,7 @@ import {
 } from '../core/stamp';
 import type { Store } from '../core/store';
 import { EMPTY, type PackedTile } from '../core/tiles';
+import { sameTerrain, shapedTile, terrainOf } from '../core/autotile';
 import type { Renderer } from '../render/renderer';
 import { normalizeRect, type Cell, type Rect } from './geometry';
 
@@ -142,6 +143,25 @@ export class Editor {
     layer.data[index] = tile;
     stroke?.record(index, before, tile);
     this.renderer.markCell(layer.id, x, y);
+    // Terrain picks its shape from its neighbours, so a change here can
+    // change this cell and every cell around it.
+    if (!this.reshaping && (terrainOf(this.doc, before) || terrainOf(this.doc, tile))) this.reshapeAround(layer, x, y, stroke);
+  }
+
+  private reshaping = false;
+
+  private reshapeAround(layer: TileLayer, x: number, y: number, stroke: Stroke | null): void {
+    this.reshaping = true;
+    try {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const shaped = shapedTile(this.doc, layer, x + dx, y + dy);
+          if (shaped !== null) this.put(layer, x + dx, y + dy, shaped, stroke);
+        }
+      }
+    } finally {
+      this.reshaping = false;
+    }
   }
 
   // --- Selection ------------------------------------------------------------
@@ -415,7 +435,7 @@ export class Editor {
 
     const target = layer.data[cellIndex(doc, x, y)];
     const singleReplacement = erasing ? EMPTY : stamp.w === 1 && stamp.h === 1 ? stamp.tiles[0] : null;
-    if (singleReplacement !== null && singleReplacement === target) return;
+    if (singleReplacement !== null && sameTerrain(doc, singleReplacement, target)) return;
 
     const seen = new Uint8Array(doc.width * doc.height);
     const stack: number[] = [cellIndex(doc, x, y)];
@@ -437,7 +457,8 @@ export class Editor {
         if (!inBounds(doc, nx, ny)) return;
         const ni = cellIndex(doc, nx, ny);
         if (seen[ni]) return;
-        if (layer.data[ni] !== target) return;
+        // Terrain cells of one material show different shapes but are one area.
+        if (!sameTerrain(doc, layer.data[ni], target)) return;
         seen[ni] = 1;
         stack.push(ni);
       };

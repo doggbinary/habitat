@@ -101,7 +101,11 @@ import { openModal } from './ui/modal';
 import { openAiExtract, type ExtractSource } from './ui/ai-extract';
 import type { Extraction } from './ai/pipeline';
 import { librarySheet, packAtlas } from './ai/output';
-import { bytesToBase64, decodePng, encodePng, isPng, streamZlib } from './ai/png';
+import { decodePng, encodePng, isPng, streamZlib } from './ai/png';
+import { autotileSheetFields, buildAutotiles, guessFormat, type AutotileBuild } from './ai/formats';
+import { nameMaterials } from './ai/autotile-naming';
+import { resolveVision } from './ai/settings';
+import { bytesToBase64, createVisionClient, describeConfig } from './ai/vision';
 import { Shell } from './ui/shell';
 
 /**
@@ -1030,6 +1034,8 @@ export class App {
       defaultTileSize: this.store.doc.tileSize,
       onConfirm: async (spec) => {
         try {
+          // A known terrain layout is built into working terrain, not cut up.
+          if (await this.importAutotiles(spec.src, spec.name)) return;
           const tileset = await makeTileset(spec.src, spec.name, spec.tileW, spec.tileH, spec.margin, spec.spacing);
           detectInto(tileset);
           this.editor.addTileset(tileset);
@@ -1132,12 +1138,15 @@ export class App {
       if (sheetIndex === null) {
         const file = await pickFile('image/png,image/*');
         if (!file) return;
-        source = await readExtractSource(new Uint8Array(await file.arrayBuffer()), file.name.replace(/\.[^.]+$/, ''));
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        source = await readExtractSource(bytes, file.name.replace(/\.[^.]+$/, ''));
+        source.sourceSrc = `data:${file.type || 'image/png'};base64,${bytesToBase64(bytes)}`;
       } else {
         const sheet = this.store.doc.tilesets[sheetIndex];
         if (!sheet || sheet.generated) return;
-        const response = await fetch(sheet.src);
-        source = await readExtractSource(new Uint8Array(await response.arrayBuffer()), sheet.name, sheet.tileW);
+        const response = await fetch(sheet.autotile?.sourceSrc ?? sheet.src);
+        source = await readExtractSource(new Uint8Array(await response.arrayBuffer()), sheet.autotile?.sourceName ?? sheet.name, sheet.tileW);
+        source.sourceSrc = sheet.autotile?.sourceSrc ?? sheet.src;
       }
     } catch {
       this.store.toast('That picture could not be read');
@@ -1145,11 +1154,67 @@ export class App {
     }
     openAiExtract(source, {
       addToLibrary: (extraction) => this.addExtraction(extraction),
+      addAutotiles: (build) => this.addAutotileSheet(build, source.sourceSrc),
       saveZip: async (bytes, filename) => {
         await saveFile(new Blob([bytes as BlobPart], { type: 'application/zip' }), filename);
       },
       toast: (message) => this.store.toast(message),
     });
+  }
+
+  /**
+   * Recognises an RPG Maker A2, A3 or A4 sheet and adds it as terrain that
+   * shapes itself as it is painted. Returns false when the picture is
+   * something else, or its blocks do not behave like autotiles, so the
+   * ordinary import runs instead.
+   */
+  private async importAutotiles(src: string, name: string): Promise<boolean> {
+    const bytes = new Uint8Array(await (await fetch(src)).arrayBuffer());
+    const source = await readExtractSource(bytes, name);
+    const guess = guessFormat(name, source.image.width, source.image.height);
+    if (!guess) return false;
+    if (!guess.autotiles) {
+      this.store.toast(guess.note);
+      return false;
+    }
+    let names: (string | undefined)[] | undefined;
+    const { resolved } = await resolveVision();
+    if (resolved) {
+      this.store.toast(`Naming the materials with ${describeConfig(resolved.config)}…`);
+      try {
+        names = (await nameMaterials(createVisionClient(resolved.config), source.image, guess, streamZlib)).names;
+      } catch (error) {
+        this.store.toast(`Materials keep colour names: ${error instanceof Error ? error.message : 'the model could not be reached'}`);
+      }
+    }
+    const build = buildAutotiles(source.image, guess, name, names);
+    if (build.sheet.confidence < 0.5) {
+      this.store.toast(`${name} is the size of an RPG Maker sheet, but its blocks do not join up like autotiles, so it was imported as ordinary assets. AI Extract can show why.`);
+      return false;
+    }
+    await this.addAutotileSheet(build, src);
+    return true;
+  }
+
+  /** Adds built terrain to the library: one entry per material, painted as connected floor. */
+  private async addAutotileSheet(build: AutotileBuild, sourceSrc?: string): Promise<void> {
+    const { sheet } = build;
+    const src = `data:image/png;base64,${bytesToBase64(await encodePng(build.atlas, streamZlib))}`;
+    const tileset = await makeTileset(src, sheet.sourceName, sheet.cell, sheet.cell);
+    Object.assign(tileset, autotileSheetFields(build));
+    tileset.autotile = { ...sheet, ...(sourceSrc ? { sourceSrc } : {}) };
+    tileset.exact = true;
+    tileset.assetsEdited = true;
+    tileset.assetsVersion = DETECT_VERSION;
+    this.editor.addTileset(tileset);
+    this.store.activeTileset = this.store.doc.tilesets.length - 1;
+    this.selectFirstTile();
+    this.shell.openTab('tiles');
+    const flagged = sheet.materials.filter((m) => m.flags.length > 0).length;
+    const label = sheet.format.replace('rpgmaker-', 'RPG Maker ').replace(/a(\d)$/, 'A$1');
+    this.store.toast(
+      `${label}: ${sheet.materials.length} terrain materials ready. Paint them and edges and corners follow.${flagged ? ` ${flagged} flagged for a look in AI Extract.` : ''}`,
+    );
   }
 
   /** Adds an extraction to the library as an exact atlas sheet, ready to place and paint. */

@@ -5,6 +5,8 @@ import { renderOverlay } from './overlay';
 import { extractSheet } from './pipeline';
 import { streamZlib } from './png';
 import { configFromEnv, createVisionClient } from './vision';
+import { buildAutotiles, guessFormat } from './formats';
+import { nameMaterials } from './autotile-naming';
 
 /*
  * Live acceptance against a real vision model. Off unless both a key and
@@ -13,7 +15,7 @@ import { configFromEnv, createVisionClient } from './vision';
  *   HABITAT_VISION_LIVE=1 OPENAI_API_KEY=sk-... npm run test:ai-live
  *
  * HABITAT_VISION_PROVIDER / HABITAT_VISION_MODEL pick the model,
- * HABITAT_TERRAIN_SHEET points at a 48 px terrain sheet, and overlays and
+ * HABITAT_TERRAIN_SHEET points at an RPG Maker A2 sheet (Tile_A2-1), and overlays and
  * reports are written to HABITAT_EXTRACT_OUT (default /tmp/habitat-ai-extract).
  */
 const config = (() => {
@@ -55,11 +57,14 @@ describe.skipIf(!config)('live vision acceptance (HABITAT_VISION_LIVE=1 and an A
     expect(result.stats.unassignedPixels).toBeLessThan(image.width * image.height * 0.01);
   });
 
-  it.skipIf(!fileExists(env('HABITAT_TERRAIN_SHEET')))('cuts every repeated ground tile of the terrain sheet separately', { timeout: 15 * 60_000 }, async () => {
-    const { image, result } = await run('terrain', env('HABITAT_TERRAIN_SHEET')!);
-    expect(auditCrops(image, result.assets)).toEqual([]);
-    const tiles = result.assets.filter((a) => a.kind === 'tile');
-    expect(tiles.every((t) => t.rect.w === 48 && t.rect.x % 48 === 0 && t.rect.y % 48 === 0)).toBe(true);
-    expect(tiles.length).toBe(168);
+  it.skipIf(!fileExists(env('HABITAT_TERRAIN_SHEET')))('recognises the A2 sheet by its format and names its 28 materials with the model', { timeout: 5 * 60_000 }, async () => {
+    const image = await loadPng(env('HABITAT_TERRAIN_SHEET')!);
+    const guess = guessFormat('Tile_A2-1 (2)', image.width, image.height)!;
+    expect(guess.format).toBe('rpgmaker-a2');
+    const { names, looks } = await nameMaterials(createVisionClient(config!), image, guess, streamZlib);
+    const build = buildAutotiles(image, guess, 'Tile_A2-1 (2)', names);
+    console.log(build.sheet.materials.map((m, i) => `${m.name} (${looks[build.slotOf[i]] ?? '?'}): ${m.edge.style}`).join('\n'));
+    expect(build.sheet.materials).toHaveLength(28);
+    expect(names.filter(Boolean).length).toBeGreaterThanOrEqual(20);
   });
 });

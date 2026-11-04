@@ -98,11 +98,14 @@ const PAD = 2;
  * tallest first.
  */
 export function packAtlas(sheet: RGBAImage, assets: ExtractedAsset[], cellHint: number | null): Atlas {
-  const tiles = assets.map((a, i) => ({ a, i })).filter(({ a }) => a.kind === 'tile');
-  const cell = tiles.length ? tiles[0].a.rect.w : (cellHint ?? 48);
+  const firstTile = assets.find((a) => a.kind === 'tile');
+  const cell = cellHint ?? firstTile?.rect.w ?? 48;
+  // Only tiles of exactly one cell go on the grid; anything else packs as an object.
+  const onGrid = (a: ExtractedAsset) => a.kind === 'tile' && a.rect.w === cell && a.rect.h === cell;
+  const tiles = assets.map((a, i) => ({ a, i })).filter(({ a }) => onGrid(a));
   const objects = assets
     .map((a, i) => ({ a, i }))
-    .filter(({ a }) => a.kind !== 'tile')
+    .filter(({ a }) => !onGrid(a))
     .sort((p, q) => q.a.rect.h - p.a.rect.h || q.a.rect.w - p.a.rect.w);
   const widest = Math.max(0, ...objects.map(({ a }) => a.rect.w + PAD));
   const area = assets.reduce((n, a) => n + (a.rect.w + PAD) * (a.rect.h + PAD), 0);
@@ -150,7 +153,7 @@ export function librarySheet(result: ExtractionResult, atlas: Atlas): {
 } {
   return {
     assets: atlas.placements.map((p) => ({ ...p })),
-    groundAssets: result.assets.flatMap((a, i) => (a.kind === 'tile' ? [i] : [])),
+    groundAssets: result.assets.flatMap((a, i) => (a.kind === 'tile' && atlas.placements[i].w === atlas.cell && atlas.placements[i].h === atlas.cell ? [i] : [])),
     aiAssets: result.assets.map((a, i) => ({
       rect: { ...atlas.placements[i] },
       name: a.name,

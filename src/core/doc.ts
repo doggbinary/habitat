@@ -67,6 +67,41 @@ export interface Tileset {
   exact?: boolean;
   /** What AI Extract knows about each asset, matched to `assets` by its rectangle. */
   aiAssets?: AiAssetInfo[];
+  /**
+   * Set on terrain built from an autotile sheet. Each row of the picture is
+   * one material and each column one of its shapes (`pathStride` columns a
+   * row); painting picks the shape from the neighbours.
+   */
+  autotile?: AutotileSheet;
+}
+
+export interface AutotileSheet {
+  /** The layout the source sheet was read as. */
+  format: 'rpgmaker-a2' | 'rpgmaker-a3' | 'rpgmaker-a4';
+  /** Source cell size in pixels; pieces are quarters of it. */
+  cell: number;
+  materials: AutotileMaterial[];
+  sourceName: string;
+  /** The original sheet as imported, so nothing has to be imported again. */
+  sourceSrc?: string;
+  /** Share of the sheet's blocks that passed the structural checks, 0 to 1. */
+  confidence: number;
+  notes: string[];
+}
+
+export interface AutotileMaterial {
+  name: string;
+  /** Floors use the 47-shape table, walls and roofs the 16-shape one. */
+  kind: 'floor' | 'wall';
+  role: 'floor' | 'wall-top' | 'wall-side' | 'roof';
+  /** The source block on the original sheet. */
+  source: AssetRect;
+  /** For a wall top, the row of its side face, and the other way round. */
+  pair?: number;
+  /** How its edges are drawn, from the pixels. */
+  edge: { style: 'seamless' | 'border' | 'raised-lip' | 'cutout'; depth: { n: number; e: number; s: number; w: number }; note: string };
+  confidence: number;
+  flags: string[];
 }
 
 /** One AI-extracted asset's description, kept with the sheet it lives on. */

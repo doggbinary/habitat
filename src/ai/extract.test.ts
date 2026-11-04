@@ -209,6 +209,25 @@ describe('refinement on the original pixels', () => {
     expect(unknown[0].flags[0].code).toBe('unidentified');
   });
 
+  it('bounds a one-cell asset by its box when its mark is the whole opaque sheet', () => {
+    const img = createImage(96, 96);
+    for (let r = 0; r < 2; r++) for (let c = 0; c < 2; c++) fillRect(img, { x: c * 48, y: r * 48, w: 48, h: 48 }, [60 + c * 90, 90 + r * 80, 70, 255]);
+    fillRect(img, { x: 60, y: 60, w: 20, h: 20 }, [20, 20, 20, 255]);
+    const sheet = analyse(img, 48);
+    expect(sheet.comps.list).toHaveLength(1);
+    const out = refine(sheet, [proposal('manhole', { x: 48, y: 48, w: 48, h: 48 }, [1], { kind: 'tile' })], [
+      { name: 'grass', category: 'terrain', bbox: { x: 0, y: 0, w: 96, h: 48 }, cell: 48, confidence: 0.9, region: 0 },
+    ]);
+    expect(out.assets.map((a) => [a.name, a.kind, a.rect])).toEqual([
+      ['grass', 'tile', { x: 0, y: 0, w: 48, h: 48 }],
+      ['grass', 'tile', { x: 48, y: 0, w: 48, h: 48 }],
+      ['manhole', 'tile', { x: 48, y: 48, w: 48, h: 48 }],
+    ]);
+    // The cell nobody named is reported, not swallowed by the manhole.
+    expect(out.leftovers).toEqual([1]);
+    expect(auditCrops(img, out.assets)).toEqual([]);
+  });
+
   it('drops a second proposal for pixels already taken, as a duplicate', () => {
     const img = createImage(30, 30);
     blob(img, 15, 15, 10, 10, [200, 120, 20, 255]);
@@ -366,9 +385,11 @@ describe('hand corrections', () => {
   });
 });
 
-describe('the user’s 48 px terrain sheet', () => {
+describe('grid refinement on the 48 px terrain sheet, when cells are meant as separate tiles', () => {
   const path = env('HABITAT_TERRAIN_SHEET');
 
+  // The importer reads this sheet as RPG Maker A2 terrain (see core/autotile.test.ts); this checks
+  // that a grid of separate tiles, when the model asks for one, is still cut pixel for pixel.
   it.skipIf(!fileExists(path))('cuts every drawn 48 px cell into its own exact tile', async () => {
     const img = await loadPng(path!);
     const sheet = analyse(img, 48);

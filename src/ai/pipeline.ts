@@ -48,6 +48,8 @@ export interface Extraction {
   result: ExtractionResult;
   refined: Refined;
   sheet: SheetAnalysis;
+  /** Blocks of repeating ground the model marked, before they were cut into cells. */
+  terrain: TerrainProposal[];
 }
 
 async function inPool<T, R>(items: T[], limit: number, run: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -285,5 +287,6 @@ export async function extractSheet(options: ExtractOptions): Promise<Extraction>
     },
     refined,
     sheet,
+    terrain,
   };
 }

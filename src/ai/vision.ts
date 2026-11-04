@@ -1,5 +1,3 @@
-import { bytesToBase64 } from './png';
-
 /**
  * Vision model access. Every reply comes from a real provider call; there is
  * no offline stand-in. Three ways to reach one:
@@ -290,4 +288,18 @@ export function extractJson(text: string): unknown {
   } catch {
     return null;
   }
+}
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) binary += String.fromCharCode(...bytes.subarray(i, i + step));
+  return btoa(binary);
+}
+
+export function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
 }
