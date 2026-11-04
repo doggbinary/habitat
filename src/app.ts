@@ -604,11 +604,37 @@ export class App {
       /* a blocked localStorage just means scene pages are checked again */
     }
 
+    // Pages already read and found to hold no terrain kits, so a project's
+    // pages are not all fetched again on every start.
+    const kitsKey = `pf-library-kits-${DETECT_VERSION}`;
+    let kitsChecked = new Set<string>();
+    try {
+      const stored = JSON.parse(localStorage.getItem(kitsKey) ?? '[]') as unknown;
+      if (Array.isArray(stored)) kitsChecked = new Set(stored.filter((name) => typeof name === 'string'));
+    } catch {
+      /* pages are read for kits again */
+    }
+
     const have = new Set([...this.store.doc.tilesets.map((sheet) => sheet.name), ...this.store.doc.removedSheets]);
     let added = this.applyLibraryHints(entries);
     let opened = this.store.doc.tilesets.length === 0;
     for (const entry of entries) {
-      if (have.has(entry.name) || skipped.has(entry.name)) continue;
+      if (skipped.has(entry.name)) continue;
+      if (have.has(entry.name)) {
+        // Projects made before kits were read get their terrain page now.
+        const sheet = this.store.doc.tilesets.find((t) => t.name === entry.name);
+        const kitName = terrainKitName(entry.name);
+        if (!sheet?.image || entry.terrain || (sheet.groundAssets?.length ?? 0) < 3 || have.has(kitName) || kitsChecked.has(entry.name)) continue;
+        const tile = typeof entry.tile === 'number' && entry.tile > 0 ? entry.tile : 48;
+        const kits = await this.kitTileset(new URL(entry.url, document.baseURI).href, kitName, tile).catch(() => null);
+        if (kits) {
+          have.add(kitName);
+          this.store.doc.tilesets.push(kits);
+          added += 1;
+          this.store.emit('library');
+        } else kitsChecked.add(entry.name);
+        continue;
+      }
       this.store.toast(`Loading ${entry.name}`);
       await new Promise((resolve) => setTimeout(resolve, 0));
       try {
@@ -663,7 +689,7 @@ export class App {
             have.add(kitName);
             this.store.doc.tilesets.push(kits);
             added += 1;
-          }
+          } else kitsChecked.add(entry.name);
         }
         // Show each page as it lands so the iPad is not empty for minutes.
         if (opened) {
@@ -679,6 +705,7 @@ export class App {
     }
     try {
       localStorage.setItem(skipKey, JSON.stringify([...skipped]));
+      localStorage.setItem(kitsKey, JSON.stringify([...kitsChecked]));
     } catch {
       /* the pages still loaded for this visit */
     }
