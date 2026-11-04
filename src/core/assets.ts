@@ -7,7 +7,7 @@ const ALPHA_CUTOFF = 24;
  * Bumped whenever detection changes in a way that alters results, so sheets
  * detected by an older version are redone when a project loads.
  */
-export const DETECT_VERSION = 16;
+export const DETECT_VERSION = 17;
 
 /** A ground cell is drawn corner to corner; a prop leaves background showing. */
 const TERRAIN_FILL = 0.92;
@@ -1501,7 +1501,8 @@ export function terrainCells(
   const palette = terrainPalette(rgba, alpha, w, h, grid, cells);
   if (palette.length > 0) {
     forEachCell(grid, w, h, (index, x0, y0, cw, ch) => {
-      if (cells[index] || fill[index] === 0) return;
+      // A floor tile fills its square; a few leftover pixels under a counter are not one.
+      if (cells[index] || fill[index] < TERRAIN_FILL) return;
       let drawn = 0;
       let matched = 0;
       for (let y = y0; y < y0 + ch; y++) {

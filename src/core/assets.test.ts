@@ -262,6 +262,16 @@ describe('telling ground from props', () => {
     expect(sheetIsAllTiles('Nature Park 1')).toBe(false);
   });
 
+  it('does not call a few leftover pixels in a square a floor tile', () => {
+    // Four grass squares, and a square holding only a sliver of the same grass.
+    const cells: [number, number, number][] = [];
+    for (let c = 0; c < 4; c++) cells.push([c, 0, 120]);
+    const rgba = painted(cells);
+    for (let x = 0; x < 10; x++) rgba.set([120, 120, 120, 255], (10 * W + x) * 4);
+    const { assets, ground } = splitSheet(rgba, W, H, grid, false);
+    expect(ground.map((i) => assets[i]).some((a) => a.y === 10)).toBe(false);
+  });
+
   it('treats a unique floor tile next to repeating ground as ground too', () => {
     // Four grass squares and a slightly darker one beside them, like a
     // parking line or a crosswalk sitting in the same paving.
