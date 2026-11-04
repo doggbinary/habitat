@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
+import { withTerrainPages } from './scripts/terrain-pages.mjs';
 import { configFromEnv, createVisionClient, VisionError, type VisionRequest } from './src/ai/vision.ts';
 
 /**
@@ -19,13 +20,19 @@ function localLibrary(): Plugin {
   const dir = path.resolve(process.env.HABITAT_LIBRARY ?? path.join(here, '../habitat-library'));
   const types: Record<string, string> = { '.png': 'image/png', '.json': 'application/json' };
 
+  // Packs copied straight into public/library are served by Vite itself;
+  // their manifest still gets its terrain pages from here.
+  const inPublic = path.join(here, 'public/library');
+
   type Server = Parameters<NonNullable<Plugin['configurePreviewServer']>>[0];
   const serveLibrary = (server: Server) => {
-    if (!fs.existsSync(dir)) {
+    const outside = fs.existsSync(dir);
+    const root = outside ? dir : fs.existsSync(inPublic) ? inPublic : null;
+    if (!root) {
       server.config.logger.info(`No library at ${dir}: running the app version, starter pack only.`);
       return;
     }
-    server.config.logger.info(`Full version: serving your packs from ${dir}`);
+    server.config.logger.info(`Full version: serving your packs from ${root}`);
     server.middlewares.use((req, res, next) => {
       let pathname = (req.url ?? '').split('?')[0];
       try {
@@ -34,7 +41,23 @@ function localLibrary(): Plugin {
         next();
         return;
       }
-      if (!pathname.startsWith('/library/')) {
+      if (pathname === '/library/manifest.json') {
+        const listed = path.join(root, 'manifest.json');
+        try {
+          const manifest = fs.existsSync(listed) ? JSON.parse(fs.readFileSync(listed, 'utf8')) : [];
+          // RPG Maker floor, roof and wall sheets show up as terrain without
+          // running scripts/add-terrain-pages.mjs first.
+          const { pages } = withTerrainPages(root, manifest);
+          res.setHeader('content-type', 'application/json');
+          res.setHeader('cache-control', 'no-cache');
+          res.end(JSON.stringify(pages));
+        } catch (error) {
+          server.config.logger.warn(`Could not read ${listed}: ${(error as Error).message}`);
+          next();
+        }
+        return;
+      }
+      if (!outside || !pathname.startsWith('/library/')) {
         next();
         return;
       }
