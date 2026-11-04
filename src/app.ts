@@ -103,6 +103,7 @@ import type { Extraction } from './ai/pipeline';
 import { librarySheet, packAtlas } from './ai/output';
 import { decodePng, encodePng, isPng, streamZlib } from './ai/png';
 import { autotileSheetFields, buildAutotiles, guessFormat, type AutotileBuild } from './ai/formats';
+import { buildKits } from './ai/kits';
 import { nameMaterials } from './ai/autotile-naming';
 import { resolveVision } from './ai/settings';
 import { bytesToBase64, createVisionClient, describeConfig } from './ai/vision';
@@ -132,6 +133,13 @@ function resetPageZoom(): void {
   requestAnimationFrame(() => {
     meta.content = original;
   });
+}
+
+/** "Pixel Fantasy Town 1" has its terrain kits on "Pixel Fantasy Town — Terrain 1", in the same pack. */
+function terrainKitName(page: string): string {
+  const pack = packOf(page);
+  const rest = page.startsWith(pack) ? page.slice(pack.length).replace(/^\s*—?\s*/, '').trim() : '';
+  return `${pack} — Terrain${rest ? ` ${rest}` : ''}`;
 }
 
 /** A picture's exact pixels: from the PNG data itself when it is one, otherwise as the browser reads it. */
@@ -646,6 +654,17 @@ export class App {
         // only ever goes on the end; anywhere else would move every map.
         this.store.doc.tilesets.push(tileset);
         added += 1;
+        // A page of ground may hold terrain kits (a path patch and its
+        // inverse); they become a paintable terrain page beside it.
+        const kitName = terrainKitName(entry.name);
+        if ((tileset.groundAssets?.length ?? 0) >= 3 && !have.has(kitName)) {
+          const kits = await this.kitTileset(href, kitName, tile).catch(() => null);
+          if (kits) {
+            have.add(kitName);
+            this.store.doc.tilesets.push(kits);
+            added += 1;
+          }
+        }
         // Show each page as it lands so the iPad is not empty for minutes.
         if (opened) {
           opened = false;
@@ -1057,10 +1076,16 @@ export class App {
           const tileset = await makeTileset(spec.src, spec.name, spec.tileW, spec.tileH, spec.margin, spec.spacing);
           detectInto(tileset);
           this.editor.addTileset(tileset);
+          const kits = await this.kitTileset(spec.src, terrainKitName(spec.name), spec.tileW).catch(() => null);
+          if (kits) this.editor.addTileset(kits);
           this.store.activeTileset = this.store.doc.tilesets.length - 1;
           this.selectFirstTile();
           this.shell.openTab('tiles');
-          this.store.toast(`${tileset.name} added: ${tileset.assets!.length} assets`);
+          this.store.toast(
+            kits
+              ? `${tileset.name} added: ${tileset.assets!.length} assets, and ${kits.autotile!.materials.length} terrain materials you paint`
+              : `${tileset.name} added: ${tileset.assets!.length} assets`,
+          );
         } catch {
           this.store.toast('That image could not be imported');
         }
@@ -1196,6 +1221,26 @@ export class App {
     if (build.sheet.materials.length === 0 || build.sheet.confidence < 0.5) return null;
     const atlas = `data:image/png;base64,${bytesToBase64(await encodePng(build.atlas, streamZlib))}`;
     const tileset = await makeTileset(atlas, name, build.sheet.cell, build.sheet.cell);
+    Object.assign(tileset, autotileSheetFields(build));
+    tileset.autotile = { ...build.sheet, sourceSrc: src };
+    tileset.exact = true;
+    tileset.assetsEdited = true;
+    tileset.assetsVersion = DETECT_VERSION;
+    return tileset;
+  }
+
+  /**
+   * Terrain kits on a page (a patch of one ground on another beside its
+   * inverse) built into a terrain page that shapes itself as it is painted,
+   * or null when the page has none.
+   */
+  private async kitTileset(src: string, name: string, cell: number): Promise<Tileset | null> {
+    const bytes = new Uint8Array(await (await fetch(src)).arrayBuffer());
+    const source = await readExtractSource(bytes, name);
+    const build = buildKits(source.image, cell, name);
+    if (!build) return null;
+    const atlas = `data:image/png;base64,${bytesToBase64(await encodePng(build.atlas, streamZlib))}`;
+    const tileset = await makeTileset(atlas, name, cell, cell);
     Object.assign(tileset, autotileSheetFields(build));
     tileset.autotile = { ...build.sheet, sourceSrc: src };
     tileset.exact = true;

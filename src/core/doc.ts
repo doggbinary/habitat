@@ -77,7 +77,7 @@ export interface Tileset {
 
 export interface AutotileSheet {
   /** The layout the source sheet was read as. */
-  format: 'rpgmaker-a2' | 'rpgmaker-a3' | 'rpgmaker-a4';
+  format: 'rpgmaker-a2' | 'rpgmaker-a3' | 'rpgmaker-a4' | 'terrain-kit';
   /** Source cell size in pixels; pieces are quarters of it. */
   cell: number;
   materials: AutotileMaterial[];
