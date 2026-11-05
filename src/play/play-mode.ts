@@ -1,5 +1,5 @@
 import { DIRECTIONS, frameIndex, framePixels, type Character, type Frame } from '../character/model';
-import { createLayer, objectSize, type Doc, type MapObject, type TileLayer } from '../core/doc';
+import { columnAt, createLayer, mapOrigin, objectSize, rowAt, type Doc, type MapObject, type TileLayer } from '../core/doc';
 import type { Store } from '../core/store';
 import { EMPTY } from '../core/tiles';
 import { crispLayerBlit, isCrispZoom, snapCanvasSize, viewPixelRatio } from '../render/camera';
@@ -132,8 +132,9 @@ export class PlayMode {
     this.objects.deselect();
 
     // Start standing on the middle of the requested tile.
-    this.x = (startTile.x + 0.5) * this.doc.tileSize;
-    this.y = (startTile.y + 0.5) * this.doc.tileSize;
+    const origin = mapOrigin(this.doc);
+    this.x = origin.x + (startTile.x + 0.5) * this.doc.tileSize;
+    this.y = origin.y + (startTile.y + 0.5) * this.doc.tileSize;
     // Starting in a doorway must not count as walking through it.
     this.doorArmed = !doorAt(this.doc, this.x, this.y);
 
@@ -595,13 +596,14 @@ export class PlayMode {
 
   private camera(): { x: number; y: number } {
     const zoom = this.zoom;
+    const origin = mapOrigin(this.doc);
     const mapW = this.doc.width * this.doc.tileSize;
     const mapH = this.doc.height * this.doc.tileSize;
     const viewWorldW = this.viewW / zoom;
     const viewWorldH = this.viewH / zoom;
     return {
-      x: mapW < viewWorldW ? (mapW - viewWorldW) / 2 : clamp(this.x - viewWorldW / 2, 0, mapW - viewWorldW),
-      y: mapH < viewWorldH ? (mapH - viewWorldH) / 2 : clamp(this.y - viewWorldH / 2, 0, mapH - viewWorldH),
+      x: mapW < viewWorldW ? origin.x + (mapW - viewWorldW) / 2 : clamp(this.x - viewWorldW / 2, origin.x, origin.x + mapW - viewWorldW),
+      y: mapH < viewWorldH ? origin.y + (mapH - viewWorldH) / 2 : clamp(this.y - viewWorldH / 2, origin.y, origin.y + mapH - viewWorldH),
     };
   }
 
@@ -669,10 +671,10 @@ export class PlayMode {
     const halfW = (FOOT_W * size) / 2;
     const halfH = (FOOT_H * size) / 2;
 
-    const left = Math.floor((cx - halfW) / size);
-    const right = Math.floor((cx + halfW) / size);
-    const top = Math.floor((cy - halfH) / size);
-    const bottom = Math.floor((cy + halfH) / size);
+    const left = columnAt(this.doc, cx - halfW);
+    const right = columnAt(this.doc, cx + halfW);
+    const top = rowAt(this.doc, cy - halfH);
+    const bottom = rowAt(this.doc, cy + halfH);
 
     for (let ty = top; ty <= bottom; ty++) {
       for (let tx = left; tx <= right; tx++) {
@@ -711,6 +713,7 @@ export class PlayMode {
 
     const mapW = this.doc.width * this.doc.tileSize;
     const mapH = this.doc.height * this.doc.tileSize;
+    const map = mapOrigin(this.doc);
 
     // Centre on the character, but stop at the map edges unless the map is
     // smaller than the screen, in which case centre the map itself.
@@ -719,7 +722,7 @@ export class PlayMode {
     const camY = cam.y;
 
     if (isCrispZoom(zoom, this.dpr)) {
-      const blit = crispLayerBlit(-camX * zoom, -camY * zoom, zoom, this.dpr);
+      const blit = crispLayerBlit((map.x - camX) * zoom, (map.y - camY) * zoom, zoom, this.dpr);
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.imageSmoothingEnabled = false;
@@ -727,7 +730,7 @@ export class PlayMode {
       ctx.restore();
     } else {
       ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(this.mapCanvas, -camX * zoom, -camY * zoom, mapW * zoom, mapH * zoom);
+      ctx.drawImage(this.mapCanvas, (map.x - camX) * zoom, (map.y - camY) * zoom, mapW * zoom, mapH * zoom);
       ctx.imageSmoothingEnabled = false;
     }
 
@@ -748,7 +751,7 @@ export class PlayMode {
         if (!this.solid[i]) continue;
         const tx = i % this.doc.width;
         const ty = (i / this.doc.width) | 0;
-        ctx.fillRect((tx * size - camX) * zoom, (ty * size - camY) * zoom, size * zoom, size * zoom);
+        ctx.fillRect((map.x + tx * size - camX) * zoom, (map.y + ty * size - camY) * zoom, size * zoom, size * zoom);
       }
     }
 
@@ -861,10 +864,9 @@ export class PlayMode {
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('resize', this.onResize);
     this.root.remove();
-    const size = this.doc.tileSize;
     this.onExit({
-      x: clamp(Math.floor(this.x / size), 0, this.doc.width - 1),
-      y: clamp(Math.floor(this.y / size), 0, this.doc.height - 1),
+      x: clamp(columnAt(this.doc, this.x), 0, this.doc.width - 1),
+      y: clamp(rowAt(this.doc, this.y), 0, this.doc.height - 1),
     });
   }
 }
@@ -948,10 +950,12 @@ export function doorAt(doc: Doc, x: number, y: number): MapObject | null {
 export function objectCells(doc: Doc, obj: MapObject): number[] {
   const { w, h } = objectSize(obj);
   const size = doc.tileSize;
-  const x0 = Math.max(0, Math.floor((obj.x - w / 2) / size + 1e-6));
-  const y0 = Math.max(0, Math.floor((obj.y - h / 2) / size + 1e-6));
-  const x1 = Math.min(doc.width, Math.ceil((obj.x + w / 2) / size - 1e-6));
-  const y1 = Math.min(doc.height, Math.ceil((obj.y + h / 2) / size - 1e-6));
+  const ox = doc.originCol ?? 0;
+  const oy = doc.originRow ?? 0;
+  const x0 = Math.max(0, Math.floor((obj.x - w / 2) / size + 1e-6) - ox);
+  const y0 = Math.max(0, Math.floor((obj.y - h / 2) / size + 1e-6) - oy);
+  const x1 = Math.min(doc.width, Math.ceil((obj.x + w / 2) / size - 1e-6) - ox);
+  const y1 = Math.min(doc.height, Math.ceil((obj.y + h / 2) / size - 1e-6) - oy);
   const cells: number[] = [];
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) cells.push(y * doc.width + x);
   return cells;
@@ -997,18 +1001,22 @@ export function opaqueCells(doc: Doc, obj: MapObject, alphaAt: AlphaAt): number[
       const y0 = obj.y + py - s / 2;
       const x1 = x0 + s;
       const y1 = y0 + s;
-      const cx0 = Math.max(0, Math.floor(x0 / size + eps));
-      const cy0 = Math.max(0, Math.floor(y0 / size + eps));
-      const cx1 = Math.min(doc.width - 1, Math.floor(x1 / size - eps));
-      const cy1 = Math.min(doc.height - 1, Math.floor(y1 / size - eps));
+      const col0 = doc.originCol ?? 0;
+      const row0 = doc.originRow ?? 0;
+      const cx0 = Math.max(0, Math.floor(x0 / size + eps) - col0);
+      const cy0 = Math.max(0, Math.floor(y0 / size + eps) - row0);
+      const cx1 = Math.min(doc.width - 1, Math.floor(x1 / size - eps) - col0);
+      const cy1 = Math.min(doc.height - 1, Math.floor(y1 / size - eps) - row0);
       for (let cy = cy0; cy <= cy1; cy++) {
-        const oy = Math.min(y1, (cy + 1) * size) - Math.max(y0, cy * size);
-        if (oy <= 0) continue;
+        const cellTop = (cy + row0) * size;
+        const overlapY = Math.min(y1, cellTop + size) - Math.max(y0, cellTop);
+        if (overlapY <= 0) continue;
         for (let cx = cx0; cx <= cx1; cx++) {
-          const ox = Math.min(x1, (cx + 1) * size) - Math.max(x0, cx * size);
-          if (ox <= 0) continue;
+          const cellLeft = (cx + col0) * size;
+          const overlapX = Math.min(x1, cellLeft + size) - Math.max(x0, cellLeft);
+          if (overlapX <= 0) continue;
           const index = cy * doc.width + cx;
-          covered.set(index, (covered.get(index) ?? 0) + ox * oy);
+          covered.set(index, (covered.get(index) ?? 0) + overlapX * overlapY);
         }
       }
     }

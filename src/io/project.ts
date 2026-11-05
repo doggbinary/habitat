@@ -24,6 +24,22 @@ import type { AssetFolder, AssetRef } from '../ui/packs';
 const finite = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 
+function readRamp(value: unknown): { shadeRamp: [number, number, number][] } | Record<string, never> {
+  if (!Array.isArray(value) || value.length < 2) return {};
+  const ramp: [number, number, number][] = [];
+  for (const stop of value) {
+    if (!Array.isArray(stop) || stop.length < 3) return {};
+    const [r, g, b] = stop;
+    if (![r, g, b].every((n) => typeof n === 'number' && Number.isFinite(n))) return {};
+    ramp.push([
+      Math.max(0, Math.min(255, Math.round(r as number))),
+      Math.max(0, Math.min(255, Math.round(g as number))),
+      Math.max(0, Math.min(255, Math.round(b as number))),
+    ]);
+  }
+  return { shadeRamp: ramp };
+}
+
 const stringList = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 
@@ -52,6 +68,7 @@ function readObject(raw: Partial<MapObject>): MapObject {
     hueShift: finite(raw.hueShift, 0),
     saturation: finite(raw.saturation, 1),
     brightness: finite(raw.brightness, 1),
+    ...readRamp(raw.shadeRamp),
     ...(finite(raw.contrast, 1) !== 1 ? { contrast: finite(raw.contrast, 1) } : {}),
     ...(finite(raw.clarity, 0) !== 0 ? { clarity: finite(raw.clarity, 0) } : {}),
     ...(raw.blocks ? { blocks: true } : {}),
@@ -173,6 +190,9 @@ export interface SerializedProject {
   width: number;
   height: number;
   tileSize: number;
+  /** World column of tile (0, 0). Absent when it is zero. */
+  originCol?: number;
+  originRow?: number;
   background: string;
   activeLayer: number;
   tilesets: SerializedTileset[];
@@ -348,6 +368,8 @@ export function serializeProject(
     width: doc.width,
     height: doc.height,
     tileSize: doc.tileSize,
+    ...(doc.originCol ? { originCol: doc.originCol } : {}),
+    ...(doc.originRow ? { originRow: doc.originRow } : {}),
     background: doc.background,
     activeLayer: doc.activeLayer,
     tilesets: doc.tilesets.map((t) => ({
@@ -532,6 +554,8 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
     width: data.width,
     height: data.height,
     tileSize: data.tileSize,
+    ...(data.originCol ? { originCol: data.originCol } : {}),
+    ...(data.originRow ? { originRow: data.originRow } : {}),
     background: data.background ?? '#1b1d24',
     tilesets,
     pins: data.pins ?? [],

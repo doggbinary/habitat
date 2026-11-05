@@ -1,4 +1,4 @@
-import type { Doc } from '../core/doc';
+import { columnAt, rowAt, type Doc } from '../core/doc';
 import type { Camera } from '../core/store';
 
 export const MIN_ZOOM = 0.05;
@@ -86,10 +86,7 @@ export function worldToScreen(cam: Camera, wx: number, wy: number): { x: number;
 /** Map cell under a viewport point. May be outside the map bounds. */
 export function screenToCell(cam: Camera, doc: Doc, sx: number, sy: number): { x: number; y: number } {
   const world = screenToWorld(cam, sx, sy);
-  return {
-    x: Math.floor(world.x / doc.tileSize),
-    y: Math.floor(world.y / doc.tileSize),
-  };
+  return { x: columnAt(doc, world.x), y: rowAt(doc, world.y) };
 }
 
 /** Zooms around a fixed viewport point, so pinch and scroll keep that point still. */

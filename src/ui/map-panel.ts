@@ -83,7 +83,7 @@ export class MapPanel {
       section('Map', [
         field('Name', name),
         el('div', { class: 'grid-2' }, [field('Width', width), field('Height', height)]),
-        el('p', { class: 'hint', text: 'Tiles are kept from the top-left corner when you resize.' }),
+        el('p', { class: 'hint', text: 'Drag a white handle on the map edge. Squares already placed stay where they are, including when you add or remove rows at the top or left. Snap lands on whole squares; Even keeps both sides even; turn Snap off for any count.' }),
         apply,
         field('Grid size (px)', tileSize),
         el('p', {

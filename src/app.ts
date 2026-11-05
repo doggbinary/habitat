@@ -30,13 +30,13 @@ import {
 import { clearShadows, clearWhiteBackdrop } from './core/background';
 import { dropTilesets, isFloorSheet } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
-import { dominantColor, matchShift, recolorToCanvas } from './io/recolor';
+import { dominantColor, recolorToCanvas, shadeRampFromColor, shadeRampFromPixels } from './io/recolor';
 import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
 import { isSolid } from './core/seamless';
 import { cropAsset } from './render/object-draw';
 import { gridScale, isSmallProp, ObjectTools, pixelScale, snapToGrid } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
-import { hexToHsv, hsvToHex, rgbToHsv, type HSV } from './ui/color-wheel';
+import { hexToHsv, hsvToHex, hsvToRgb } from './ui/color-wheel';
 import { importSpriteSheet } from './character/import';
 import { frameIndex, framePixels } from './character/model';
 import { addCharacterArt } from './character/sheet';
@@ -1578,8 +1578,8 @@ export class App {
       this.store.toast('Select an object first, then drop or match a colour');
       return;
     }
-    const target = sample.kind === 'pixel' ? rgbToHsv(sample.r, sample.g, sample.b) : this.displayedColor(sample.obj);
-    if (!target) {
+    const ramp = sample.kind === 'pixel' ? shadeRampFromColor(sample.r, sample.g, sample.b) : this.rampOf(sample.obj);
+    if (ramp.length === 0) {
       this.store.toast('That has no colour to copy');
       return;
     }
@@ -1589,31 +1589,31 @@ export class App {
       return;
     }
     this.objects.beginGesture();
-    for (const obj of changing) {
-      const base = this.artColor(obj);
-      if (!base) continue;
-      this.objects.setColor(obj, matchShift(base, target));
-    }
+    for (const obj of changing) this.objects.setRamp(obj, ramp);
     this.objects.endGesture(sample.mode === 'match' ? 'Match colour' : 'Drop colour');
     this.store.toast(sample.mode === 'match' ? 'Matched the colour' : 'Dropped the colour');
   }
 
-  /** The colour the artwork was drawn with, before this placement's recolour. */
-  private artColor(obj: MapObject): HSV | null {
+  /** The shade ramp to copy: the object's main colour, darkest shade first. */
+  private rampOf(obj: MapObject): [number, number, number][] {
     const sheet = this.store.doc.tilesets.find((t) => t.id === obj.tilesetId);
-    if (!sheet?.image) return null;
-    return dominantColor(cropAsset(sheet.image, obj.rect));
-  }
-
-  /** The colour the object shows now, including a recolour already applied. */
-  private displayedColor(obj: MapObject): HSV | null {
-    const base = this.artColor(obj);
-    if (!base) return null;
-    return {
-      h: (((base.h + obj.hueShift) % 360) + 360) % 360,
-      s: Math.min(1, base.s * obj.saturation),
-      v: Math.min(1, base.v * obj.brightness),
-    };
+    if (!sheet?.image) return [];
+    const shown = recolorToCanvas(cropAsset(sheet.image, obj.rect), {
+      hueShift: obj.shadeRamp ? 0 : obj.hueShift,
+      saturation: obj.shadeRamp ? 1 : obj.saturation,
+      brightness: obj.shadeRamp ? 1 : obj.brightness,
+      contrast: obj.contrast ?? 1,
+      clarity: obj.clarity ?? 0,
+      shadeRamp: obj.shadeRamp,
+    });
+    const ctx = shown.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return [];
+    const data = ctx.getImageData(0, 0, shown.width, shown.height).data;
+    const ramp = shadeRampFromPixels(data);
+    if (ramp.length > 0) return ramp;
+    const color = dominantColor(shown);
+    const [r, g, b] = hsvToRgb(color);
+    return shadeRampFromColor(r, g, b);
   }
 
   private recolorObject(anchor: HTMLElement): void {

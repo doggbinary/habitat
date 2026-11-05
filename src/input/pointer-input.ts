@@ -7,6 +7,7 @@ import type { Editor } from '../tools/edit';
 import { lineCells } from '../tools/geometry';
 import { hitsHandle, scaleFromHandle, snapPlacement } from '../tools/image-transform';
 import { HANDLE_HIT, scaleFromCorner, type ObjectTools } from '../tools/objects';
+import { hitMapHandle, type MapHandle } from '../tools/map-resize';
 
 interface TrackedPointer {
   id: number;
@@ -31,7 +32,8 @@ type Mode =
   | 'object-scale'
   | 'object-pinch'
   | 'selection-rect'
-  | 'selection-move';
+  | 'selection-move'
+  | 'map-resize';
 
 /** A multi-finger tap only counts as a shortcut if it is quick and still. */
 const TAP_MAX_MS = 320;
@@ -57,6 +59,7 @@ const FINGER_HIT = 18;
 export class PointerInput {
   private readonly pointers = new Map<number, TrackedPointer>();
   private mode: Mode = 'idle';
+  private mapHandle: MapHandle = 'se';
   private activeId: number | null = null;
 
   private penDown = false;
@@ -581,6 +584,14 @@ export class PointerInput {
 
   // --- Event handlers ------------------------------------------------------
 
+  private startMapResize(pointer: TrackedPointer, handle: MapHandle): void {
+    this.mode = 'map-resize';
+    this.activeId = pointer.id;
+    this.mapHandle = handle;
+    this.editor.beginMapResize();
+    this.editor.previewMapResize(handle, this.worldAt(pointer.x, pointer.y));
+  }
+
   private onDown = (e: PointerEvent): void => {
     // A palm landing while the Pencil is drawing must not pan or paint.
     if (e.pointerType === 'touch' && this.penDown) return;
@@ -606,6 +617,14 @@ export class PointerInput {
       this.mode = 'idle';
       this.activeId = pointer.id;
       return;
+    }
+
+    if (this.pointers.size === 1 && !this.spaceHeld) {
+      const handle = hitMapHandle(x, y, this.store.doc, this.store.camera);
+      if (handle) {
+        this.startMapResize(pointer, handle);
+        return;
+      }
     }
 
     if (this.pointers.size === 1 && this.pressCharacter(pointer, e)) return;
@@ -664,6 +683,7 @@ export class PointerInput {
 
     // Second finger: whatever was happening becomes a pinch.
     if (this.mode === 'draw') this.editor.abortStroke();
+    else if (this.mode === 'map-resize') this.editor.cancelMapResize();
     else if (this.mode === 'image') this.cancelImageDrag();
     else if (this.mode === 'object-move' || this.mode === 'object-scale') this.objects.cancelGesture();
     else if (this.mode === 'selection-move') this.store.changed();
@@ -697,6 +717,11 @@ export class PointerInput {
 
     if (this.mode === 'object-pinch') {
       this.updateObjectPinch();
+      return;
+    }
+
+    if (e.pointerId === this.activeId && this.mode === 'map-resize') {
+      this.editor.previewMapResize(this.mapHandle, this.worldAt(x, y));
       return;
     }
 
@@ -820,6 +845,7 @@ export class PointerInput {
         if (this.objectMoved) this.objects.endGesture('Move');
         else this.objects.cancelGesture();
       } else if (this.mode === 'object-scale') this.objects.endGesture('Resize');
+      else if (this.mode === 'map-resize') this.editor.endMapResize();
       else if (this.mode === 'selection-rect') {
         // A still finger tap is a tap (it deselects), not a one-square box.
         if (tracked.type === 'touch' && !this.gestureMoved) this.store.preview = null;
@@ -850,6 +876,9 @@ export class PointerInput {
         this.mode = 'idle';
       } else if (this.mode === 'image') {
         this.cancelImageDrag();
+        this.mode = 'idle';
+      } else if (this.mode === 'map-resize') {
+        this.editor.cancelMapResize();
         this.mode = 'idle';
       }
       this.store.preview = null;

@@ -691,6 +691,16 @@ export class Shell {
         store.emit('ui');
         store.emit('doc');
       }),
+      this.chipToggle('grid', 'Snap', store.settings.mapSnap, () => {
+        store.settings.mapSnap = !store.settings.mapSnap;
+        store.toast(store.settings.mapSnap ? 'Map edges snap to whole squares' : 'Map edges stop on any square count');
+        store.emit('ui');
+      }),
+      this.chipToggle('grid', 'Even', store.settings.mapEven, () => {
+        store.settings.mapEven = !store.settings.mapEven;
+        store.toast(store.settings.mapEven ? 'Width and height stay even' : 'Odd sizes allowed');
+        store.emit('ui');
+      }),
     );
 
     this.optionsBar.append(...chips);

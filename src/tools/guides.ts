@@ -45,9 +45,11 @@ export function smartGuides(
   mapH: number,
   snap: boolean,
   threshold = GUIDE_SNAP,
+  originX = 0,
+  originY = 0,
 ): GuideResult {
-  const targetsX = [0, mapW / 2, mapW];
-  const targetsY = [0, mapH / 2, mapH];
+  const targetsX = [originX, originX + mapW / 2, originX + mapW];
+  const targetsY = [originY, originY + mapH / 2, originY + mapH];
   for (const other of others) {
     targetsX.push(other.left, (other.left + other.right) / 2, other.right);
     targetsY.push(other.top, (other.top + other.bottom) / 2, other.bottom);

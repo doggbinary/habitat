@@ -151,6 +151,12 @@ export interface MapObject {
   hueShift: number;
   saturation: number;
   brightness: number;
+  /**
+   * Target shade ramp, darkest first, as RGB triples. Match and Drop store
+   * this so the main colour follows that ramp and grey parts stay grey.
+   * Absent when the hue shift above is what recolours the art.
+   */
+  shadeRamp?: [number, number, number][];
   /** Spread of light and dark, 1 leaves it alone. Absent in older files. */
   contrast?: number;
   /** Sharpening between neighbouring pixels, 0 to 1. Absent in older files. */
@@ -253,6 +259,12 @@ export interface Doc {
   width: number;
   height: number;
   tileSize: number;
+  /**
+   * World column and row of tile (0, 0). Negative after squares are added on
+   * the left or top, so the tiles already placed keep their world position.
+   */
+  originCol?: number;
+  originRow?: number;
   background: string;
   tilesets: Tileset[];
   /** Stickers kept on the Pinned page, at the top of the asset library. */
@@ -541,6 +553,21 @@ export function cellIndex(doc: Doc, x: number, y: number): number {
   return y * doc.width + x;
 }
 
+/** World pixel of the map's left and top edges. Zero until squares are added there. */
+export function mapOrigin(doc: Doc): { x: number; y: number } {
+  return { x: (doc.originCol ?? 0) * doc.tileSize, y: (doc.originRow ?? 0) * doc.tileSize };
+}
+
+/** Array column under a world pixel. May fall outside the map. */
+export function columnAt(doc: Doc, wx: number): number {
+  return Math.floor(wx / doc.tileSize) - (doc.originCol ?? 0);
+}
+
+/** Array row under a world pixel. May fall outside the map. */
+export function rowAt(doc: Doc, wy: number): number {
+  return Math.floor(wy / doc.tileSize) - (doc.originRow ?? 0);
+}
+
 export function inBounds(doc: Doc, x: number, y: number): boolean {
   return x >= 0 && y >= 0 && x < doc.width && y < doc.height;
 }
@@ -560,14 +587,20 @@ export function resizedLayerData(
   oldH: number,
   newW: number,
   newH: number,
+  shiftX = 0,
+  shiftY = 0,
 ): Int32Array {
   const next = new Int32Array(newW * newH);
   next.fill(EMPTY);
-  const copyW = Math.min(oldW, newW);
-  const copyH = Math.min(oldH, newH);
-  for (let y = 0; y < copyH; y++) {
-    const from = y * oldW;
-    next.set(layer.data.subarray(from, from + copyW), y * newW);
+  const source = layer.data;
+  for (let y = 0; y < oldH; y++) {
+    const ny = y + shiftY;
+    if (ny < 0 || ny >= newH) continue;
+    for (let x = 0; x < oldW; x++) {
+      const nx = x + shiftX;
+      if (nx < 0 || nx >= newW) continue;
+      next[ny * newW + nx] = source[y * oldW + x];
+    }
   }
   return next;
 }

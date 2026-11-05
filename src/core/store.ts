@@ -58,6 +58,10 @@ export interface Settings {
   snapToNeighbours: boolean;
   /** Squares across that the brush and eraser paint. A single tile repeats to fill them. */
   brushSize: number;
+  /** Dragged map edges land on a whole square. Off, the count is the squares crossed. */
+  mapSnap: boolean;
+  /** Width and height stay even numbers while a map edge is dragged. */
+  mapEven: boolean;
 }
 
 /** `view` covers anything that only moves the viewport or the hovered cell. */
@@ -92,7 +96,12 @@ export class Store {
     alignGuides: true,
     snapToNeighbours: true,
     brushSize: 1,
+    mapSnap: true,
+    mapEven: false,
   };
+
+  /** "18 × 12" while a map edge or corner is dragged. */
+  mapSizeText: string | null = null;
 
   /** Lines and pixel gaps showing while an asset is dragged or resized. */
   alignLines: { vertical: number[]; horizontal: number[]; labels: { x: number; y: number; text: string }[] } | null = null;

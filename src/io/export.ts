@@ -197,6 +197,7 @@ export function buildObjectLayers(doc: Doc): Record<string, unknown>[] {
           brightness: obj.brightness,
           contrast: obj.contrast ?? 1,
           clarity: obj.clarity ?? 0,
+          ...(obj.shadeRamp ? { shadeRamp: obj.shadeRamp } : {}),
         };
       }
       return entry;

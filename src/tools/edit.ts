@@ -14,7 +14,7 @@ import {
   type TileLayer,
   type Tileset,
 } from '../core/doc';
-import { snapshot, Stroke, type DocSnapshot } from '../core/history';
+import { restoreDoc, snapshot, Stroke, type DocSnapshot } from '../core/history';
 import { dropTilesets } from '../core/path-merge';
 import { packOf } from '../ui/packs';
 import {
@@ -32,6 +32,7 @@ import { EMPTY, type PackedTile } from '../core/tiles';
 import { sameTerrain, shapedTile, terrainOf } from '../core/autotile';
 import type { Renderer } from '../render/renderer';
 import { normalizeRect, type Cell, type Rect } from './geometry';
+import { resizePlan, type MapHandle, type ResizePlan } from './map-resize';
 
 /**
  * All map mutations funnel through here so every edit is recorded for undo and
@@ -41,6 +42,15 @@ export class Editor {
   private stroke: Stroke | null = null;
   /** Document state captured when an image drag starts, for a single undo step. */
   private imageBefore: DocSnapshot | null = null;
+  /** Tile buffers from before a map-edge drag, so the drag can be scrubbed. */
+  private mapResize: {
+    before: DocSnapshot;
+    w: number;
+    h: number;
+    originCol: number;
+    originRow: number;
+    tiles: { id: string; data: Int32Array }[];
+  } | null = null;
 
   constructor(
     private readonly store: Store,
@@ -694,6 +704,103 @@ export class Editor {
       doc.removedSheets = [...new Set([...doc.removedSheets, ...names])];
       doc.pinnedPacks = doc.pinnedPacks.filter((pack) => doc.tilesets.some((t) => packOf(t.name) === pack));
     });
+  }
+
+  /** Remembers the map so an edge drag can grow or shrink it as one undo step. */
+  beginMapResize(): void {
+    const doc = this.doc;
+    this.mapResize = {
+      before: snapshot(doc),
+      w: doc.width,
+      h: doc.height,
+      originCol: doc.originCol ?? 0,
+      originRow: doc.originRow ?? 0,
+      tiles: doc.layers.flatMap((layer) => (isTileLayer(layer) ? [{ id: layer.id, data: layer.data.slice() }] : [])),
+    };
+  }
+
+  /** Applies a live size. Existing squares stay on their world columns and rows. */
+  previewMapResize(handle: MapHandle, world: { x: number; y: number }): void {
+    const base = this.mapResize;
+    if (!base) return;
+    const doc = this.doc;
+    const plan = resizePlan(
+      { w: base.w, h: base.h, originCol: base.originCol, originRow: base.originRow },
+      handle,
+      world,
+      doc.tileSize,
+      this.store.settings.mapSnap,
+      this.store.settings.mapEven,
+    );
+    this.applyMapPlan(base, plan);
+    this.store.mapSizeText = `${plan.w} × ${plan.h}`;
+    this.store.emit('ui');
+    this.renderer.invalidateAll();
+    this.renderer.requestDraw();
+  }
+
+  private applyMapPlan(
+    base: NonNullable<Editor['mapResize']>,
+    plan: ResizePlan,
+  ): void {
+    const doc = this.doc;
+    doc.width = plan.w;
+    doc.height = plan.h;
+    const originCol = base.originCol - plan.shiftX;
+    const originRow = base.originRow - plan.shiftY;
+    if (originCol) doc.originCol = originCol;
+    else delete doc.originCol;
+    if (originRow) doc.originRow = originRow;
+    else delete doc.originRow;
+    for (const layer of doc.layers) {
+      if (!isTileLayer(layer)) continue;
+      const saved = base.tiles.find((item) => item.id === layer.id);
+      if (!saved) continue;
+      layer.data = resizedLayerData(
+        { ...layer, data: saved.data },
+        base.w,
+        base.h,
+        plan.w,
+        plan.h,
+        plan.shiftX,
+        plan.shiftY,
+      );
+    }
+  }
+
+  /** Records the drag if the map actually changed. */
+  endMapResize(): void {
+    const base = this.mapResize;
+    this.mapResize = null;
+    this.store.mapSizeText = null;
+    if (!base) return;
+    const doc = this.doc;
+    const same =
+      doc.width === base.w &&
+      doc.height === base.h &&
+      (doc.originCol ?? 0) === base.originCol &&
+      (doc.originRow ?? 0) === base.originRow;
+    if (same) {
+      restoreDoc(doc, base.before);
+      this.renderer.invalidateAll();
+      this.renderer.requestDraw();
+      return;
+    }
+    this.store.history.commitSnapshot('Resize map', base.before);
+    this.store.restructured();
+    this.renderer.invalidateAll();
+    this.renderer.requestDraw();
+  }
+
+  /** Drops a drag that the system cancelled, putting the map back. */
+  cancelMapResize(): void {
+    const base = this.mapResize;
+    this.mapResize = null;
+    this.store.mapSizeText = null;
+    if (!base) return;
+    restoreDoc(this.doc, base.before);
+    this.renderer.invalidateAll();
+    this.renderer.requestDraw();
   }
 
   resizeMap(width: number, height: number): void {

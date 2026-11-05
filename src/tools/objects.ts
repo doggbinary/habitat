@@ -1,6 +1,7 @@
 import {
   createObjectLayer,
   isObjectLayer,
+  mapOrigin,
   objectSize,
   spanOffset,
   spanSquares,
@@ -736,6 +737,7 @@ export class ObjectTools {
 
   private keepOnMap(obj: MapObject): void {
     const tile = this.doc.tileSize;
+    const origin = mapOrigin(this.doc);
     const mapW = this.mapWidth();
     const mapH = this.mapHeight();
     if (obj.freeform) {
@@ -743,14 +745,18 @@ export class ObjectTools {
       const keep = Math.min(8, w, h);
       let left = obj.x - w / 2;
       let top = obj.y - h / 2;
-      left = Math.max(keep - w, Math.min(mapW - keep, left));
-      top = Math.max(keep - h, Math.min(mapH - keep, top));
+      left = Math.max(origin.x + keep - w, Math.min(origin.x + mapW - keep, left));
+      top = Math.max(origin.y + keep - h, Math.min(origin.y + mapH - keep, top));
       const at = onWholePixels(w, h, left + w / 2, top + h / 2);
       obj.x = at.x;
       obj.y = at.y;
       return;
     }
+    obj.x -= origin.x;
+    obj.y -= origin.y;
     keepTouchingMap(obj, mapW, mapH, tile);
+    obj.x += origin.x;
+    obj.y += origin.y;
   }
 
   private mapWidth(): number {
@@ -765,10 +771,11 @@ export class ObjectTools {
   guideMove(obj: MapObject, x: number, y: number, w: number, h: number, snapOff: boolean): { x: number; y: number } {
     const box = this.artBox({ ...obj, x, y });
     const magnet = this.store.settings.snapToNeighbours && !snapOff && this.store.settings.alignGuides;
-    const guide = smartGuides(box, this.neighbourBoxes(obj), this.mapWidth(), this.mapHeight(), magnet);
+    const origin = mapOrigin(this.doc);
+    const guide = smartGuides(box, this.neighbourBoxes(obj), this.mapWidth(), this.mapHeight(), magnet, undefined, origin.x, origin.y);
     const at = onWholePixels(w, h, x + guide.dx, y + guide.dy);
     const settled = this.artBox({ ...obj, x: at.x, y: at.y });
-    const shown = smartGuides(settled, this.neighbourBoxes(obj), this.mapWidth(), this.mapHeight(), false);
+    const shown = smartGuides(settled, this.neighbourBoxes(obj), this.mapWidth(), this.mapHeight(), false, undefined, origin.x, origin.y);
     this.store.alignLines = {
       vertical: guide.vertical.length ? guide.vertical : shown.vertical,
       horizontal: guide.horizontal.length ? guide.horizontal : shown.horizontal,
@@ -827,6 +834,16 @@ export class ObjectTools {
     obj.hueShift = color.hueShift;
     obj.saturation = color.saturation;
     obj.brightness = color.brightness;
+    delete obj.shadeRamp;
+    this.renderer.requestDraw();
+  }
+
+  /** Match or Drop: the main colour takes this ramp, darkest stop first. */
+  setRamp(obj: MapObject, ramp: [number, number, number][]): void {
+    obj.shadeRamp = ramp;
+    obj.hueShift = 0;
+    obj.saturation = 1;
+    obj.brightness = 1;
     this.renderer.requestDraw();
   }
 
@@ -878,6 +895,7 @@ export class ObjectTools {
       obj.hueShift = 0;
       obj.saturation = 1;
       obj.brightness = 1;
+      delete obj.shadeRamp;
       delete obj.contrast;
       delete obj.clarity;
     });
@@ -913,6 +931,7 @@ export class ObjectTools {
       obj.hueShift = 0;
       obj.saturation = 1;
       obj.brightness = 1;
+      delete obj.shadeRamp;
       delete obj.contrast;
       delete obj.clarity;
     });

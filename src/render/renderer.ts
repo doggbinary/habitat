@@ -1,4 +1,4 @@
-import { isMovableImage, type Doc, type ImageLayer, type MapObject, type TileLayer } from '../core/doc';
+import { isMovableImage, mapOrigin, type Doc, type ImageLayer, type MapObject, type TileLayer } from '../core/doc';
 import { HANDLE_RADIUS, boundsOf, boxScreenRect, objectHandlePoint, objectScreenRect } from '../tools/objects';
 import { drawObject } from './object-draw';
 import { brushFootprint, isEmptyStamp, stampTileAt } from '../core/stamp';
@@ -124,12 +124,16 @@ export class Renderer {
     const mapW = doc.width * doc.tileSize;
     const mapH = doc.height * doc.tileSize;
     const zoom = camera.zoom;
+    const map = mapOrigin(doc);
 
     // Map surface, its corner on a whole screen pixel so every tile edge is too.
+    // World (0, 0) stays put when squares are added on the left or top.
     const originX = Math.round(-camera.x * zoom * this.dpr) / this.dpr;
     const originY = Math.round(-camera.y * zoom * this.dpr) / this.dpr;
+    const arrayX = originX + map.x * zoom;
+    const arrayY = originY + map.y * zoom;
     ctx.fillStyle = doc.background;
-    ctx.fillRect(originX, originY, mapW * zoom, mapH * zoom);
+    ctx.fillRect(arrayX, arrayY, mapW * zoom, mapH * zoom);
 
     // At a sharp zoom each art pixel is a whole block of screen pixels and is
     // drawn as is. Anywhere in between, dropping or doubling odd rows is what
@@ -137,16 +141,18 @@ export class Renderer {
     this.crisp = isCrispZoom(zoom, this.dpr);
     ctx.imageSmoothingEnabled = !this.crisp;
 
-    this.drawLayers(doc, originX, originY, zoom);
+    this.drawLayers(doc, originX, originY, arrayX, arrayY, zoom);
 
-    if (store.settings.showGrid) this.drawGrid(doc, originX, originY, zoom);
+    if (store.settings.showGrid) this.drawGrid(doc, arrayX, arrayY, zoom);
 
     ctx.strokeStyle = COLOR_BORDER;
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(originX - 0.5, originY - 0.5, mapW * zoom + 1, mapH * zoom + 1);
+    ctx.strokeRect(arrayX - 0.5, arrayY - 0.5, mapW * zoom + 1, mapH * zoom + 1);
+    this.drawMapHandles(arrayX, arrayY, mapW * zoom, mapH * zoom);
+    this.drawMapSize();
 
-    this.drawCharacterPreview(doc, originX, originY, zoom);
-    this.drawHeldBlock(doc, originX, originY, zoom);
+    this.drawCharacterPreview(doc, arrayX, arrayY, zoom);
+    this.drawHeldBlock(doc, arrayX, arrayY, zoom);
     this.drawDragPreview(doc, originX, originY, zoom);
     this.drawObjectSelection();
     this.drawAlignLines();
@@ -155,7 +161,7 @@ export class Renderer {
     // its handles instead of a brush cursor that would not do anything.
     const active = doc.layers[doc.activeLayer];
     if (isMovableImage(active)) this.drawImageHandles(active);
-    else this.drawCursor(doc, originX, originY, zoom);
+    else this.drawCursor(doc, arrayX, arrayY, zoom);
   }
 
   /**
@@ -195,7 +201,7 @@ export class Renderer {
     ctx.setLineDash([]);
   }
 
-  private drawLayers(doc: Doc, originX: number, originY: number, zoom: number): void {
+  private drawLayers(doc: Doc, worldX: number, worldY: number, arrayX: number, arrayY: number, zoom: number): void {
     const { ctx, store } = this;
     const cacheable = doc.width * doc.tileSize <= MAX_CACHE_DIM && doc.height * doc.tileSize <= MAX_CACHE_DIM;
 
@@ -209,18 +215,18 @@ export class Renderer {
 
       ctx.globalAlpha = alpha;
       if (layer.kind === 'image') {
-        this.drawImageLayer(layer, originX, originY, zoom);
+        this.drawImageLayer(layer, worldX, worldY, zoom);
       } else if (layer.kind === 'objects') {
         // Objects move constantly while being arranged, so they are drawn
         // fresh each frame rather than baked into a cache that would need
         // rebuilding on every nudge.
-        for (const obj of layer.objects) drawObject(ctx, doc, obj, originX, originY, zoom);
+        for (const obj of layer.objects) drawObject(ctx, doc, obj, worldX, worldY, zoom);
       } else if (cacheable) {
         const cache = this.cacheFor(layer);
         cache.sync(doc, layer);
-        this.drawCachedLayer(cache.canvas, originX, originY, zoom);
+        this.drawCachedLayer(cache.canvas, arrayX, arrayY, zoom);
       } else {
-        this.drawLayerDirect(doc, layer, originX, originY, zoom);
+        this.drawLayerDirect(doc, layer, arrayX, arrayY, zoom);
       }
       ctx.globalAlpha = 1;
     }
@@ -497,6 +503,49 @@ export class Renderer {
         drawTile(ctx, doc, tile, originX + x * cell, originY + y * cell, cell);
       }
     }
+  }
+
+  /** White grips on the map border. Large enough for a finger. */
+  private drawMapHandles(left: number, top: number, width: number, height: number): void {
+    const { ctx } = this;
+    const points = [
+      [left, top],
+      [left + width / 2, top],
+      [left + width, top],
+      [left + width, top + height / 2],
+      [left + width, top + height],
+      [left + width / 2, top + height],
+      [left, top + height],
+      [left, top + height / 2],
+    ];
+    ctx.save();
+    for (const [x, y] of points) {
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
+      ctx.fillStyle = '#f4f7ff';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#3d6bff';
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** "18 × 12" while an edge is being dragged. */
+  private drawMapSize(): void {
+    const text = this.store.mapSizeText;
+    if (!text) return;
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = '600 14px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    const width = ctx.measureText(text).width + 16;
+    ctx.fillStyle = '#3d6bff';
+    ctx.fillRect(12, 12, width, 26);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, 20, 17);
+    ctx.restore();
   }
 
   private drawGrid(doc: Doc, originX: number, originY: number, zoom: number): void {
