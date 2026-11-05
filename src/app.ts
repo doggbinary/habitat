@@ -93,7 +93,7 @@ import { buildMapJson, renderPng, renderTilesetSheet, saveFile, slugify } from '
 import { zipBlob, type ZipEntry } from './io/zip';
 import { isNative } from './io/native';
 import { openLibrary } from './ui/library-browser';
-import { fitToView, screenToCell, screenToWorld } from './render/camera';
+import { fitToView, screenToCell, screenToWorld, snapZoom } from './render/camera';
 import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
 import { button, el } from './ui/dom';
@@ -524,7 +524,8 @@ export class App {
     await this.refreshStaleAssets();
 
     const added = await this.loadObjectLibrary();
-    if (added > 0) this.store.restructured();
+    const lifted = this.alignGridToArt();
+    if (added > 0 || lifted) this.store.restructured();
     // A brand-new project has nothing to paint with, so send the user
     // straight to the import step.
     if (this.store.doc.tilesets.length === 0) this.addTileset();
@@ -807,8 +808,8 @@ export class App {
       clearSheetShadows(sheet);
       clearSheetBackdrop(sheet);
     }
-    // Maps made with 16 px squares shrank every library tile to a third,
-    // which is what warped the pixels. They move onto the art's own size.
+    // A 16 px map shrinks every 48 px floor to a third, and that shrink is
+    // what blurs it. Move onto the art's own size before the first paint.
     const upgraded = upgradeTileSize(doc);
 
     this.store.doc = doc;
@@ -824,6 +825,24 @@ export class App {
     this.store.restructured();
 
     if (doc.tilesets.length > 0) this.selectFirstTile();
+  }
+
+  /**
+   * A 16 px map with 48 px library floors shrinks every placed square to a
+   * third, which the browser then blurs. Move the map up to 48 px and keep
+   * the view where it was, on a zoom where each art pixel is a whole block.
+   */
+  private alignGridToArt(): boolean {
+    const before = this.store.doc.tileSize;
+    if (!upgradeTileSize(this.store.doc)) return false;
+    const k = this.store.doc.tileSize / before;
+    const cam = this.store.camera;
+    cam.x *= k;
+    cam.y *= k;
+    cam.zoom = snapZoom(cam.zoom / k);
+    this.renderer.invalidateAll();
+    this.store.toast('Map squares are now 48 px, so the art shows pixel for pixel');
+    return true;
   }
 
   /** Starts the brush on the sheet's first floor square, if it has any. */
@@ -1731,7 +1750,8 @@ export class App {
     this.fit();
     await this.saveOpenMap().catch(() => this.warnNotSaving());
     void this.loadObjectLibrary().then((added) => {
-      if (added > 0) this.store.restructured();
+      const lifted = this.alignGridToArt();
+      if (added > 0 || lifted) this.store.restructured();
     });
   }
 
@@ -1759,7 +1779,8 @@ export class App {
       await this.saveMapIndex();
       void this.refreshStaleAssets();
       void this.loadObjectLibrary().then((added) => {
-        if (added > 0) this.store.restructured();
+        const lifted = this.alignGridToArt();
+        if (added > 0 || lifted) this.store.restructured();
       });
       this.store.toast(`Opened ${entry.name}`);
     } catch {

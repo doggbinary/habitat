@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { floorEdgeInset } from './floor-edges';
+import { floorEdgeInset, nearestScale } from './floor-edges';
 
 function square(size: number, fill: [number, number, number], edge?: { side: 'top' | 'bottom' | 'left' | 'right'; colour: [number, number, number] }): Uint8ClampedArray {
   const rgba = new Uint8ClampedArray(size * size * 4);
@@ -40,6 +40,13 @@ describe('floor outline', () => {
     const rgba = square(16, [170, 120, 80]);
     for (let x = 0; x < 16; x++) rgba.set([50, 40, 60, 150], x * 4);
     expect(floorEdgeInset(rgba, 16, 0, 0, 16, 16).top).toBe(1);
+  });
+
+  it('shrinks a floor square by whole pixels, not by averaging them', () => {
+    const src = new Uint8ClampedArray(6 * 3 * 4);
+    for (let x = 0; x < 6; x++) src.set([x * 40, 0, 0, 255], (x + 6) * 4);
+    const out = nearestScale(src, 6, 0, 1, 6, 1, 2, 1);
+    expect([out[0], out[4]]).toEqual([0, 120]);
   });
 
   it('keeps a square that is already seamless', () => {

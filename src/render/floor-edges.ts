@@ -112,6 +112,28 @@ export function floorEdgeInset(
 
 const pixels = new WeakMap<HTMLImageElement | HTMLCanvasElement, { data: Uint8ClampedArray; width: number }>();
 
+/** The sheet's pixels, read once. Null when there is no document to read with. */
+export function imagePixels(
+  image: HTMLImageElement | HTMLCanvasElement,
+): { data: Uint8ClampedArray; width: number } | null {
+  let cached = pixels.get(image);
+  if (!cached) {
+    if (typeof document === 'undefined') return null;
+    const width = image instanceof HTMLImageElement ? image.naturalWidth : image.width;
+    const height = image instanceof HTMLImageElement ? image.naturalHeight : image.height;
+    if (width <= 0 || height <= 0) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(image, 0, 0);
+    cached = { data: ctx.getImageData(0, 0, width, height).data, width };
+    pixels.set(image, cached);
+  }
+  return cached;
+}
+
 /** The outline inset for a square of a sheet image, read once and remembered. */
 export function imageEdgeInset(
   image: HTMLImageElement | HTMLCanvasElement,
@@ -120,20 +142,35 @@ export function imageEdgeInset(
   w: number,
   h: number,
 ): EdgeInset {
-  let cached = pixels.get(image);
-  if (!cached) {
-    if (typeof document === 'undefined') return NO_INSET;
-    const width = image instanceof HTMLImageElement ? image.naturalWidth : image.width;
-    const height = image instanceof HTMLImageElement ? image.naturalHeight : image.height;
-    if (width <= 0 || height <= 0) return NO_INSET;
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return NO_INSET;
-    ctx.drawImage(image, 0, 0);
-    cached = { data: ctx.getImageData(0, 0, width, height).data, width };
-    pixels.set(image, cached);
-  }
+  const cached = imagePixels(image);
+  if (!cached) return NO_INSET;
   return floorEdgeInset(cached.data, cached.width, x, y, w, h);
+}
+
+/**
+ * Copies a rectangle to a new size by point sampling. A 48 px floor shrunk
+ * into a 16 px map square stays a block of whole pixels; the browser's own
+ * scale would average them into a blur.
+ */
+export function nearestScale(
+  src: Uint8ClampedArray,
+  srcStride: number,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  dw: number,
+  dh: number,
+): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(dw * dh * 4);
+  if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return out;
+  for (let y = 0; y < dh; y++) {
+    const py = sy + Math.min(sh - 1, Math.floor((y * sh) / dh));
+    for (let x = 0; x < dw; x++) {
+      const px = sx + Math.min(sw - 1, Math.floor((x * sw) / dw));
+      const s = (py * srcStride + px) * 4;
+      out.set(src.subarray(s, s + 4), (y * dw + x) * 4);
+    }
+  }
+  return out;
 }

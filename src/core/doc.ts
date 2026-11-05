@@ -350,9 +350,10 @@ export const STARTER_TILE = 16;
 export function upgradeTileSize(doc: Doc): boolean {
   if (doc.tileSize >= ART_TILE || ART_TILE % doc.tileSize !== 0) return false;
   if (!doc.tilesets.some((sheet) => !sheet.generated && sheet.tileW === ART_TILE)) return false;
-  // A map whose own art is drawn on its square size, such as the starter
-  // pack on 16 px, is already pixel for pixel.
-  if (doc.tilesets.some((sheet) => !sheet.generated && sheet.tileW === doc.tileSize)) return false;
+  // The starter pack is drawn at 16 px. Leaving the map there shrinks every
+  // 48 px floor to a third and the browser blurs that shrink. Moving up by a
+  // whole multiple keeps the starter art sharp (each pixel becomes a block)
+  // and shows the library floors pixel for pixel.
   rescaleGrid(doc, ART_TILE);
   return true;
 }
