@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isCrispZoom, snapZoom, stepZoom } from './camera';
+import { crispLayerBlit, isCrispZoom, snapCanvasSize, snapZoom, stepZoom } from './camera';
 
 describe('sharp zoom', () => {
   it('knows when art pixels land on whole screen pixels', () => {
@@ -16,6 +16,17 @@ describe('sharp zoom', () => {
     expect(snapZoom(2.3, 1)).toBe(2);
     // Zoomed far out it is left alone and smoothed.
     expect(snapZoom(0.2, 2)).toBe(0.2);
+  });
+
+  it('copies a sharp layer at a whole number of device pixels', () => {
+    expect(crispLayerBlit(10.2, -3.4, 1.5, 2)).toEqual({ dx: 20, dy: -7, scale: 3 });
+    expect(crispLayerBlit(0, 0, 4, 2).scale).toBe(8);
+  });
+
+  it('sizes the canvas so the browser does not resample it', () => {
+    const snapped = snapCanvasSize(390.4, 200.2, 2);
+    expect(snapped.bufW / snapped.viewW).toBe(2);
+    expect(snapped.bufH / snapped.viewH).toBe(2);
   });
 
   it('steps the zoom buttons from one sharp zoom to the next', () => {

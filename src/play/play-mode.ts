@@ -2,6 +2,7 @@ import { DIRECTIONS, frameIndex, framePixels, type Character, type Frame } from 
 import { createLayer, objectSize, type Doc, type MapObject, type TileLayer } from '../core/doc';
 import type { Store } from '../core/store';
 import { EMPTY } from '../core/tiles';
+import { crispLayerBlit, isCrispZoom, snapCanvasSize, viewPixelRatio } from '../render/camera';
 import { drawObject } from '../render/object-draw';
 import { drawTile } from '../render/tile-draw';
 import { scaleFromCorner, type ObjectTools } from '../tools/objects';
@@ -220,12 +221,14 @@ export class PlayMode {
   }
 
   private resize(): void {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    this.viewW = window.innerWidth;
-    this.viewH = window.innerHeight;
-    this.dpr = dpr;
-    this.canvas.width = Math.round(this.viewW * dpr);
-    this.canvas.height = Math.round(this.viewH * dpr);
+    const snapped = snapCanvasSize(window.innerWidth, window.innerHeight, viewPixelRatio());
+    this.viewW = snapped.viewW;
+    this.viewH = snapped.viewH;
+    this.dpr = viewPixelRatio();
+    this.canvas.width = snapped.bufW;
+    this.canvas.height = snapped.bufH;
+    this.canvas.style.width = `${snapped.viewW}px`;
+    this.canvas.style.height = `${snapped.viewH}px`;
   }
 
   // --- Walking stick -------------------------------------------------------
@@ -715,7 +718,18 @@ export class PlayMode {
     const camX = cam.x;
     const camY = cam.y;
 
-    ctx.drawImage(this.mapCanvas, -camX * zoom, -camY * zoom, mapW * zoom, mapH * zoom);
+    if (isCrispZoom(zoom, this.dpr)) {
+      const blit = crispLayerBlit(-camX * zoom, -camY * zoom, zoom, this.dpr);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(this.mapCanvas, blit.dx, blit.dy, mapW * blit.scale, mapH * blit.scale);
+      ctx.restore();
+    } else {
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(this.mapCanvas, -camX * zoom, -camY * zoom, mapW * zoom, mapH * zoom);
+      ctx.imageSmoothingEnabled = false;
+    }
 
     ctx.globalAlpha = 1;
     for (const layer of this.doc.layers) {

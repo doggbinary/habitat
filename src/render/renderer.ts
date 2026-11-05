@@ -6,7 +6,7 @@ import type { Store } from '../core/store';
 import { EMPTY } from '../core/tiles';
 import { lineCells, normalizeRect } from '../tools/geometry';
 import { handleScreenRect, imageScreenRect } from '../tools/image-transform';
-import { isCrispZoom } from './camera';
+import { crispLayerBlit, isCrispZoom, snapCanvasSize, viewPixelRatio } from './camera';
 import { LayerCache } from './layer-cache';
 import { drawTile } from './tile-draw';
 
@@ -86,19 +86,21 @@ export class Renderer {
   }
 
   resize(): void {
-    const rect = this.canvas.getBoundingClientRect();
+    const box = this.canvas.parentElement ?? this.canvas;
+    const rect = box.getBoundingClientRect();
     // Cap DPR at 2: a 3x buffer on a large iPad canvas costs fill rate without
-    // any visible gain for pixel art.
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = Math.max(1, Math.round(rect.width * dpr));
-    const h = Math.max(1, Math.round(rect.height * dpr));
-    this.viewW = rect.width;
-    this.viewH = rect.height;
-    this.dpr = dpr;
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w;
-      this.canvas.height = h;
+    // any visible gain for pixel art. The box is snapped so the bitmap is an
+    // exact number of those pixels and the browser does not resample it.
+    const snapped = snapCanvasSize(rect.width, rect.height, viewPixelRatio());
+    this.viewW = snapped.viewW;
+    this.viewH = snapped.viewH;
+    this.dpr = viewPixelRatio();
+    if (this.canvas.width !== snapped.bufW || this.canvas.height !== snapped.bufH) {
+      this.canvas.width = snapped.bufW;
+      this.canvas.height = snapped.bufH;
     }
+    this.canvas.style.width = `${snapped.viewW}px`;
+    this.canvas.style.height = `${snapped.viewH}px`;
     this.draw();
   }
 
@@ -216,18 +218,33 @@ export class Renderer {
       } else if (cacheable) {
         const cache = this.cacheFor(layer);
         cache.sync(doc, layer);
-        ctx.drawImage(
-          cache.canvas,
-          originX,
-          originY,
-          cache.canvas.width * zoom,
-          cache.canvas.height * zoom,
-        );
+        this.drawCachedLayer(cache.canvas, originX, originY, zoom);
       } else {
         this.drawLayerDirect(doc, layer, originX, originY, zoom);
       }
       ctx.globalAlpha = 1;
     }
+  }
+
+  /**
+   * Puts a tile layer on screen. At a sharp zoom the copy is a whole number of
+   * device pixels with the transform cleared, which is the only draw iPad
+   * browsers keep nearest-neighbour. A scaled draw under the screen-pixel
+   * transform is filtered, so a crisp swatch goes soft the moment it is painted.
+   */
+  private drawCachedLayer(source: HTMLCanvasElement, originX: number, originY: number, zoom: number): void {
+    const ctx = this.ctx;
+    if (!this.crisp) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(source, originX, originY, source.width * zoom, source.height * zoom);
+      return;
+    }
+    const blit = crispLayerBlit(originX, originY, zoom, this.dpr);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(source, blit.dx, blit.dy, source.width * blit.scale, source.height * blit.scale);
+    ctx.restore();
   }
 
   private drawImageLayer(layer: ImageLayer, originX: number, originY: number, zoom: number): void {
@@ -433,6 +450,27 @@ export class Renderer {
   /** Fallback path for maps too large to cache: draw only the visible cells. */
   private drawLayerDirect(doc: Doc, layer: TileLayer, originX: number, originY: number, zoom: number): void {
     const { ctx } = this;
+    if (this.crisp) {
+      const blit = crispLayerBlit(originX, originY, zoom, this.dpr);
+      const cell = doc.tileSize * blit.scale;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      const x0 = Math.max(0, Math.floor(-blit.dx / cell));
+      const y0 = Math.max(0, Math.floor(-blit.dy / cell));
+      const x1 = Math.min(doc.width - 1, Math.ceil((this.canvas.width - blit.dx) / cell));
+      const y1 = Math.min(doc.height - 1, Math.ceil((this.canvas.height - blit.dy) / cell));
+      for (let y = y0; y <= y1; y++) {
+        const row = y * doc.width;
+        for (let x = x0; x <= x1; x++) {
+          const tile = layer.data[row + x];
+          if (tile === EMPTY) continue;
+          drawTile(ctx, doc, tile, blit.dx + x * cell, blit.dy + y * cell, cell);
+        }
+      }
+      ctx.restore();
+      return;
+    }
     const cell = doc.tileSize * zoom;
     const x0 = Math.max(0, Math.floor(-originX / cell));
     const y0 = Math.max(0, Math.floor(-originY / cell));
