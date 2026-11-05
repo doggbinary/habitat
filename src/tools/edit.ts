@@ -708,6 +708,7 @@ export class Editor {
 
   /** Remembers the map so an edge drag can grow or shrink it as one undo step. */
   beginMapResize(): void {
+    if (this.doc.sizeLocked) return;
     const doc = this.doc;
     this.mapResize = {
       before: snapshot(doc),
@@ -805,6 +806,10 @@ export class Editor {
 
   resizeMap(width: number, height: number): void {
     const doc = this.doc;
+    if (doc.sizeLocked) {
+      this.store.toast('The map size is locked');
+      return;
+    }
     if (width === doc.width && height === doc.height) return;
     this.structural('Resize map', () => {
       for (const layer of doc.layers) {

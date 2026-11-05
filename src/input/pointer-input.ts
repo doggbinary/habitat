@@ -619,7 +619,7 @@ export class PointerInput {
       return;
     }
 
-    if (this.pointers.size === 1 && !this.spaceHeld) {
+    if (this.pointers.size === 1 && !this.spaceHeld && !this.store.doc.sizeLocked) {
       const handle = hitMapHandle(x, y, this.store.doc, this.store.camera);
       if (handle) {
         this.startMapResize(pointer, handle);

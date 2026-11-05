@@ -22,11 +22,13 @@ describe('saving and loading a project', () => {
     tiles.data[0] = pack(0, 3);
     tiles.data[7] = pack(2, 511, 6);
     tiles.collider = true;
+    doc.sizeLocked = true;
 
     const loaded = await deserializeProject(throughJson(serializeProject(doc)));
     const back = loaded.layers[0] as TileLayer;
     expect([...back.data]).toEqual([...tiles.data]);
     expect(back.collider).toBe(true);
+    expect(loaded.sizeLocked).toBe(true);
   });
 
   it('keeps placed objects exactly, in their front-to-back order', async () => {

@@ -193,6 +193,8 @@ export interface SerializedProject {
   /** World column of tile (0, 0). Absent when it is zero. */
   originCol?: number;
   originRow?: number;
+  /** Absent when the map size can still be dragged. */
+  sizeLocked?: boolean;
   background: string;
   activeLayer: number;
   tilesets: SerializedTileset[];
@@ -370,6 +372,7 @@ export function serializeProject(
     tileSize: doc.tileSize,
     ...(doc.originCol ? { originCol: doc.originCol } : {}),
     ...(doc.originRow ? { originRow: doc.originRow } : {}),
+    ...(doc.sizeLocked ? { sizeLocked: true } : {}),
     background: doc.background,
     activeLayer: doc.activeLayer,
     tilesets: doc.tilesets.map((t) => ({
@@ -556,6 +559,7 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
     tileSize: data.tileSize,
     ...(data.originCol ? { originCol: data.originCol } : {}),
     ...(data.originRow ? { originRow: data.originRow } : {}),
+    ...(data.sizeLocked ? { sizeLocked: true } : {}),
     background: data.background ?? '#1b1d24',
     tilesets,
     pins: data.pins ?? [],

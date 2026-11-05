@@ -701,6 +701,15 @@ export class Shell {
         store.toast(store.settings.mapEven ? 'Width and height stay even' : 'Odd sizes allowed');
         store.emit('ui');
       }),
+      this.chipToggle(store.doc.sizeLocked ? 'lock' : 'unlock', 'Lock', !!store.doc.sizeLocked, () => {
+        const locking = !store.doc.sizeLocked;
+        this.editor.structural(locking ? 'Lock map size' : 'Unlock map size', () => {
+          if (locking) store.doc.sizeLocked = true;
+          else delete store.doc.sizeLocked;
+        });
+        store.toast(locking ? 'Map size locked' : 'Map size unlocked');
+        this.renderer.requestDraw();
+      }),
     );
 
     this.optionsBar.append(...chips);

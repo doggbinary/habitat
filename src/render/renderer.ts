@@ -518,14 +518,15 @@ export class Renderer {
       [left, top + height],
       [left, top + height / 2],
     ];
+    const locked = this.store.doc.sizeLocked === true;
     ctx.save();
     for (const [x, y] of points) {
       ctx.beginPath();
       ctx.arc(x, y, 7, 0, Math.PI * 2);
-      ctx.fillStyle = '#f4f7ff';
+      ctx.fillStyle = locked ? '#2a2e3a' : '#f4f7ff';
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = '#3d6bff';
+      ctx.strokeStyle = locked ? '#5c6370' : '#3d6bff';
       ctx.stroke();
     }
     ctx.restore();

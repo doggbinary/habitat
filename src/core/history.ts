@@ -26,6 +26,7 @@ export interface DocSnapshot {
   tileSize: number;
   originCol: number;
   originRow: number;
+  sizeLocked: boolean;
   background: string;
   activeLayer: number;
   layers: Layer[];
@@ -64,6 +65,7 @@ export function snapshot(doc: Doc): DocSnapshot {
     tileSize: doc.tileSize,
     originCol: doc.originCol ?? 0,
     originRow: doc.originRow ?? 0,
+    sizeLocked: doc.sizeLocked === true,
     background: doc.background,
     activeLayer: doc.activeLayer,
     layers: doc.layers.map(copyLayer),
@@ -84,6 +86,8 @@ export function restoreDoc(doc: Doc, snap: DocSnapshot): void {
   else delete doc.originCol;
   if (snap.originRow) doc.originRow = snap.originRow;
   else delete doc.originRow;
+  if (snap.sizeLocked) doc.sizeLocked = true;
+  else delete doc.sizeLocked;
   doc.background = snap.background;
   doc.activeLayer = snap.activeLayer;
   doc.layers = snap.layers.map(copyLayer);

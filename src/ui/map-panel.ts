@@ -45,6 +45,7 @@ export class MapPanel {
       height.value = String(h);
       this.editor.resizeMap(w, h);
     }, [el('span', { text: 'Resize map' })]);
+    if (doc.sizeLocked) apply.disabled = true;
 
     const tileSize = this.numberField(doc.tileSize, 1, 256);
     tileSize.addEventListener('change', () => {

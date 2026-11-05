@@ -265,6 +265,8 @@ export interface Doc {
    */
   originCol?: number;
   originRow?: number;
+  /** When set, edge and corner handles cannot change the map size. */
+  sizeLocked?: boolean;
   background: string;
   tilesets: Tileset[];
   /** Stickers kept on the Pinned page, at the top of the asset library. */
