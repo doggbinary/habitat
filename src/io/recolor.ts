@@ -66,6 +66,22 @@ export function sharpenPixels(data: Uint8ClampedArray, w: number, h: number, amo
 export const NO_RECOLOR: RecolorOptions = { hueShift: 0, saturation: 1, brightness: 1 };
 
 /**
+ * Shift that makes one object's main colour read as another's, without
+ * flattening the shading. Hue rotates, and saturation and brightness scale,
+ * so highlights stay highlights and outlines stay darker than the body.
+ */
+export function matchShift(from: HSV, to: HSV): { hueShift: number; saturation: number; brightness: number } {
+  let hue = to.h - from.h;
+  if (hue > 180) hue -= 360;
+  if (hue < -180) hue += 360;
+  return {
+    hueShift: hue,
+    saturation: from.s > 0.02 ? to.s / from.s : 1,
+    brightness: from.v > 0.02 ? to.v / from.v : 1,
+  };
+}
+
+/**
  * The hue the art is "about", weighted by how colourful each pixel is.
  *
  * Averaging hues directly is wrong because hue wraps at 360, so red averages

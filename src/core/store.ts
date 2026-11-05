@@ -1,4 +1,4 @@
-import { createDoc, type AssetRect, type Doc } from './doc';
+import { createDoc, type AssetRect, type Doc, type MapObject } from './doc';
 import { History } from './history';
 import { EMPTY_STAMP, type Stamp } from './stamp';
 
@@ -54,6 +54,8 @@ export interface Settings {
   placeMode: 'auto' | 'snap' | 'free';
   /** Pink lines, and a gentle pull, when a moved asset lines up with another. */
   alignGuides: boolean;
+  /** In Free mode, edges within a few pixels snap so neighbouring objects touch. */
+  snapToNeighbours: boolean;
   /** Squares across that the brush and eraser paint. A single tile repeats to fill them. */
   brushSize: number;
 }
@@ -88,11 +90,16 @@ export class Store {
     snapImageToGrid: false,
     placeMode: 'auto',
     alignGuides: true,
+    snapToNeighbours: true,
     brushSize: 1,
   };
 
-  /** Lines showing while an asset is being dragged into line with another. */
-  alignLines: { vertical: number[]; horizontal: number[] } | null = null;
+  /** Lines and pixel gaps showing while an asset is dragged or resized. */
+  alignLines: { vertical: number[]; horizontal: number[]; labels: { x: number; y: number; text: string }[] } | null = null;
+  /** Armed from the colour button: the next tap samples a colour or matches an object. */
+  colorPick: 'drop' | 'match' | null = null;
+  /** Filled in by the app. The pointer calls it when a colour is sampled. */
+  colorSample: ((sample: { mode: 'drop' | 'match'; kind: 'object'; obj: MapObject } | { mode: 'drop'; kind: 'pixel'; r: number; g: number; b: number }) => void) | null = null;
 
   /**
    * A character dropped onto the map purely to judge scale. It is never part

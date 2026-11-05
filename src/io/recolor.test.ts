@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sharpenPixels } from './recolor';
+import { matchShift, sharpenPixels } from './recolor';
 
 /** A row of grey pixels, each [value, alpha]. */
 function row(...pixels: [number, number][]): Uint8ClampedArray {
@@ -31,5 +31,14 @@ describe('clarity', () => {
     sharpenPixels(data, 2, 1, 0);
     expect(data[0]).toBe(10);
     expect(data[4]).toBe(200);
+  });
+});
+
+describe('matching a colour', () => {
+  it('rotates the hue toward the other object and keeps a darker shade darker', () => {
+    const shift = matchShift({ h: 30, s: 0.5, v: 0.8 }, { h: 200, s: 0.5, v: 0.8 });
+    expect(shift.hueShift).toBe(170);
+    expect(shift.saturation).toBe(1);
+    expect(shift.brightness).toBe(1);
   });
 });

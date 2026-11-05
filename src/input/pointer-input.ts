@@ -156,6 +156,31 @@ export class PointerInput {
     this.rect = this.canvas.getBoundingClientRect();
   }
 
+  /** Samples a colour for Drop or Match, then leaves the tools alone. */
+  private sampleColor(x: number, y: number): void {
+    const mode = this.store.colorPick;
+    this.store.colorPick = null;
+    const hit = this.objects.hitTest(x, y);
+    if (mode === 'match') {
+      if (!hit) {
+        this.store.toast('Tap the object whose colour you want');
+        return;
+      }
+      this.store.colorSample?.({ mode: 'match', kind: 'object', obj: hit.obj });
+      return;
+    }
+    if (hit) {
+      this.store.colorSample?.({ mode: 'drop', kind: 'object', obj: hit.obj });
+      return;
+    }
+    const ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx || this.rect.width <= 0 || this.rect.height <= 0) return;
+    const px = Math.min(this.canvas.width - 1, Math.max(0, Math.floor((x / this.rect.width) * this.canvas.width)));
+    const py = Math.min(this.canvas.height - 1, Math.max(0, Math.floor((y / this.rect.height) * this.canvas.height)));
+    const pixel = ctx.getImageData(px, py, 1, 1).data;
+    this.store.colorSample?.({ mode: 'drop', kind: 'pixel', r: pixel[0], g: pixel[1], b: pixel[2] });
+  }
+
   private local(e: { clientX: number; clientY: number }) {
     return { x: e.clientX - this.rect.left, y: e.clientY - this.rect.top };
   }
@@ -576,6 +601,13 @@ export class PointerInput {
     this.pointers.set(e.pointerId, pointer);
     this.canvas.setPointerCapture?.(e.pointerId);
 
+    if (this.store.colorPick && this.pointers.size === 1) {
+      this.sampleColor(x, y);
+      this.mode = 'idle';
+      this.activeId = pointer.id;
+      return;
+    }
+
     if (this.pointers.size === 1 && this.pressCharacter(pointer, e)) return;
 
     if (e.pointerType === 'pen') {
@@ -677,7 +709,7 @@ export class PointerInput {
         if (!this.objectMoved && Math.hypot(x - tracked.startX, y - tracked.startY) <= slop) return;
         this.objectMoved = true;
         const world = this.worldAt(x, y);
-        this.objects.moveSelected(found.obj, world.x - this.grab.dx, world.y - this.grab.dy);
+        this.objects.moveSelected(found.obj, world.x - this.grab.dx, world.y - this.grab.dy, e.altKey);
       }
       return;
     }
@@ -696,6 +728,7 @@ export class PointerInput {
           world.y,
         );
         if (this.scalingGroup) this.objects.scaleSelection(scale);
+        else if (found.obj.freeform) this.objects.resizeFree(found.obj, scale, this.scaleAnchor.x, this.scaleAnchor.y, e.altKey);
         else this.objects.scaleTo(found.obj, scale);
       }
       return;

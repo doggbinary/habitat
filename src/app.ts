@@ -14,6 +14,7 @@ import {
   uid,
   type AssetRect,
   type Doc,
+  type MapObject,
   type Tileset,
 } from './core/doc';
 import { packOf, sameAsset, type AssetRef } from './ui/packs';
@@ -29,13 +30,13 @@ import {
 import { clearShadows, clearWhiteBackdrop } from './core/background';
 import { dropTilesets, isFloorSheet } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
-import { dominantColor, recolorToCanvas } from './io/recolor';
+import { dominantColor, matchShift, recolorToCanvas } from './io/recolor';
 import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
 import { isSolid } from './core/seamless';
 import { cropAsset } from './render/object-draw';
 import { gridScale, isSmallProp, ObjectTools, pixelScale, snapToGrid } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
-import { hexToHsv, hsvToHex } from './ui/color-wheel';
+import { hexToHsv, hsvToHex, rgbToHsv, type HSV } from './ui/color-wheel';
 import { importSpriteSheet } from './character/import';
 import { frameIndex, framePixels } from './character/model';
 import { addCharacterArt } from './character/sheet';
@@ -291,6 +292,7 @@ export class App {
     this.editor = new Editor(this.store, this.renderer);
     this.objects = new ObjectTools(this.store, this.renderer);
     this.input = new PointerInput(this.canvas, this.store, this.editor, this.renderer, this.objects);
+    this.store.colorSample = (sample) => this.applyColorSample(sample);
 
     this.characterView = new CharacterView(this.studio);
     this.characterPanel = new CharacterPanel(this.store, this.studio, this.characterView, {
@@ -1466,7 +1468,11 @@ export class App {
       const mode = this.store.settings.placeMode;
       const free = mode === 'free' || (mode !== 'snap' && isSmallProp(drag.rect.w, drag.rect.h, base, tile));
       const scale = free ? pixelScale(drag.rect.w, drag.rect.h, base) : gridScale(drag.rect.w, drag.rect.h, base, tile);
-      drag.world = this.objects.aligned(drag.rect.w * scale, drag.rect.h * scale, at.x, at.y);
+      const w = Math.max(1, Math.round(drag.rect.w * scale));
+      const h = Math.max(1, Math.round(drag.rect.h * scale));
+      drag.world = free
+        ? this.objects.guideMove({ id: 'preview', rect: drag.rect, x: 0, y: 0, scale, rotation: 0, flipX: false, flipY: false, hueShift: 0, saturation: 1, brightness: 1, tilesetId: drag.tilesetId }, at.x, at.y, w, h, false)
+        : this.objects.aligned(w, h, at.x, at.y);
     }
     this.renderer.requestDraw();
   }
@@ -1561,6 +1567,55 @@ export class App {
    * asset's own colour, and moving it is applied as a change relative to that,
    * so every shade shifts together rather than flattening to one colour.
    */
+  /**
+   * Drop copies a tapped colour onto the selection. Match copies another
+   * object's main colour. Either way the shading stays: only the ramp moves,
+   * and the sheet the art came from is never changed.
+   */
+  private applyColorSample(sample: NonNullable<Store['colorSample']> extends (value: infer S) => void ? S : never): void {
+    const objs = this.objects.recolorable();
+    if (objs.length === 0) {
+      this.store.toast('Select an object first, then drop or match a colour');
+      return;
+    }
+    const target = sample.kind === 'pixel' ? rgbToHsv(sample.r, sample.g, sample.b) : this.displayedColor(sample.obj);
+    if (!target) {
+      this.store.toast('That has no colour to copy');
+      return;
+    }
+    const changing = objs.filter((obj) => sample.kind === 'pixel' || sample.mode === 'drop' || obj !== sample.obj);
+    if (changing.length === 0) {
+      this.store.toast('Tap a different object to match');
+      return;
+    }
+    this.objects.beginGesture();
+    for (const obj of changing) {
+      const base = this.artColor(obj);
+      if (!base) continue;
+      this.objects.setColor(obj, matchShift(base, target));
+    }
+    this.objects.endGesture(sample.mode === 'match' ? 'Match colour' : 'Drop colour');
+    this.store.toast(sample.mode === 'match' ? 'Matched the colour' : 'Dropped the colour');
+  }
+
+  /** The colour the artwork was drawn with, before this placement's recolour. */
+  private artColor(obj: MapObject): HSV | null {
+    const sheet = this.store.doc.tilesets.find((t) => t.id === obj.tilesetId);
+    if (!sheet?.image) return null;
+    return dominantColor(cropAsset(sheet.image, obj.rect));
+  }
+
+  /** The colour the object shows now, including a recolour already applied. */
+  private displayedColor(obj: MapObject): HSV | null {
+    const base = this.artColor(obj);
+    if (!base) return null;
+    return {
+      h: (((base.h + obj.hueShift) % 360) + 360) % 360,
+      s: Math.min(1, base.s * obj.saturation),
+      v: Math.min(1, base.v * obj.brightness),
+    };
+  }
+
   private recolorObject(anchor: HTMLElement): void {
     const objs = this.objects.recolorable();
     if (objs.length === 0) return;

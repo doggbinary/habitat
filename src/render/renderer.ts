@@ -288,6 +288,18 @@ export class Renderer {
       ctx.lineTo(this.viewW, sy);
       ctx.stroke();
     }
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const label of lines.labels ?? []) {
+      const sx = (label.x - camera.x) * camera.zoom;
+      const sy = (label.y - camera.y) * camera.zoom;
+      const width = ctx.measureText(label.text).width + 10;
+      ctx.fillStyle = '#ff4f9a';
+      ctx.fillRect(sx - width / 2, sy - 9, width, 18);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(label.text, sx, sy);
+    }
     ctx.restore();
   }
 

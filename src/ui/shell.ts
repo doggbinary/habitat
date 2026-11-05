@@ -481,11 +481,30 @@ export class Shell {
         guard(this.selectionChip('minus', 'Smaller by one pixel', () => this.objects.stepSize(found.obj, -1), '', '−')),
         guard(this.selectionChip('plus', 'Bigger by one pixel', () => this.objects.stepSize(found.obj, 1), '', '+')),
         ...this.placeModeChips(!!found.obj.freeform, (free) => this.objects.setFreeform(found.obj, free)),
+        ...(found.obj.freeform
+          ? [
+              this.chipToggle('grid', 'Magnet', this.store.settings.snapToNeighbours, () => {
+                this.store.settings.snapToNeighbours = !this.store.settings.snapToNeighbours;
+                this.store.toast(this.store.settings.snapToNeighbours ? 'Edges snap together' : 'Edges will not snap');
+                this.refreshChrome();
+              }),
+            ]
+          : []),
         el('div', { class: 'divider vertical' }),
         guard(this.selectionChip('rotate', 'Rotate', () => this.objects.rotate())),
         guard(this.selectionChip('flipH', 'Flip across', () => this.objects.flipAcross())),
         guard(this.selectionChip('flipV', 'Flip down', () => this.objects.flipDown())),
         guard(recolor),
+        this.chipToggle('picker', 'Drop', this.store.colorPick === 'drop', () => {
+          this.store.colorPick = this.store.colorPick === 'drop' ? null : 'drop';
+          this.store.toast(this.store.colorPick ? 'Tap an object, or a pixel on the map' : 'Cancelled');
+          this.refreshChrome();
+        }),
+        this.chipToggle('layers', 'Match', this.store.colorPick === 'match', () => {
+          this.store.colorPick = this.store.colorPick === 'match' ? null : 'match';
+          this.store.toast(this.store.colorPick ? 'Tap the object whose colour you want' : 'Cancelled');
+          this.refreshChrome();
+        }),
         el('div', { class: 'divider vertical' }),
         this.orderGroup(locked),
         el('div', { class: 'divider vertical' }),
