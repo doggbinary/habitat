@@ -1,4 +1,5 @@
-import { assetsOf, type AssetEdit } from '../core/assets';
+import { assetIsGround, assetsOf, type AssetEdit } from '../core/assets';
+import { imageEdgeInset } from '../render/floor-edges';
 import type { AssetRect, Tileset } from '../core/doc';
 import type { Store } from '../core/store';
 import { button, clear, el } from './dom';
@@ -774,18 +775,25 @@ export class PalettePanel {
 
       // Whole-number magnification keeps pixel art crisp; only shrink below
       // 1x when an asset genuinely does not fit.
+      // The same outline the map leaves out, so a thumbnail matches what paints.
+      const inset =
+        tileset.image && !tileset.pathStride && !tileset.autotile && assetIsGround(tileset, assetIndex) && rect.w === tileset.tileW && rect.h === tileset.tileH
+          ? imageEdgeInset(tileset.image, rect.x, rect.y, rect.w, rect.h)
+          : { top: 0, right: 0, bottom: 0, left: 0 };
+      const srcW = rect.w - inset.left - inset.right;
+      const srcH = rect.h - inset.top - inset.bottom;
       const room = cell - pad * 2;
-      const fit = Math.min(room / rect.w, room / rect.h);
+      const fit = Math.min(room / srcW, room / srcH);
       const scale = fit >= 1 ? Math.floor(fit) : fit;
-      const w = rect.w * scale;
-      const h = rect.h * scale;
+      const w = srcW * scale;
+      const h = srcH * scale;
       ctx.imageSmoothingEnabled = scale < 1;
       ctx.drawImage(
         tileset.image,
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
+        rect.x + inset.left,
+        rect.y + inset.top,
+        srcW,
+        srcH,
         Math.round(x + (cell - w) / 2),
         Math.round(y + (cell - h) / 2),
         Math.round(w),
