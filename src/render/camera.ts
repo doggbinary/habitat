@@ -1,4 +1,4 @@
-import type { Doc } from '../core/doc';
+import { columnAt, rowAt, type Doc } from '../core/doc';
 import type { Camera } from '../core/store';
 
 export const MIN_ZOOM = 0.05;
@@ -21,6 +21,39 @@ export function viewPixelRatio(): number {
 export function isCrispZoom(zoom: number, ratio = viewPixelRatio()): boolean {
   const device = zoom * ratio;
   return device >= 1 - 1e-6 && Math.abs(device - Math.round(device)) < 1e-3;
+}
+
+/**
+ * Where a sharp layer bitmap is copied onto the screen, in device pixels.
+ * The scale is a whole number and the corner is a whole pixel, and the draw
+ * is done with no canvas transform. A scaled draw under the screen-pixel
+ * transform is what iPad browsers filter smooth, even when smoothing is off.
+ */
+export function crispLayerBlit(
+  originX: number,
+  originY: number,
+  zoom: number,
+  dpr: number,
+): { dx: number; dy: number; scale: number } {
+  return {
+    dx: Math.round(originX * dpr),
+    dy: Math.round(originY * dpr),
+    scale: Math.max(1, Math.round(zoom * dpr)),
+  };
+}
+
+/**
+ * Bitmap size for a CSS box. The box is nudged so the bitmap is an exact
+ * multiple of the device pixels, and the browser does not resample it.
+ */
+export function snapCanvasSize(
+  cssW: number,
+  cssH: number,
+  dpr: number,
+): { viewW: number; viewH: number; bufW: number; bufH: number } {
+  const bufW = Math.max(1, Math.round(cssW * dpr));
+  const bufH = Math.max(1, Math.round(cssH * dpr));
+  return { viewW: bufW / dpr, viewH: bufH / dpr, bufW, bufH };
 }
 
 /** The nearest zoom at which art pixels land on whole screen pixels. */
@@ -53,10 +86,7 @@ export function worldToScreen(cam: Camera, wx: number, wy: number): { x: number;
 /** Map cell under a viewport point. May be outside the map bounds. */
 export function screenToCell(cam: Camera, doc: Doc, sx: number, sy: number): { x: number; y: number } {
   const world = screenToWorld(cam, sx, sy);
-  return {
-    x: Math.floor(world.x / doc.tileSize),
-    y: Math.floor(world.y / doc.tileSize),
-  };
+  return { x: columnAt(doc, world.x), y: rowAt(doc, world.y) };
 }
 
 /** Zooms around a fixed viewport point, so pinch and scroll keep that point still. */

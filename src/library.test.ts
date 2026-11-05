@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLibraryEntries, isLibrarySheet, isSampleMap, librarySheetName } from './library';
+import { buildLibraryEntries, isLibrarySheet, isSampleMap, isTerrainSheet, librarySheetName } from './library';
 
 describe('object-sheet library', () => {
   it('keeps object pages and numbered furniture pages', () => {
@@ -12,6 +12,10 @@ describe('object-sheet library', () => {
 
   it('leaves out ground grids, wall grids, and duplicate folders', () => {
     expect(isLibrarySheet(['Modern Suburb Neighborhood'], 'Tile_A2-1 (2).png')).toBe(false);
+    expect(isTerrainSheet(['Autumn Forest'], 'Tile_A2-1 (2).png')).toBe(true);
+    expect(isTerrainSheet(['Inside'], 'Auto-tile-A4-Walls-1.png')).toBe(true);
+    expect(isTerrainSheet(['World'], 'Tile_A1.png')).toBe(true);
+    expect(isTerrainSheet(['Nature Park'], 'tile-B-01.png')).toBe(false);
     expect(isLibrarySheet(['Modern Suburb Neighborhood'], 'Auto-tile-A4-Walls-1.png')).toBe(false);
     expect(isLibrarySheet(['office(1)'], 'tile-B-01.png')).toBe(false);
     expect(isLibrarySheet(['restaurant', 'restaurant(2)'], '1.png')).toBe(false);

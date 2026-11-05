@@ -22,11 +22,13 @@ describe('saving and loading a project', () => {
     tiles.data[0] = pack(0, 3);
     tiles.data[7] = pack(2, 511, 6);
     tiles.collider = true;
+    doc.sizeLocked = true;
 
     const loaded = await deserializeProject(throughJson(serializeProject(doc)));
     const back = loaded.layers[0] as TileLayer;
     expect([...back.data]).toEqual([...tiles.data]);
     expect(back.collider).toBe(true);
+    expect(loaded.sizeLocked).toBe(true);
   });
 
   it('keeps placed objects exactly, in their front-to-back order', async () => {
@@ -44,6 +46,37 @@ describe('saving and loading a project', () => {
     expect(back.kind).toBe('objects');
     expect(back.name).toBe('Props');
     expect(back.objects).toEqual(objects.objects);
+  });
+
+  it('keeps built terrain, its source sheet and what was learned about it, so nothing is imported again', async () => {
+    const doc = createDoc(2, 2, 48);
+    const sheet = fakeTileset('a', 48);
+    sheet.pathStride = 48;
+    sheet.exact = true;
+    sheet.autotile = {
+      format: 'rpgmaker-a2',
+      cell: 48,
+      sourceName: 'Tile_A2-1 (2)',
+      sourceSrc: 'data:image/png;base64,AAAA',
+      confidence: 0.96,
+      notes: ['RPG Maker A2'],
+      materials: [
+        {
+          name: 'short grass',
+          kind: 'floor',
+          role: 'floor',
+          source: { x: 0, y: 0, w: 96, h: 144 },
+          edge: { style: 'raised-lip', depth: { n: 2, e: 2, s: 5, w: 2 }, note: 'lip' },
+          confidence: 0.95,
+          flags: [],
+        },
+      ],
+    };
+    doc.tilesets = [sheet];
+    const loaded = await deserializeProject(throughJson(serializeProject(doc)));
+    expect(loaded.tilesets[0].pathStride).toBe(48);
+    expect(loaded.tilesets[0].exact).toBe(true);
+    expect(loaded.tilesets[0].autotile).toEqual(sheet.autotile);
   });
 
   it('remembers which assets are ground, so the Ground page survives a reload', async () => {

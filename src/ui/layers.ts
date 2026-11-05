@@ -235,6 +235,13 @@ export class LayersPanel {
 
   private buildImageControls(layer: ImageLayer, index: number): void {
     const doc = this.store.doc;
+    const size = doc.tileSize;
+    const offGrid =
+      size > 0 &&
+      (layer.x % size !== 0 || layer.y % size !== 0 || layer.w % size !== 0 || layer.h % size !== 0);
+    if (this.store.settings.snapImageToGrid && offGrid) {
+      this.editor.setImagePlacement(layer, snapPlacement(doc, layer, true), 'Snap image to grid');
+    }
 
     const fields = {
       x: this.placementField(layer, 'x'),
@@ -251,7 +258,13 @@ export class LayersPanel {
     const snap = el('input', { type: 'checkbox', id: 'image-snap', checked: this.store.settings.snapImageToGrid });
     snap.addEventListener('change', () => {
       this.store.settings.snapImageToGrid = snap.checked;
+      // Turning snap on moves the picture onto the squares. A reference left
+      // 12 px off the grid makes every object look wrongly placed against it.
+      if (snap.checked) {
+        this.editor.setImagePlacement(layer, snapPlacement(doc, layer, true), 'Snap image to grid');
+      }
       this.store.emit('ui');
+      this.refresh();
     });
 
     this.footer.append(

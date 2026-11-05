@@ -7,6 +7,7 @@ import type { Editor } from '../tools/edit';
 import { lineCells } from '../tools/geometry';
 import { hitsHandle, scaleFromHandle, snapPlacement } from '../tools/image-transform';
 import { HANDLE_HIT, scaleFromCorner, type ObjectTools } from '../tools/objects';
+import { hitMapHandle, type MapHandle } from '../tools/map-resize';
 
 interface TrackedPointer {
   id: number;
@@ -31,7 +32,8 @@ type Mode =
   | 'object-scale'
   | 'object-pinch'
   | 'selection-rect'
-  | 'selection-move';
+  | 'selection-move'
+  | 'map-resize';
 
 /** A multi-finger tap only counts as a shortcut if it is quick and still. */
 const TAP_MAX_MS = 320;
@@ -57,6 +59,7 @@ const FINGER_HIT = 18;
 export class PointerInput {
   private readonly pointers = new Map<number, TrackedPointer>();
   private mode: Mode = 'idle';
+  private mapHandle: MapHandle = 'se';
   private activeId: number | null = null;
 
   private penDown = false;
@@ -154,6 +157,31 @@ export class PointerInput {
 
   refreshRect(): void {
     this.rect = this.canvas.getBoundingClientRect();
+  }
+
+  /** Samples a colour for Drop or Match, then leaves the tools alone. */
+  private sampleColor(x: number, y: number): void {
+    const mode = this.store.colorPick;
+    this.store.colorPick = null;
+    const hit = this.objects.hitTest(x, y);
+    if (mode === 'match') {
+      if (!hit) {
+        this.store.toast('Tap the object whose colour you want');
+        return;
+      }
+      this.store.colorSample?.({ mode: 'match', kind: 'object', obj: hit.obj });
+      return;
+    }
+    if (hit) {
+      this.store.colorSample?.({ mode: 'drop', kind: 'object', obj: hit.obj });
+      return;
+    }
+    const ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx || this.rect.width <= 0 || this.rect.height <= 0) return;
+    const px = Math.min(this.canvas.width - 1, Math.max(0, Math.floor((x / this.rect.width) * this.canvas.width)));
+    const py = Math.min(this.canvas.height - 1, Math.max(0, Math.floor((y / this.rect.height) * this.canvas.height)));
+    const pixel = ctx.getImageData(px, py, 1, 1).data;
+    this.store.colorSample?.({ mode: 'drop', kind: 'pixel', r: pixel[0], g: pixel[1], b: pixel[2] });
   }
 
   private local(e: { clientX: number; clientY: number }) {
@@ -556,6 +584,14 @@ export class PointerInput {
 
   // --- Event handlers ------------------------------------------------------
 
+  private startMapResize(pointer: TrackedPointer, handle: MapHandle): void {
+    this.mode = 'map-resize';
+    this.activeId = pointer.id;
+    this.mapHandle = handle;
+    this.editor.beginMapResize();
+    this.editor.previewMapResize(handle, this.worldAt(pointer.x, pointer.y));
+  }
+
   private onDown = (e: PointerEvent): void => {
     // A palm landing while the Pencil is drawing must not pan or paint.
     if (e.pointerType === 'touch' && this.penDown) return;
@@ -575,6 +611,21 @@ export class PointerInput {
     };
     this.pointers.set(e.pointerId, pointer);
     this.canvas.setPointerCapture?.(e.pointerId);
+
+    if (this.store.colorPick && this.pointers.size === 1) {
+      this.sampleColor(x, y);
+      this.mode = 'idle';
+      this.activeId = pointer.id;
+      return;
+    }
+
+    if (this.pointers.size === 1 && !this.spaceHeld && !this.store.doc.sizeLocked) {
+      const handle = hitMapHandle(x, y, this.store.doc, this.store.camera);
+      if (handle) {
+        this.startMapResize(pointer, handle);
+        return;
+      }
+    }
 
     if (this.pointers.size === 1 && this.pressCharacter(pointer, e)) return;
 
@@ -632,6 +683,7 @@ export class PointerInput {
 
     // Second finger: whatever was happening becomes a pinch.
     if (this.mode === 'draw') this.editor.abortStroke();
+    else if (this.mode === 'map-resize') this.editor.cancelMapResize();
     else if (this.mode === 'image') this.cancelImageDrag();
     else if (this.mode === 'object-move' || this.mode === 'object-scale') this.objects.cancelGesture();
     else if (this.mode === 'selection-move') this.store.changed();
@@ -668,6 +720,11 @@ export class PointerInput {
       return;
     }
 
+    if (e.pointerId === this.activeId && this.mode === 'map-resize') {
+      this.editor.previewMapResize(this.mapHandle, this.worldAt(x, y));
+      return;
+    }
+
     if (e.pointerId === this.activeId && this.mode === 'object-move') {
       const found = this.objects.selected();
       if (found) {
@@ -677,7 +734,7 @@ export class PointerInput {
         if (!this.objectMoved && Math.hypot(x - tracked.startX, y - tracked.startY) <= slop) return;
         this.objectMoved = true;
         const world = this.worldAt(x, y);
-        this.objects.moveSelected(found.obj, world.x - this.grab.dx, world.y - this.grab.dy);
+        this.objects.moveSelected(found.obj, world.x - this.grab.dx, world.y - this.grab.dy, e.altKey);
       }
       return;
     }
@@ -696,6 +753,7 @@ export class PointerInput {
           world.y,
         );
         if (this.scalingGroup) this.objects.scaleSelection(scale);
+        else if (found.obj.freeform) this.objects.resizeFree(found.obj, scale, this.scaleAnchor.x, this.scaleAnchor.y, e.altKey);
         else this.objects.scaleTo(found.obj, scale);
       }
       return;
@@ -787,6 +845,7 @@ export class PointerInput {
         if (this.objectMoved) this.objects.endGesture('Move');
         else this.objects.cancelGesture();
       } else if (this.mode === 'object-scale') this.objects.endGesture('Resize');
+      else if (this.mode === 'map-resize') this.editor.endMapResize();
       else if (this.mode === 'selection-rect') {
         // A still finger tap is a tap (it deselects), not a one-square box.
         if (tracked.type === 'touch' && !this.gestureMoved) this.store.preview = null;
@@ -817,6 +876,9 @@ export class PointerInput {
         this.mode = 'idle';
       } else if (this.mode === 'image') {
         this.cancelImageDrag();
+        this.mode = 'idle';
+      } else if (this.mode === 'map-resize') {
+        this.editor.cancelMapResize();
         this.mode = 'idle';
       }
       this.store.preview = null;

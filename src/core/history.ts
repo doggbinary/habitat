@@ -24,6 +24,9 @@ export interface DocSnapshot {
   width: number;
   height: number;
   tileSize: number;
+  originCol: number;
+  originRow: number;
+  sizeLocked: boolean;
   background: string;
   activeLayer: number;
   layers: Layer[];
@@ -60,6 +63,9 @@ export function snapshot(doc: Doc): DocSnapshot {
     width: doc.width,
     height: doc.height,
     tileSize: doc.tileSize,
+    originCol: doc.originCol ?? 0,
+    originRow: doc.originRow ?? 0,
+    sizeLocked: doc.sizeLocked === true,
     background: doc.background,
     activeLayer: doc.activeLayer,
     layers: doc.layers.map(copyLayer),
@@ -71,11 +77,17 @@ export function snapshot(doc: Doc): DocSnapshot {
   };
 }
 
-function restore(doc: Doc, snap: DocSnapshot): void {
+export function restoreDoc(doc: Doc, snap: DocSnapshot): void {
   doc.name = snap.name;
   doc.width = snap.width;
   doc.height = snap.height;
   doc.tileSize = snap.tileSize;
+  if (snap.originCol) doc.originCol = snap.originCol;
+  else delete doc.originCol;
+  if (snap.originRow) doc.originRow = snap.originRow;
+  else delete doc.originRow;
+  if (snap.sizeLocked) doc.sizeLocked = true;
+  else delete doc.sizeLocked;
   doc.background = snap.background;
   doc.activeLayer = snap.activeLayer;
   doc.layers = snap.layers.map(copyLayer);
@@ -231,7 +243,7 @@ export class History {
     const entry = this.undoStack.pop();
     if (!entry) return false;
     if (entry.kind === 'cells') this.applyCells(entry, entry.before);
-    else restore(this.doc(), entry.before);
+    else restoreDoc(this.doc(), entry.before);
     this.redoStack.push(entry);
     this.revision += 1;
     return true;
@@ -241,7 +253,7 @@ export class History {
     const entry = this.redoStack.pop();
     if (!entry) return false;
     if (entry.kind === 'cells') this.applyCells(entry, entry.after);
-    else restore(this.doc(), entry.after);
+    else restoreDoc(this.doc(), entry.after);
     this.undoStack.push(entry);
     this.revision += 1;
     return true;

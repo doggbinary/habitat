@@ -60,6 +60,65 @@ export interface Tileset {
    * neighbours.
    */
   pathStride?: number;
+  /**
+   * Set on sheets built by AI Extract. Their pixels are exact copies of the
+   * original sheet, so nothing (shadow or backdrop clean-up) may touch them.
+   */
+  exact?: boolean;
+  /** What AI Extract knows about each asset, matched to `assets` by its rectangle. */
+  aiAssets?: AiAssetInfo[];
+  /**
+   * Set on terrain built from an autotile sheet. Each row of the picture is
+   * one material and each column one of its shapes (`pathStride` columns a
+   * row); painting picks the shape from the neighbours.
+   */
+  autotile?: AutotileSheet;
+}
+
+export interface AutotileSheet {
+  /** The layout the source sheet was read as. */
+  format: 'rpgmaker-a2' | 'rpgmaker-a3' | 'rpgmaker-a4' | 'terrain-kit';
+  /** Source cell size in pixels; pieces are quarters of it. */
+  cell: number;
+  materials: AutotileMaterial[];
+  sourceName: string;
+  /** The original sheet as imported, so nothing has to be imported again. */
+  sourceSrc?: string;
+  /** Share of the sheet's blocks that passed the structural checks, 0 to 1. */
+  confidence: number;
+  notes: string[];
+}
+
+export interface AutotileMaterial {
+  name: string;
+  /** Floors use the 47-shape table, walls and roofs the 16-shape one. */
+  kind: 'floor' | 'wall';
+  role: 'floor' | 'wall-top' | 'wall-side' | 'roof';
+  /** The source block on the original sheet. */
+  source: AssetRect;
+  /** For a wall top, the row of its side face, and the other way round. */
+  pair?: number;
+  /** How its edges are drawn, from the pixels. */
+  edge: { style: 'seamless' | 'border' | 'raised-lip' | 'cutout'; depth: { n: number; e: number; s: number; w: number }; note: string };
+  confidence: number;
+  flags: string[];
+}
+
+/** One AI-extracted asset's description, kept with the sheet it lives on. */
+export interface AiAssetInfo {
+  /** Where it sits on this sheet. */
+  rect: AssetRect;
+  name: string;
+  category: string;
+  kind: 'object' | 'tile' | 'frame';
+  /** Where it came from on the original sheet. */
+  source: AssetRect;
+  sourceSheet: string;
+  anchor: { x: number; y: number };
+  confidence: number;
+  needsReview: boolean;
+  flags: string[];
+  animation?: { group: string; frame: number };
 }
 
 /** A rectangle of a sheet image, in source pixels. */
@@ -92,6 +151,12 @@ export interface MapObject {
   hueShift: number;
   saturation: number;
   brightness: number;
+  /**
+   * Target shade ramp, darkest first, as RGB triples. Match and Drop store
+   * this so the main colour follows that ramp and grey parts stay grey.
+   * Absent when the hue shift above is what recolours the art.
+   */
+  shadeRamp?: [number, number, number][];
   /** Spread of light and dark, 1 leaves it alone. Absent in older files. */
   contrast?: number;
   /** Sharpening between neighbouring pixels, 0 to 1. Absent in older files. */
@@ -102,6 +167,11 @@ export interface MapObject {
   door?: { x: number; y: number };
   /** When set, the asset stays where it was dropped until it is unlocked. */
   locked?: boolean;
+  /**
+   * Placed on any pixel, not centred in map squares. Small props start this
+   * way so a pot can sit on a counter between the grid lines.
+   */
+  freeform?: boolean;
   /** Assets that share an id move and select together. */
   groupId?: string;
 }
@@ -179,8 +249,8 @@ export function createObjectLayer(name = 'Objects'): ObjectLayer {
 
 /** On-screen footprint of an object in world pixels, after turning and scaling. */
 export function objectSize(obj: MapObject): { w: number; h: number } {
-  const w = obj.rect.w * obj.scale;
-  const h = obj.rect.h * obj.scale;
+  const w = Math.max(1, Math.round(obj.rect.w * obj.scale));
+  const h = Math.max(1, Math.round(obj.rect.h * obj.scale));
   return obj.rotation % 2 === 1 ? { w: h, h: w } : { w, h };
 }
 
@@ -189,6 +259,14 @@ export interface Doc {
   width: number;
   height: number;
   tileSize: number;
+  /**
+   * World column and row of tile (0, 0). Negative after squares are added on
+   * the left or top, so the tiles already placed keep their world position.
+   */
+  originCol?: number;
+  originRow?: number;
+  /** When set, edge and corner handles cannot change the map size. */
+  sizeLocked?: boolean;
   background: string;
   tilesets: Tileset[];
   /** Stickers kept on the Pinned page, at the top of the asset library. */
@@ -282,19 +360,20 @@ export const ART_TILE = 48;
 export const STARTER_TILE = 16;
 
 /**
- * Moves a map made with small squares onto the library's own square size.
- * Every painted cell stays where it is; placed assets and pictures are
- * scaled with the squares so the map looks the same, only sharper.
- * Returns false when the map is already at that size or cannot be scaled
- * by a whole number.
+ * Moves a map onto the square size its packs were drawn at.
+ * A 32 px pack (Pixel Fantasy Town) keeps or takes a 32 px grid, even when
+ * 48 px sheets are in the same library. Only a map with no 32 px pack, and
+ * with real 48 px art, moves up to 48. Every painted cell stays where it is;
+ * placed assets and pictures scale with the squares.
+ * Returns false when the map is already on that size.
  */
 export function upgradeTileSize(doc: Doc): boolean {
-  if (doc.tileSize >= ART_TILE || ART_TILE % doc.tileSize !== 0) return false;
-  if (!doc.tilesets.some((sheet) => !sheet.generated && sheet.tileW === ART_TILE)) return false;
-  // A map whose own art is drawn on its square size, such as the starter
-  // pack on 16 px, is already pixel for pixel.
-  if (doc.tilesets.some((sheet) => !sheet.generated && sheet.tileW === doc.tileSize)) return false;
-  rescaleGrid(doc, ART_TILE);
+  const art = doc.tilesets.filter((sheet) => !sheet.generated && sheet.tileW > 0);
+  const has32 = art.some((sheet) => sheet.tileW === 32);
+  const has48 = art.some((sheet) => sheet.tileW === ART_TILE);
+  const target = has32 ? 32 : has48 ? ART_TILE : 0;
+  if (target === 0 || doc.tileSize === target) return false;
+  rescaleGrid(doc, target);
   return true;
 }
 
@@ -476,6 +555,21 @@ export function cellIndex(doc: Doc, x: number, y: number): number {
   return y * doc.width + x;
 }
 
+/** World pixel of the map's left and top edges. Zero until squares are added there. */
+export function mapOrigin(doc: Doc): { x: number; y: number } {
+  return { x: (doc.originCol ?? 0) * doc.tileSize, y: (doc.originRow ?? 0) * doc.tileSize };
+}
+
+/** Array column under a world pixel. May fall outside the map. */
+export function columnAt(doc: Doc, wx: number): number {
+  return Math.floor(wx / doc.tileSize) - (doc.originCol ?? 0);
+}
+
+/** Array row under a world pixel. May fall outside the map. */
+export function rowAt(doc: Doc, wy: number): number {
+  return Math.floor(wy / doc.tileSize) - (doc.originRow ?? 0);
+}
+
 export function inBounds(doc: Doc, x: number, y: number): boolean {
   return x >= 0 && y >= 0 && x < doc.width && y < doc.height;
 }
@@ -495,14 +589,20 @@ export function resizedLayerData(
   oldH: number,
   newW: number,
   newH: number,
+  shiftX = 0,
+  shiftY = 0,
 ): Int32Array {
   const next = new Int32Array(newW * newH);
   next.fill(EMPTY);
-  const copyW = Math.min(oldW, newW);
-  const copyH = Math.min(oldH, newH);
-  for (let y = 0; y < copyH; y++) {
-    const from = y * oldW;
-    next.set(layer.data.subarray(from, from + copyW), y * newW);
+  const source = layer.data;
+  for (let y = 0; y < oldH; y++) {
+    const ny = y + shiftY;
+    if (ny < 0 || ny >= newH) continue;
+    for (let x = 0; x < oldW; x++) {
+      const nx = x + shiftX;
+      if (nx < 0 || nx >= newW) continue;
+      next[ny * newW + nx] = source[y * oldW + x];
+    }
   }
   return next;
 }

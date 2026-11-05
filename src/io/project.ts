@@ -10,6 +10,8 @@ import {
   loadImage,
   makeTileset,
   uid,
+  type AiAssetInfo,
+  type AutotileSheet,
   type AssetRect,
   type Doc,
   type Layer,
@@ -21,6 +23,22 @@ import type { AssetFolder, AssetRef } from '../ui/packs';
 
 const finite = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+function readRamp(value: unknown): { shadeRamp: [number, number, number][] } | Record<string, never> {
+  if (!Array.isArray(value) || value.length < 2) return {};
+  const ramp: [number, number, number][] = [];
+  for (const stop of value) {
+    if (!Array.isArray(stop) || stop.length < 3) return {};
+    const [r, g, b] = stop;
+    if (![r, g, b].every((n) => typeof n === 'number' && Number.isFinite(n))) return {};
+    ramp.push([
+      Math.max(0, Math.min(255, Math.round(r as number))),
+      Math.max(0, Math.min(255, Math.round(g as number))),
+      Math.max(0, Math.min(255, Math.round(b as number))),
+    ]);
+  }
+  return { shadeRamp: ramp };
+}
 
 const stringList = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -50,6 +68,7 @@ function readObject(raw: Partial<MapObject>): MapObject {
     hueShift: finite(raw.hueShift, 0),
     saturation: finite(raw.saturation, 1),
     brightness: finite(raw.brightness, 1),
+    ...readRamp(raw.shadeRamp),
     ...(finite(raw.contrast, 1) !== 1 ? { contrast: finite(raw.contrast, 1) } : {}),
     ...(finite(raw.clarity, 0) !== 0 ? { clarity: finite(raw.clarity, 0) } : {}),
     ...(raw.blocks ? { blocks: true } : {}),
@@ -57,6 +76,7 @@ function readObject(raw: Partial<MapObject>): MapObject {
       ? { door: { x: raw.door.x, y: raw.door.y } }
       : {}),
     ...(raw.locked ? { locked: true } : {}),
+    ...(raw.freeform ? { freeform: true } : {}),
     ...(typeof raw.groupId === 'string' && raw.groupId ? { groupId: raw.groupId } : {}),
   };
 }
@@ -125,6 +145,9 @@ interface SerializedTileset {
   groundAssets?: number[];
   groundBlocks?: AssetRect[];
   pathStride?: number;
+  exact?: boolean;
+  aiAssets?: AiAssetInfo[];
+  autotile?: AutotileSheet;
 }
 
 interface SerializedReference {
@@ -167,6 +190,11 @@ export interface SerializedProject {
   width: number;
   height: number;
   tileSize: number;
+  /** World column of tile (0, 0). Absent when it is zero. */
+  originCol?: number;
+  originRow?: number;
+  /** Absent when the map size can still be dragged. */
+  sizeLocked?: boolean;
   background: string;
   activeLayer: number;
   tilesets: SerializedTileset[];
@@ -342,6 +370,9 @@ export function serializeProject(
     width: doc.width,
     height: doc.height,
     tileSize: doc.tileSize,
+    ...(doc.originCol ? { originCol: doc.originCol } : {}),
+    ...(doc.originRow ? { originRow: doc.originRow } : {}),
+    ...(doc.sizeLocked ? { sizeLocked: true } : {}),
     background: doc.background,
     activeLayer: doc.activeLayer,
     tilesets: doc.tilesets.map((t) => ({
@@ -361,6 +392,9 @@ export function serializeProject(
       ...(t.groundAssets?.length ? { groundAssets: [...t.groundAssets] } : {}),
       ...(t.groundBlocks?.length ? { groundBlocks: t.groundBlocks.map((b) => ({ ...b })) } : {}),
       ...(t.pathStride ? { pathStride: t.pathStride } : {}),
+      ...(t.exact ? { exact: true } : {}),
+      ...(t.aiAssets?.length ? { aiAssets: t.aiAssets.map(copyAiInfo) } : {}),
+      ...(t.autotile ? { autotile: structuredClone(t.autotile) } : {}),
     })),
     layers: doc.layers.map((l): SerializedLayer => {
       const base = {
@@ -378,6 +412,17 @@ export function serializeProject(
       }
       return { ...base, kind: 'tiles', collider: l.collider, data: toBase64(l.data.buffer) };
     }),
+  };
+}
+
+function copyAiInfo(info: AiAssetInfo): AiAssetInfo {
+  return {
+    ...info,
+    rect: { ...info.rect },
+    source: { ...info.source },
+    anchor: { ...info.anchor },
+    flags: [...(info.flags ?? [])],
+    ...(info.animation ? { animation: { ...info.animation } } : {}),
   };
 }
 
@@ -419,6 +464,9 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
       if (Array.isArray(t.groundAssets)) tileset.groundAssets = [...t.groundAssets];
       if (Array.isArray(t.groundBlocks)) tileset.groundBlocks = t.groundBlocks.map((b) => ({ ...b }));
       if (t.pathStride) tileset.pathStride = t.pathStride;
+      if (t.exact) tileset.exact = true;
+      if (Array.isArray(t.aiAssets)) tileset.aiAssets = t.aiAssets.map(copyAiInfo);
+      if (t.autotile && Array.isArray(t.autotile.materials)) tileset.autotile = structuredClone(t.autotile);
       tilesets.push(tileset);
     } catch {
       // A tileset that fails to decode would otherwise shift every later
@@ -447,6 +495,9 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
         ...(Array.isArray(t.groundAssets) ? { groundAssets: [...t.groundAssets] } : {}),
         ...(Array.isArray(t.groundBlocks) ? { groundBlocks: t.groundBlocks.map((b) => ({ ...b })) } : {}),
         ...(t.pathStride ? { pathStride: t.pathStride } : {}),
+        ...(t.exact ? { exact: true } : {}),
+        ...(Array.isArray(t.aiAssets) ? { aiAssets: t.aiAssets.map(copyAiInfo) } : {}),
+        ...(t.autotile && Array.isArray(t.autotile.materials) ? { autotile: structuredClone(t.autotile) } : {}),
       });
     }
   }
@@ -506,6 +557,9 @@ export async function deserializeProject(data: SerializedProject): Promise<Doc> 
     width: data.width,
     height: data.height,
     tileSize: data.tileSize,
+    ...(data.originCol ? { originCol: data.originCol } : {}),
+    ...(data.originRow ? { originRow: data.originRow } : {}),
+    ...(data.sizeLocked ? { sizeLocked: true } : {}),
     background: data.background ?? '#1b1d24',
     tilesets,
     pins: data.pins ?? [],

@@ -1,4 +1,4 @@
-import type { AssetRect, Doc, MapObject } from '../core/doc';
+import { objectSize, type AssetRect, type Doc, type MapObject } from '../core/doc';
 import { recolorToCanvas } from '../io/recolor';
 
 /**
@@ -27,6 +27,7 @@ export function cropAsset(
 
 export function isRecolored(obj: MapObject): boolean {
   return (
+    (obj.shadeRamp?.length ?? 0) > 0 ||
     obj.hueShift !== 0 ||
     obj.saturation !== 1 ||
     obj.brightness !== 1 ||
@@ -53,12 +54,14 @@ function artFor(doc: Doc, obj: MapObject): Art | null {
     return { source: sheet.image, sx: rect.x, sy: rect.y, sw: rect.w, sh: rect.h };
   }
 
+  const rampKey = obj.shadeRamp?.map((stop) => stop.join('.')).join(',') ?? '';
   const key = [
     sheet.id,
     rect.x,
     rect.y,
     rect.w,
     rect.h,
+    rampKey,
     obj.hueShift.toFixed(1),
     obj.saturation.toFixed(3),
     obj.brightness.toFixed(3),
@@ -69,11 +72,12 @@ function artFor(doc: Doc, obj: MapObject): Art | null {
   let canvas = recolorCache.get(key);
   if (!canvas) {
     canvas = recolorToCanvas(cropAsset(sheet.image, rect), {
-      hueShift: obj.hueShift,
-      saturation: obj.saturation,
-      brightness: obj.brightness,
+      hueShift: obj.shadeRamp ? 0 : obj.hueShift,
+      saturation: obj.shadeRamp ? 1 : obj.saturation,
+      brightness: obj.shadeRamp ? 1 : obj.brightness,
       contrast: obj.contrast ?? 1,
       clarity: obj.clarity ?? 0,
+      shadeRamp: obj.shadeRamp,
     });
     recolorCache.set(key, canvas);
     // Map iteration order is insertion order, so the first key is the oldest.
@@ -103,10 +107,12 @@ export function drawObject(
   const art = artFor(doc, obj);
   if (!art) return;
 
-  const w = obj.rect.w * obj.scale * zoom;
-  const h = obj.rect.h * obj.scale * zoom;
+  const footprint = objectSize(obj);
+  const w = footprint.w * zoom;
+  const h = footprint.h * zoom;
 
   ctx.save();
+  ctx.imageSmoothingEnabled = false;
   ctx.translate(originX + obj.x * zoom, originY + obj.y * zoom);
   if (obj.rotation) ctx.rotate((obj.rotation * Math.PI) / 2);
   if (obj.flipX || obj.flipY) ctx.scale(obj.flipX ? -1 : 1, obj.flipY ? -1 : 1);

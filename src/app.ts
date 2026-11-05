@@ -14,6 +14,7 @@ import {
   uid,
   type AssetRect,
   type Doc,
+  type MapObject,
   type Tileset,
 } from './core/doc';
 import { packOf, sameAsset, type AssetRef } from './ui/packs';
@@ -29,13 +30,13 @@ import {
 import { clearShadows, clearWhiteBackdrop } from './core/background';
 import { dropTilesets, isFloorSheet } from './core/path-merge';
 import { isSampleMap, type LibraryEntry } from './library';
-import { dominantColor, recolorToCanvas } from './io/recolor';
+import { dominantColor, recolorToCanvas, shadeRampFromColor, shadeRampFromPixels } from './io/recolor';
 import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
 import { isSolid } from './core/seamless';
 import { cropAsset } from './render/object-draw';
-import { gridScale, ObjectTools, snapToGrid } from './tools/objects';
+import { gridScale, isSmallProp, ObjectTools, pixelScale, snapToGrid } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
-import { hexToHsv, hsvToHex } from './ui/color-wheel';
+import { hexToHsv, hsvToHex, hsvToRgb } from './ui/color-wheel';
 import { importSpriteSheet } from './character/import';
 import { frameIndex, framePixels } from './character/model';
 import { addCharacterArt } from './character/sheet';
@@ -93,11 +94,20 @@ import { buildMapJson, renderPng, renderTilesetSheet, saveFile, slugify } from '
 import { zipBlob, type ZipEntry } from './io/zip';
 import { isNative } from './io/native';
 import { openLibrary } from './ui/library-browser';
-import { fitToView, screenToCell, screenToWorld } from './render/camera';
+import { fitToView, screenToCell, screenToWorld, snapZoom } from './render/camera';
 import { Renderer, type CharacterPreviewSource } from './render/renderer';
 import { Editor } from './tools/edit';
 import { button, el } from './ui/dom';
 import { openModal } from './ui/modal';
+import { openAiExtract, type ExtractSource } from './ui/ai-extract';
+import type { Extraction } from './ai/pipeline';
+import { librarySheet, packAtlas } from './ai/output';
+import { decodePng, encodePng, isPng, streamZlib } from './ai/png';
+import { autotileSheetFields, buildAutotiles, guessFormat, type AutotileBuild } from './ai/formats';
+import { buildKits } from './ai/kits';
+import { nameMaterials } from './ai/autotile-naming';
+import { resolveVision } from './ai/settings';
+import { bytesToBase64, createVisionClient, describeConfig } from './ai/vision';
 import { Shell } from './ui/shell';
 
 /**
@@ -126,6 +136,37 @@ function resetPageZoom(): void {
   });
 }
 
+/** "Pixel Fantasy Town 1" has its terrain kits on "Pixel Fantasy Town — Terrain 1", in the same pack. */
+function terrainKitName(page: string): string {
+  const pack = packOf(page);
+  const rest = page.startsWith(pack) ? page.slice(pack.length).replace(/^\s*—?\s*/, '').trim() : '';
+  return `${pack} — Terrain${rest ? ` ${rest}` : ''}`;
+}
+
+/** A picture's exact pixels: from the PNG data itself when it is one, otherwise as the browser reads it. */
+async function readExtractSource(bytes: Uint8Array, name: string, cellHint?: number): Promise<ExtractSource> {
+  if (isPng(bytes)) {
+    try {
+      return { name, image: await decodePng(bytes, streamZlib), cellHint, decodedBy: 'png' };
+    } catch {
+      /* a PNG layout the decoder does not handle falls through to the browser */
+    }
+  }
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart]));
+  try {
+    const img = await loadImage(url);
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    return { name, image: { width: data.width, height: data.height, data: data.data }, cellHint, decodedBy: 'browser' };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function detectInto(sheet: Tileset): void {
   // Shadows go first, so no asset's box is stretched to take one in. The
   // detector reads a white backdrop itself, so it sees the picture first.
@@ -142,7 +183,7 @@ function detectInto(sheet: Tileset): void {
 /** Runs a pixel edit over a pack's sheet, keeping the result only when it changed something. */
 function editSheetPixels(sheet: Tileset, edit: (rgba: Uint8ClampedArray, w: number, h: number) => boolean): void {
   const image = sheet.image;
-  if (!image || sheet.generated) return;
+  if (!image || sheet.generated || sheet.exact) return;
   const canvas = document.createElement('canvas');
   canvas.width = sheet.imgW;
   canvas.height = sheet.imgH;
@@ -251,6 +292,7 @@ export class App {
     this.editor = new Editor(this.store, this.renderer);
     this.objects = new ObjectTools(this.store, this.renderer);
     this.input = new PointerInput(this.canvas, this.store, this.editor, this.renderer, this.objects);
+    this.store.colorSample = (sample) => this.applyColorSample(sample);
 
     this.characterView = new CharacterView(this.studio);
     this.characterPanel = new CharacterPanel(this.store, this.studio, this.characterView, {
@@ -267,6 +309,7 @@ export class App {
       dragMove: (x, y) => this.dragMove(x, y),
       dragEnd: (x, y, dropped) => this.dragEnd(x, y, dropped),
       editAssets: (sheet, op, indices) => this.editAssets(sheet, op, indices),
+      aiExtract: (sheet) => void this.aiExtract(sheet),
       setPinned: (refs, pinned) => this.setPinned(refs, pinned),
       fileAssets: (folderId, name, refs) => this.fileAssets(folderId, name, refs),
       removeFolder: (folderId) => this.removeFolder(folderId),
@@ -392,7 +435,7 @@ export class App {
     const now = Date.now();
     if (now - this.lastSaveWarning < 60_000) return;
     this.lastSaveWarning = now;
-    this.store.toast('Not saving: this browser is blocking storage. Turn off blocking for this site, or your map is lost on refresh.');
+    this.store.toast('Not saving. Opened from a new link, this map would be missing.');
   }
 
   private observeSize(): void {
@@ -483,7 +526,8 @@ export class App {
     await this.refreshStaleAssets();
 
     const added = await this.loadObjectLibrary();
-    if (added > 0) this.store.restructured();
+    const lifted = this.alignGridToArt();
+    if (added > 0 || lifted) this.store.restructured();
     // A brand-new project has nothing to paint with, so send the user
     // straight to the import step.
     if (this.store.doc.tilesets.length === 0) this.addTileset();
@@ -563,16 +607,60 @@ export class App {
       /* a blocked localStorage just means scene pages are checked again */
     }
 
+    // Pages already read and found to hold no terrain kits, so a project's
+    // pages are not all fetched again on every start.
+    const kitsKey = `pf-library-kits-${DETECT_VERSION}`;
+    let kitsChecked = new Set<string>();
+    try {
+      const stored = JSON.parse(localStorage.getItem(kitsKey) ?? '[]') as unknown;
+      if (Array.isArray(stored)) kitsChecked = new Set(stored.filter((name) => typeof name === 'string'));
+    } catch {
+      /* pages are read for kits again */
+    }
+
     const have = new Set([...this.store.doc.tilesets.map((sheet) => sheet.name), ...this.store.doc.removedSheets]);
     let added = this.applyLibraryHints(entries);
     let opened = this.store.doc.tilesets.length === 0;
     for (const entry of entries) {
-      if (have.has(entry.name) || skipped.has(entry.name)) continue;
+      if (skipped.has(entry.name)) continue;
+      if (have.has(entry.name)) {
+        // Projects made before kits were read get their terrain page now.
+        const sheet = this.store.doc.tilesets.find((t) => t.name === entry.name);
+        const kitName = terrainKitName(entry.name);
+        if (!sheet?.image || entry.terrain || (sheet.groundAssets?.length ?? 0) < 3 || have.has(kitName) || kitsChecked.has(entry.name)) continue;
+        const tile = typeof entry.tile === 'number' && entry.tile > 0 ? entry.tile : 48;
+        const kits = await this.kitTileset(new URL(entry.url, document.baseURI).href, kitName, tile).catch(() => null);
+        if (kits) {
+          have.add(kitName);
+          this.store.doc.tilesets.push(kits);
+          added += 1;
+          this.store.emit('library');
+        } else kitsChecked.add(entry.name);
+        continue;
+      }
       this.store.toast(`Loading ${entry.name}`);
       await new Promise((resolve) => setTimeout(resolve, 0));
       try {
+        const href = new URL(entry.url, document.baseURI).href;
+        // An RPG Maker A sheet is connected terrain, not a page of objects.
+        if (entry.terrain) {
+          const terrain = await this.terrainTileset(href, entry.name);
+          if (terrain) {
+            have.add(entry.name);
+            this.store.doc.tilesets.push(terrain);
+            added += 1;
+            if (opened) {
+              opened = false;
+              this.store.activeTileset = 0;
+              this.selectFirstTile();
+              this.shell.openTab('tiles');
+            }
+            this.store.emit('library');
+            continue;
+          }
+        }
         const tile = typeof entry.tile === 'number' && entry.tile > 0 ? entry.tile : 48;
-        const tileset = await makeTileset(new URL(entry.url, document.baseURI).href, entry.name, tile, tile);
+        const tileset = await makeTileset(href, entry.name, tile, tile);
         if (entry.props) tileset.propsOnly = true;
         if (Array.isArray(entry.assets) && entry.assets.length > 0) {
           // A page laid out by hand lists its pictures; guessing could only cut them up.
@@ -595,6 +683,17 @@ export class App {
         // only ever goes on the end; anywhere else would move every map.
         this.store.doc.tilesets.push(tileset);
         added += 1;
+        // A page of ground may hold terrain kits (a path patch and its
+        // inverse); they become a paintable terrain page beside it.
+        const kitName = terrainKitName(entry.name);
+        if ((tileset.groundAssets?.length ?? 0) >= 3 && !have.has(kitName)) {
+          const kits = await this.kitTileset(href, kitName, tile).catch(() => null);
+          if (kits) {
+            have.add(kitName);
+            this.store.doc.tilesets.push(kits);
+            added += 1;
+          } else kitsChecked.add(entry.name);
+        }
         // Show each page as it lands so the iPad is not empty for minutes.
         if (opened) {
           opened = false;
@@ -609,6 +708,7 @@ export class App {
     }
     try {
       localStorage.setItem(skipKey, JSON.stringify([...skipped]));
+      localStorage.setItem(kitsKey, JSON.stringify([...kitsChecked]));
     } catch {
       /* the pages still loaded for this visit */
     }
@@ -710,12 +810,12 @@ export class App {
       clearSheetShadows(sheet);
       clearSheetBackdrop(sheet);
     }
-    // Maps made with 16 px squares shrank every library tile to a third,
-    // which is what warped the pixels. They move onto the art's own size.
+    // A 16 px map shrinks every 48 px floor to a third, and that shrink is
+    // what blurs it. Move onto the art's own size before the first paint.
     const upgraded = upgradeTileSize(doc);
 
     this.store.doc = doc;
-    if (upgraded) this.store.toast('Map squares are now 48 px, so the art shows pixel for pixel');
+    if (upgraded) this.store.toast(`Map squares are now ${doc.tileSize} px, so the art shows pixel for pixel`);
     this.store.history.clear();
     this.store.activeTileset = 0;
     this.store.setStamp(EMPTY_STAMP);
@@ -727,6 +827,24 @@ export class App {
     this.store.restructured();
 
     if (doc.tilesets.length > 0) this.selectFirstTile();
+  }
+
+  /**
+   * Puts the map on the square size its packs were drawn at (32 px packs stay
+   * at 32; only real 48 px art moves a map to 48) and keeps the view where it
+   * was, on a zoom where each art pixel is a whole block.
+   */
+  private alignGridToArt(): boolean {
+    const before = this.store.doc.tileSize;
+    if (!upgradeTileSize(this.store.doc)) return false;
+    const k = this.store.doc.tileSize / before;
+    const cam = this.store.camera;
+    cam.x *= k;
+    cam.y *= k;
+    cam.zoom = snapZoom(cam.zoom / k);
+    this.renderer.invalidateAll();
+    this.store.toast(`Map squares are now ${this.store.doc.tileSize} px, so the art shows pixel for pixel`);
+    return true;
   }
 
   /** Starts the brush on the sheet's first floor square, if it has any. */
@@ -1001,13 +1119,21 @@ export class App {
       defaultTileSize: this.store.doc.tileSize,
       onConfirm: async (spec) => {
         try {
+          // A known terrain layout is built into working terrain, not cut up.
+          if (await this.importAutotiles(spec.src, spec.name)) return;
           const tileset = await makeTileset(spec.src, spec.name, spec.tileW, spec.tileH, spec.margin, spec.spacing);
           detectInto(tileset);
           this.editor.addTileset(tileset);
+          const kits = await this.kitTileset(spec.src, terrainKitName(spec.name), spec.tileW).catch(() => null);
+          if (kits) this.editor.addTileset(kits);
           this.store.activeTileset = this.store.doc.tilesets.length - 1;
           this.selectFirstTile();
           this.shell.openTab('tiles');
-          this.store.toast(`${tileset.name} added: ${tileset.assets!.length} assets`);
+          this.store.toast(
+            kits
+              ? `${tileset.name} added: ${tileset.assets!.length} assets, and ${kits.autotile!.materials.length} terrain materials you paint`
+              : `${tileset.name} added: ${tileset.assets!.length} assets`,
+          );
         } catch {
           this.store.toast('That image could not be imported');
         }
@@ -1090,6 +1216,166 @@ export class App {
     if (op === 'toGround') this.store.toast('Now a floor square, first on this page. Paint it with the brush or rectangle.');
     else if (op === 'toObjects') this.store.toast('Back to an object you place');
     else this.store.toast(`${label}: ${next.assets.length} left`);
+  }
+
+  /**
+   * AI Extract on a sheet in the library or a new picture. A library sheet
+   * is read again from its stored PNG, not from the picture on screen, which
+   * may have had its shadows cleaned.
+   */
+  private async aiExtract(sheetIndex: number | null): Promise<void> {
+    let source: ExtractSource;
+    try {
+      if (sheetIndex === null) {
+        const file = await pickFile('image/png,image/*');
+        if (!file) return;
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        source = await readExtractSource(bytes, file.name.replace(/\.[^.]+$/, ''));
+        source.sourceSrc = `data:${file.type || 'image/png'};base64,${bytesToBase64(bytes)}`;
+      } else {
+        const sheet = this.store.doc.tilesets[sheetIndex];
+        if (!sheet || sheet.generated) return;
+        const response = await fetch(sheet.autotile?.sourceSrc ?? sheet.src);
+        source = await readExtractSource(new Uint8Array(await response.arrayBuffer()), sheet.autotile?.sourceName ?? sheet.name, sheet.tileW);
+        source.sourceSrc = sheet.autotile?.sourceSrc ?? sheet.src;
+      }
+    } catch {
+      this.store.toast('That picture could not be read');
+      return;
+    }
+    openAiExtract(source, {
+      addToLibrary: (extraction) => this.addExtraction(extraction),
+      addAutotiles: (build) => this.addAutotileSheet(build, source.sourceSrc),
+      saveZip: async (bytes, filename) => {
+        await saveFile(new Blob([bytes as BlobPart], { type: 'application/zip' }), filename);
+      },
+      toast: (message) => this.store.toast(message),
+    });
+  }
+
+  /**
+   * Builds one library page of RPG Maker terrain, or returns null when the
+   * picture is not a layout this app can assemble (animated A1 water, or a
+   * sheet whose blocks do not join up). The caller then treats it as objects.
+   */
+  private async terrainTileset(src: string, name: string): Promise<Tileset | null> {
+    const bytes = new Uint8Array(await (await fetch(src)).arrayBuffer());
+    const source = await readExtractSource(bytes, name);
+    // The file name says which RPG Maker sheet it is; the page name is for people.
+    const file = decodeURIComponent(new URL(src).pathname.split('/').pop() ?? name);
+    const guess = guessFormat(file, source.image.width, source.image.height);
+    if (!guess?.autotiles) return null;
+    const build = buildAutotiles(source.image, guess, name);
+    if (build.sheet.materials.length === 0 || build.sheet.confidence < 0.5) return null;
+    const atlas = `data:image/png;base64,${bytesToBase64(await encodePng(build.atlas, streamZlib))}`;
+    const tileset = await makeTileset(atlas, name, build.sheet.cell, build.sheet.cell);
+    Object.assign(tileset, autotileSheetFields(build));
+    tileset.autotile = { ...build.sheet, sourceSrc: src };
+    tileset.exact = true;
+    tileset.assetsEdited = true;
+    tileset.assetsVersion = DETECT_VERSION;
+    return tileset;
+  }
+
+  /**
+   * Terrain kits on a page (a patch of one ground on another beside its
+   * inverse) built into a terrain page that shapes itself as it is painted,
+   * or null when the page has none.
+   */
+  private async kitTileset(src: string, name: string, cell: number): Promise<Tileset | null> {
+    const bytes = new Uint8Array(await (await fetch(src)).arrayBuffer());
+    const source = await readExtractSource(bytes, name);
+    const build = buildKits(source.image, cell, name);
+    if (!build) return null;
+    const atlas = `data:image/png;base64,${bytesToBase64(await encodePng(build.atlas, streamZlib))}`;
+    const tileset = await makeTileset(atlas, name, cell, cell);
+    Object.assign(tileset, autotileSheetFields(build));
+    tileset.autotile = { ...build.sheet, sourceSrc: src };
+    tileset.exact = true;
+    tileset.assetsEdited = true;
+    tileset.assetsVersion = DETECT_VERSION;
+    return tileset;
+  }
+
+  /**
+   * Recognises an RPG Maker A2, A3 or A4 sheet and adds it as terrain that
+   * shapes itself as it is painted. Returns false when the picture is
+   * something else, or its blocks do not behave like autotiles, so the
+   * ordinary import runs instead.
+   */
+  private async importAutotiles(src: string, name: string): Promise<boolean> {
+    const bytes = new Uint8Array(await (await fetch(src)).arrayBuffer());
+    const source = await readExtractSource(bytes, name);
+    const guess = guessFormat(name, source.image.width, source.image.height);
+    if (!guess) return false;
+    if (!guess.autotiles) {
+      this.store.toast(guess.note);
+      return false;
+    }
+    let names: (string | undefined)[] | undefined;
+    const { resolved } = await resolveVision();
+    if (resolved) {
+      this.store.toast(`Naming the materials with ${describeConfig(resolved.config)}…`);
+      try {
+        names = (await nameMaterials(createVisionClient(resolved.config), source.image, guess, streamZlib)).names;
+      } catch (error) {
+        this.store.toast(`Materials keep colour names: ${error instanceof Error ? error.message : 'the model could not be reached'}`);
+      }
+    }
+    const build = buildAutotiles(source.image, guess, name, names);
+    if (build.sheet.confidence < 0.5) {
+      this.store.toast(`${name} is the size of an RPG Maker sheet, but its blocks do not join up like autotiles, so it was imported as ordinary assets. AI Extract can show why.`);
+      return false;
+    }
+    await this.addAutotileSheet(build, src);
+    return true;
+  }
+
+  /** Adds built terrain to the library: one entry per material, painted as connected floor. */
+  private async addAutotileSheet(build: AutotileBuild, sourceSrc?: string): Promise<void> {
+    const { sheet } = build;
+    const src = `data:image/png;base64,${bytesToBase64(await encodePng(build.atlas, streamZlib))}`;
+    const tileset = await makeTileset(src, sheet.sourceName, sheet.cell, sheet.cell);
+    Object.assign(tileset, autotileSheetFields(build));
+    tileset.autotile = { ...sheet, ...(sourceSrc ? { sourceSrc } : {}) };
+    tileset.exact = true;
+    tileset.assetsEdited = true;
+    tileset.assetsVersion = DETECT_VERSION;
+    this.editor.addTileset(tileset);
+    this.store.activeTileset = this.store.doc.tilesets.length - 1;
+    this.selectFirstTile();
+    this.shell.openTab('tiles');
+    const flagged = sheet.materials.filter((m) => m.flags.length > 0).length;
+    const label = sheet.format.replace('rpgmaker-', 'RPG Maker ').replace(/a(\d)$/, 'A$1');
+    this.store.toast(
+      `${label}: ${sheet.materials.length} terrain materials ready. Paint them and edges and corners follow.${flagged ? ` ${flagged} flagged for a look in AI Extract.` : ''}`,
+    );
+  }
+
+  /** Adds an extraction to the library as an exact atlas sheet, ready to place and paint. */
+  private async addExtraction(extraction: Extraction): Promise<void> {
+    const { result, sheet } = extraction;
+    const atlas = packAtlas(sheet.image, result.assets, result.cell);
+    const src = `data:image/png;base64,${bytesToBase64(await encodePng(atlas.image, streamZlib))}`;
+    const names = new Set(this.store.doc.tilesets.map((t) => t.name));
+    let name = `${result.sheetName} (AI)`;
+    for (let n = 2; names.has(name); n++) name = `${result.sheetName} (AI ${n})`;
+    const tileset = await makeTileset(src, name, atlas.cell, atlas.cell);
+    const lib = librarySheet(result, atlas);
+    tileset.exact = true;
+    tileset.splitMode = 'objects';
+    tileset.assets = lib.assets;
+    tileset.groundAssets = lib.groundAssets;
+    tileset.groundBlocks = [];
+    tileset.aiAssets = lib.aiAssets;
+    tileset.propsOnly = lib.propsOnly;
+    tileset.assetsEdited = true;
+    tileset.assetsVersion = DETECT_VERSION;
+    this.editor.addTileset(tileset);
+    this.store.activeTileset = this.store.doc.tilesets.length - 1;
+    this.selectFirstTile();
+    this.shell.openTab('tiles');
+    this.store.toast(`${name}: ${lib.assets.length} assets in the library`);
   }
 
   /** Puts stickers on the Pinned page, or takes them off it. */
@@ -1177,9 +1463,16 @@ export class App {
       this.store.alignLines = null;
     } else {
       const sheet = this.store.doc.tilesets.find((t) => t.id === drag.tilesetId);
-      const base = sheet && sheet.tileW > 0 ? this.store.doc.tileSize / sheet.tileW : 1;
-      const scale = gridScale(drag.rect.w, drag.rect.h, base, this.store.doc.tileSize);
-      drag.world = this.objects.aligned(drag.rect.w * scale, drag.rect.h * scale, at.x, at.y);
+      const tile = this.store.doc.tileSize;
+      const base = sheet && sheet.tileW > 0 ? tile / sheet.tileW : 1;
+      const mode = this.store.settings.placeMode;
+      const free = mode === 'free' || (mode !== 'snap' && isSmallProp(drag.rect.w, drag.rect.h, base, tile));
+      const scale = free ? pixelScale(drag.rect.w, drag.rect.h, base) : gridScale(drag.rect.w, drag.rect.h, base, tile);
+      const w = Math.max(1, Math.round(drag.rect.w * scale));
+      const h = Math.max(1, Math.round(drag.rect.h * scale));
+      drag.world = free
+        ? this.objects.guideMove({ id: 'preview', rect: drag.rect, x: 0, y: 0, scale, rotation: 0, flipX: false, flipY: false, hueShift: 0, saturation: 1, brightness: 1, tilesetId: drag.tilesetId }, at.x, at.y, w, h, false)
+        : this.objects.aligned(w, h, at.x, at.y);
     }
     this.renderer.requestDraw();
   }
@@ -1274,6 +1567,55 @@ export class App {
    * asset's own colour, and moving it is applied as a change relative to that,
    * so every shade shifts together rather than flattening to one colour.
    */
+  /**
+   * Drop copies a tapped colour onto the selection. Match copies another
+   * object's main colour. Either way the shading stays: only the ramp moves,
+   * and the sheet the art came from is never changed.
+   */
+  private applyColorSample(sample: NonNullable<Store['colorSample']> extends (value: infer S) => void ? S : never): void {
+    const objs = this.objects.recolorable();
+    if (objs.length === 0) {
+      this.store.toast('Select an object first, then drop or match a colour');
+      return;
+    }
+    const ramp = sample.kind === 'pixel' ? shadeRampFromColor(sample.r, sample.g, sample.b) : this.rampOf(sample.obj);
+    if (ramp.length === 0) {
+      this.store.toast('That has no colour to copy');
+      return;
+    }
+    const changing = objs.filter((obj) => sample.kind === 'pixel' || sample.mode === 'drop' || obj !== sample.obj);
+    if (changing.length === 0) {
+      this.store.toast('Tap a different object to match');
+      return;
+    }
+    this.objects.beginGesture();
+    for (const obj of changing) this.objects.setRamp(obj, ramp);
+    this.objects.endGesture(sample.mode === 'match' ? 'Match colour' : 'Drop colour');
+    this.store.toast(sample.mode === 'match' ? 'Matched the colour' : 'Dropped the colour');
+  }
+
+  /** The shade ramp to copy: the object's main colour, darkest shade first. */
+  private rampOf(obj: MapObject): [number, number, number][] {
+    const sheet = this.store.doc.tilesets.find((t) => t.id === obj.tilesetId);
+    if (!sheet?.image) return [];
+    const shown = recolorToCanvas(cropAsset(sheet.image, obj.rect), {
+      hueShift: obj.shadeRamp ? 0 : obj.hueShift,
+      saturation: obj.shadeRamp ? 1 : obj.saturation,
+      brightness: obj.shadeRamp ? 1 : obj.brightness,
+      contrast: obj.contrast ?? 1,
+      clarity: obj.clarity ?? 0,
+      shadeRamp: obj.shadeRamp,
+    });
+    const ctx = shown.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return [];
+    const data = ctx.getImageData(0, 0, shown.width, shown.height).data;
+    const ramp = shadeRampFromPixels(data);
+    if (ramp.length > 0) return ramp;
+    const color = dominantColor(shown);
+    const [r, g, b] = hsvToRgb(color);
+    return shadeRampFromColor(r, g, b);
+  }
+
   private recolorObject(anchor: HTMLElement): void {
     const objs = this.objects.recolorable();
     if (objs.length === 0) return;
@@ -1466,7 +1808,8 @@ export class App {
     this.fit();
     await this.saveOpenMap().catch(() => this.warnNotSaving());
     void this.loadObjectLibrary().then((added) => {
-      if (added > 0) this.store.restructured();
+      const lifted = this.alignGridToArt();
+      if (added > 0 || lifted) this.store.restructured();
     });
   }
 
@@ -1494,7 +1837,8 @@ export class App {
       await this.saveMapIndex();
       void this.refreshStaleAssets();
       void this.loadObjectLibrary().then((added) => {
-        if (added > 0) this.store.restructured();
+        const lifted = this.alignGridToArt();
+        if (added > 0 || lifted) this.store.restructured();
       });
       this.store.toast(`Opened ${entry.name}`);
     } catch {

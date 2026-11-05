@@ -1,12 +1,14 @@
 import { CANVAS_PRESETS, activeReference } from '../character/model';
 import type { PixelTool, Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
+import { assetIsGround, assetsOf } from '../core/assets';
+import { objectSize } from '../core/doc';
 import { flipStampH, flipStampV, rotateStampCW, type Stamp } from '../core/stamp';
 import type { Shape, Store, ToolId } from '../core/store';
 import { stepZoom, zoomAt } from '../render/camera';
 import type { Renderer } from '../render/renderer';
 import type { Editor } from '../tools/edit';
-import type { ObjectTools } from '../tools/objects';
+import { isSmallProp, type ObjectTools } from '../tools/objects';
 import type { CharacterPanel } from './character-panel';
 import { button, clear, el } from './dom';
 import { icon, type IconName } from './icons';
@@ -24,6 +26,7 @@ export interface ShellActions {
   dragMove: PaletteActions['dragMove'];
   dragEnd: PaletteActions['dragEnd'];
   editAssets: PaletteActions['editAssets'];
+  aiExtract: PaletteActions['aiExtract'];
   setPinned: PaletteActions['setPinned'];
   fileAssets: PaletteActions['fileAssets'];
   removeFolder: PaletteActions['removeFolder'];
@@ -117,6 +120,7 @@ export class Shell {
       dragMove: actions.dragMove,
       dragEnd: actions.dragEnd,
       editAssets: actions.editAssets,
+      aiExtract: actions.aiExtract,
       setPinned: actions.setPinned,
       fileAssets: actions.fileAssets,
       removeFolder: actions.removeFolder,
@@ -473,12 +477,34 @@ export class Shell {
           this.renderer.requestDraw();
         }),
         el('div', { class: 'divider vertical' }),
-        el('span', { class: 'chip-label', text: `${Math.round(found.obj.scale * 100)}%` }),
+        el('span', { class: 'chip-label', text: `${objectSize(found.obj).w}×${objectSize(found.obj).h}` }),
+        guard(this.selectionChip('minus', 'Smaller by one pixel', () => this.objects.stepSize(found.obj, -1), '', '−')),
+        guard(this.selectionChip('plus', 'Bigger by one pixel', () => this.objects.stepSize(found.obj, 1), '', '+')),
+        ...this.placeModeChips(!!found.obj.freeform, (free) => this.objects.setFreeform(found.obj, free)),
+        ...(found.obj.freeform
+          ? [
+              this.chipToggle('grid', 'Magnet', this.store.settings.snapToNeighbours, () => {
+                this.store.settings.snapToNeighbours = !this.store.settings.snapToNeighbours;
+                this.store.toast(this.store.settings.snapToNeighbours ? 'Edges snap together' : 'Edges will not snap');
+                this.refreshChrome();
+              }),
+            ]
+          : []),
         el('div', { class: 'divider vertical' }),
         guard(this.selectionChip('rotate', 'Rotate', () => this.objects.rotate())),
         guard(this.selectionChip('flipH', 'Flip across', () => this.objects.flipAcross())),
         guard(this.selectionChip('flipV', 'Flip down', () => this.objects.flipDown())),
         guard(recolor),
+        this.chipToggle('picker', 'Drop', this.store.colorPick === 'drop', () => {
+          this.store.colorPick = this.store.colorPick === 'drop' ? null : 'drop';
+          this.store.toast(this.store.colorPick ? 'Tap an object, or a pixel on the map' : 'Cancelled');
+          this.refreshChrome();
+        }),
+        this.chipToggle('layers', 'Match', this.store.colorPick === 'match', () => {
+          this.store.colorPick = this.store.colorPick === 'match' ? null : 'match';
+          this.store.toast(this.store.colorPick ? 'Tap the object whose colour you want' : 'Cancelled');
+          this.refreshChrome();
+        }),
         el('div', { class: 'divider vertical' }),
         this.orderGroup(locked),
         el('div', { class: 'divider vertical' }),
@@ -582,6 +608,20 @@ export class Shell {
         this.selectionChip('check', 'Done: put the picked asset away', () => this.putAway(), 'primary-chip', 'Done'),
         el('div', { class: 'divider vertical' }),
       );
+      const sheet = store.doc.tilesets.find((t) => t.id === store.libraryPick?.tilesetId);
+      const rect = sheet ? assetsOf(sheet)[store.libraryPick.index] : undefined;
+      if (sheet && rect && !assetIsGround(sheet, store.libraryPick.index)) {
+        const base = sheet.tileW > 0 ? store.doc.tileSize / sheet.tileW : 1;
+        const mode = store.settings.placeMode;
+        const free = mode === 'free' || (mode !== 'snap' && isSmallProp(rect.w, rect.h, base, store.doc.tileSize));
+        chips.push(
+          ...this.placeModeChips(free, (next) => {
+            store.settings.placeMode = next ? 'free' : 'snap';
+            this.refreshChrome();
+          }),
+          el('div', { class: 'divider vertical' }),
+        );
+      }
     }
 
     if (store.tool === 'eraser') {
@@ -650,6 +690,25 @@ export class Shell {
         store.settings.showGrid = !store.settings.showGrid;
         store.emit('ui');
         store.emit('doc');
+      }),
+      this.chipToggle('grid', 'Snap', store.settings.mapSnap, () => {
+        store.settings.mapSnap = !store.settings.mapSnap;
+        store.toast(store.settings.mapSnap ? 'Map edges snap to whole squares' : 'Map edges stop on any square count');
+        store.emit('ui');
+      }),
+      this.chipToggle('grid', 'Even', store.settings.mapEven, () => {
+        store.settings.mapEven = !store.settings.mapEven;
+        store.toast(store.settings.mapEven ? 'Width and height stay even' : 'Odd sizes allowed');
+        store.emit('ui');
+      }),
+      this.chipToggle(store.doc.sizeLocked ? 'lock' : 'unlock', 'Lock', !!store.doc.sizeLocked, () => {
+        const locking = !store.doc.sizeLocked;
+        this.editor.structural(locking ? 'Lock map size' : 'Unlock map size', () => {
+          if (locking) store.doc.sizeLocked = true;
+          else delete store.doc.sizeLocked;
+        });
+        store.toast(locking ? 'Map size locked' : 'Map size unlocked');
+        this.renderer.requestDraw();
       }),
     );
 
@@ -733,6 +792,21 @@ export class Shell {
       this.store.setStamp(next, selection);
       this.renderer.requestDraw();
     }, [icon(name, 17)]);
+  }
+
+  /** Snap lines an object up with the squares. Free lets it sit on any pixel, including on a counter. */
+  private placeModeChips(free: boolean, setFree: (free: boolean) => void): HTMLElement[] {
+    const chip = (label: string, on: boolean, chooseFree: boolean) =>
+      button(`chip${on ? ' active' : ''}`, label, () => {
+        if (on) return;
+        setFree(chooseFree);
+        this.refreshChrome();
+        this.renderer.requestDraw();
+      }, [el('span', { class: 'chip-text', text: label })]);
+    return [
+      chip('Snap', !free, false),
+      chip('Free', free, true),
+    ];
   }
 
   private chipToggle(name: IconName, label: string, active: boolean, onPress: () => void): HTMLElement {

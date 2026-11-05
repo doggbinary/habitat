@@ -1,6 +1,7 @@
 import {
   createObjectLayer,
   isObjectLayer,
+  mapOrigin,
   objectSize,
   spanOffset,
   spanSquares,
@@ -13,6 +14,8 @@ import {
 import { snapshot, type DocSnapshot } from '../core/history';
 import type { Camera, Store } from '../core/store';
 import type { Renderer } from '../render/renderer';
+import { imagePixels, opaqueInsets } from '../render/floor-edges';
+import { smartGuides, resizeSnap, type GuideBox } from './guides';
 /** Smallest and largest an object may be scaled to. */
 export const MIN_SCALE = 0.1;
 export const MAX_SCALE = 16;
@@ -55,6 +58,37 @@ export function gridScale(rectW: number, rectH: number, requested: number, tile:
   const squares = gridSquares(wide * Math.max(0, requested), tile);
   const next = (squares * tile) / wide;
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
+}
+
+/**
+ * Scale that makes both sides a whole number of pixels, as close as possible
+ * to the size asked for. A crock pot can be 18 px wide instead of a full square,
+ * and every pixel stays a whole pixel.
+ */
+export function pixelScale(rectW: number, rectH: number, requested: number): number {
+  const rw = Math.max(1, rectW);
+  const rh = Math.max(1, rectH);
+  const want = Math.max(0, requested);
+  const wantW = Math.max(1, Math.round(rw * want));
+  let best = wantW / rw;
+  let bestMiss = Infinity;
+  for (let dw = Math.max(1, wantW - 4); dw <= wantW + 4; dw++) {
+    const scale = dw / rw;
+    const dh = rh * scale;
+    if (Math.abs(dh - Math.round(dh)) > 1e-4) continue;
+    const miss = Math.abs(dw - rw * want) + Math.abs(Math.round(dh) - rh * want);
+    if (miss < bestMiss) {
+      bestMiss = miss;
+      best = scale;
+    }
+  }
+  const min = 1 / Math.max(rw, rh);
+  return Math.max(min, Math.min(MAX_SCALE, best));
+}
+
+/** True when this artwork, drawn like the sheet's tiles, is smaller than one map square. */
+export function isSmallProp(rectW: number, rectH: number, base: number, tile: number): boolean {
+  return Math.max(rectW, rectH, 1) * Math.max(0, base) < tile - 0.01;
 }
 
 /**
@@ -221,7 +255,9 @@ export function scaleGroup(start: GroupScaleStart, factor: number, tile: number)
     const { w, h } = objectSize(item.obj);
     const left = box.x + (item.left - box.x) * f;
     const top = box.y + (item.top - box.y) * f;
-    const at = snapToGrid(w, h, left + w / 2, top + h / 2, tile);
+    const at = item.obj.freeform
+      ? onWholePixels(w, h, left + w / 2, top + h / 2)
+      : snapToGrid(w, h, left + w / 2, top + h / 2, tile);
     item.obj.x = at.x;
     item.obj.y = at.y;
   }
@@ -425,14 +461,22 @@ export class ObjectTools {
   }
 
   /** Moves the asset under the finger and anything else in the selection by the same amount. */
-  moveSelected(anchor: MapObject, wx: number, wy: number): void {
+  moveSelected(anchor: MapObject, wx: number, wy: number, snapOff = false): void {
     if (anchor.locked) return;
     const beforeX = anchor.x;
     const beforeY = anchor.y;
     const { w, h } = objectSize(anchor);
-    const next = this.aligned(w, h, wx, wy, anchor.id);
-    anchor.x = next.x;
-    anchor.y = next.y;
+    if (anchor.freeform) {
+      const raw = onWholePixels(w, h, wx, wy);
+      const guided = this.guideMove(anchor, raw.x, raw.y, w, h, snapOff);
+      anchor.x = guided.x;
+      anchor.y = guided.y;
+    } else {
+      const next = this.aligned(w, h, wx, wy, anchor.id);
+      anchor.x = next.x;
+      anchor.y = next.y;
+      this.store.alignLines = null;
+    }
     this.keepOnMap(anchor);
     const dx = anchor.x - beforeX;
     const dy = anchor.y - beforeY;
@@ -495,12 +539,19 @@ export class ObjectTools {
    */
   place(tilesetId: string, rect: AssetRect, wx: number, wy: number): void {
     const sheet = this.doc.tilesets.find((t) => t.id === tilesetId);
-    const base = sheet && sheet.tileW > 0 ? this.doc.tileSize / sheet.tileW : 1;
-    const scale = gridScale(rect.w, rect.h, base, this.doc.tileSize);
+    const tile = this.doc.tileSize;
+    const base = sheet && sheet.tileW > 0 ? tile / sheet.tileW : 1;
+    const small = isSmallProp(rect.w, rect.h, base, tile);
+    const mode = this.store.settings.placeMode;
+    const free = mode === 'free' || (mode !== 'snap' && small);
+    // A small prop keeps the size it was drawn, matching the sheet's tiles.
+    // Padding it up to a whole square is what made pots too big for a counter.
+    const scale = free ? pixelScale(rect.w, rect.h, base) : gridScale(rect.w, rect.h, base, tile);
+    const sized = objectSize({ rect, scale, rotation: 0 } as MapObject);
 
     const before = snapshot(this.doc);
     const layer = this.targetLayer();
-    const at = snapToGrid(rect.w * scale, rect.h * scale, wx, wy, this.doc.tileSize);
+    const at = free ? onWholePixels(sized.w, sized.h, wx, wy) : snapToGrid(sized.w, sized.h, wx, wy, tile);
     this.store.alignLines = null;
     const obj: MapObject = {
       id: uid('obj'),
@@ -515,6 +566,7 @@ export class ObjectTools {
       hueShift: 0,
       saturation: 1,
       brightness: 1,
+      ...(free ? { freeform: true } : {}),
     };
     this.keepOnMap(obj);
     layer.objects.push(obj);
@@ -576,10 +628,37 @@ export class ObjectTools {
   moveTo(obj: MapObject, wx: number, wy: number): void {
     if (obj.locked) return;
     const { w, h } = objectSize(obj);
-    const next = this.aligned(w, h, wx, wy, obj.id);
+    const next = obj.freeform ? onWholePixels(w, h, wx, wy) : this.aligned(w, h, wx, wy, obj.id);
     obj.x = next.x;
     obj.y = next.y;
     this.renderer.requestDraw();
+  }
+
+  /** Snap this object onto squares, or let it sit on any pixel. Also sets how the next one is placed. */
+  setFreeform(obj: MapObject, free: boolean): void {
+    if (obj.locked) return;
+    this.store.settings.placeMode = free ? 'free' : 'snap';
+    if (free) obj.freeform = true;
+    else delete obj.freeform;
+    const { w, h } = objectSize(obj);
+    if (free) {
+      const at = onWholePixels(w, h, obj.x, obj.y);
+      obj.scale = pixelScale(obj.rect.w, obj.rect.h, obj.scale);
+      const sized = objectSize(obj);
+      const pixel = onWholePixels(sized.w, sized.h, at.x, at.y);
+      obj.x = pixel.x;
+      obj.y = pixel.y;
+    } else {
+      const next = gridScale(obj.rect.w, obj.rect.h, obj.scale, this.doc.tileSize);
+      obj.scale = next;
+      const sized = objectSize(obj);
+      const at = snapToGrid(sized.w, sized.h, obj.x, obj.y, this.doc.tileSize);
+      obj.x = at.x;
+      obj.y = at.y;
+    }
+    this.renderer.requestDraw();
+    this.store.emit('ui');
+    this.store.toast(free ? 'Freeform: it sits on any pixel' : 'Snap: it lines up with the squares');
   }
 
   /**
@@ -593,17 +672,46 @@ export class ObjectTools {
   }
 
   /**
+   * Corner resize for a free object. The top-left stays put, the size lands
+   * on whole pixels, and a close edge snaps onto a neighbour.
+   */
+  resizeFree(obj: MapObject, scale: number, anchorLeft: number, anchorTop: number, snapOff = false): void {
+    if (obj.locked || !obj.freeform) return;
+    const wide = Math.max(obj.rect.w, obj.rect.h, 1);
+    let next = pixelScale(obj.rect.w, obj.rect.h, Math.max(1 / wide, Math.min(MAX_SCALE, scale)));
+    obj.scale = next;
+    this.pinCorner(obj, anchorLeft, anchorTop);
+    if (this.store.settings.snapToNeighbours && !snapOff) {
+      const box = this.artBox(obj);
+      const snapped = resizeSnap(box, this.neighbourBoxes(obj), this.mapWidth(), this.mapHeight());
+      if (snapped && snapped.width > 0) {
+        next = pixelScale(obj.rect.w, obj.rect.h, snapped.width / Math.max(1, obj.rect.w));
+        obj.scale = next;
+        this.pinCorner(obj, anchorLeft, anchorTop);
+        this.store.alignLines = { vertical: snapped.vertical, horizontal: snapped.horizontal, labels: [] };
+      }
+    }
+    this.keepOnMap(obj);
+    this.renderer.requestDraw();
+    this.store.emit('ui');
+  }
+
+  /**
    * Grows or shrinks in whole map squares, measured on the longer side.
    * The art stays centred in the squares it covers.
    */
   scaleTo(obj: MapObject, scale: number): void {
     if (obj.locked) return;
-    const clamped = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
-    const next = gridScale(obj.rect.w, obj.rect.h, clamped, this.doc.tileSize);
+    const wide = Math.max(obj.rect.w, obj.rect.h, 1);
+    const min = obj.freeform ? 1 / wide : MIN_SCALE;
+    const clamped = Math.max(min, Math.min(MAX_SCALE, scale));
+    const tile = this.doc.tileSize;
+    const usePixels = !!obj.freeform || wide * clamped < tile;
+    const next = usePixels ? pixelScale(obj.rect.w, obj.rect.h, clamped) : gridScale(obj.rect.w, obj.rect.h, clamped, tile);
     if (next === obj.scale) return;
-    const size = objectSize({ ...obj, scale: next });
-    const at = snapToGrid(size.w, size.h, obj.x, obj.y, this.doc.tileSize);
     obj.scale = next;
+    const size = objectSize(obj);
+    const at = obj.freeform ? onWholePixels(size.w, size.h, obj.x, obj.y) : snapToGrid(size.w, size.h, obj.x, obj.y, tile);
     obj.x = at.x;
     obj.y = at.y;
     this.keepOnMap(obj);
@@ -611,17 +719,107 @@ export class ObjectTools {
     this.store.emit('ui');
   }
 
-  /** One map square bigger or smaller, measured on the longer side. */
+  /**
+   * One step bigger or smaller. Freeform, and anything under a square, steps
+   * by a single pixel. Snapped furniture steps by one map square.
+   */
   stepSize(obj: MapObject, squares: number): void {
     const tile = this.doc.tileSize;
     const wide = Math.max(obj.rect.w, obj.rect.h, 1);
-    const now = gridSquares(wide * obj.scale, tile);
+    const pixels = Math.round(wide * obj.scale);
+    if (obj.freeform || pixels < tile) {
+      this.scaleTo(obj, Math.max(1, pixels + squares) / wide);
+      return;
+    }
+    const now = gridSquares(pixels, tile);
     this.scaleTo(obj, (Math.max(1, now + squares) * tile) / wide);
   }
 
   private keepOnMap(obj: MapObject): void {
     const tile = this.doc.tileSize;
-    keepTouchingMap(obj, this.doc.width * tile, this.doc.height * tile, tile);
+    const origin = mapOrigin(this.doc);
+    const mapW = this.mapWidth();
+    const mapH = this.mapHeight();
+    if (obj.freeform) {
+      const { w, h } = objectSize(obj);
+      const keep = Math.min(8, w, h);
+      let left = obj.x - w / 2;
+      let top = obj.y - h / 2;
+      left = Math.max(origin.x + keep - w, Math.min(origin.x + mapW - keep, left));
+      top = Math.max(origin.y + keep - h, Math.min(origin.y + mapH - keep, top));
+      const at = onWholePixels(w, h, left + w / 2, top + h / 2);
+      obj.x = at.x;
+      obj.y = at.y;
+      return;
+    }
+    obj.x -= origin.x;
+    obj.y -= origin.y;
+    keepTouchingMap(obj, mapW, mapH, tile);
+    obj.x += origin.x;
+    obj.y += origin.y;
+  }
+
+  private mapWidth(): number {
+    return this.doc.width * this.doc.tileSize;
+  }
+
+  private mapHeight(): number {
+    return this.doc.height * this.doc.tileSize;
+  }
+
+  /** Where a free object of this size should sit, snapped to neighbours when Magnet is on. */
+  guideMove(obj: MapObject, x: number, y: number, w: number, h: number, snapOff: boolean): { x: number; y: number } {
+    const box = this.artBox({ ...obj, x, y });
+    const magnet = this.store.settings.snapToNeighbours && !snapOff && this.store.settings.alignGuides;
+    const origin = mapOrigin(this.doc);
+    const guide = smartGuides(box, this.neighbourBoxes(obj), this.mapWidth(), this.mapHeight(), magnet, undefined, origin.x, origin.y);
+    const at = onWholePixels(w, h, x + guide.dx, y + guide.dy);
+    const settled = this.artBox({ ...obj, x: at.x, y: at.y });
+    const shown = smartGuides(settled, this.neighbourBoxes(obj), this.mapWidth(), this.mapHeight(), false, undefined, origin.x, origin.y);
+    this.store.alignLines = {
+      vertical: guide.vertical.length ? guide.vertical : shown.vertical,
+      horizontal: guide.horizontal.length ? guide.horizontal : shown.horizontal,
+      labels: shown.labels,
+    };
+    return at;
+  }
+
+  private pinCorner(obj: MapObject, left: number, top: number): void {
+    const { w, h } = objectSize(obj);
+    obj.x = left + w / 2;
+    obj.y = top + h / 2;
+  }
+
+  private artBox(obj: MapObject): GuideBox {
+    const { w, h } = objectSize(obj);
+    const full = { left: obj.x - w / 2, top: obj.y - h / 2, right: obj.x + w / 2, bottom: obj.y + h / 2 };
+    const sheet = this.doc.tilesets.find((t) => t.id === obj.tilesetId);
+    if (!sheet?.image || obj.rotation % 2 === 1 || obj.rect.w <= 0 || obj.rect.h <= 0) return full;
+    const pixels = imagePixels(sheet.image);
+    if (!pixels) return full;
+    const inset = opaqueInsets(pixels.data, pixels.width, obj.rect.x, obj.rect.y, obj.rect.w, obj.rect.h);
+    const sx = w / obj.rect.w;
+    const sy = h / obj.rect.h;
+    const box = {
+      left: full.left + inset.l * sx,
+      top: full.top + inset.t * sy,
+      right: full.right - inset.r * sx,
+      bottom: full.bottom - inset.b * sy,
+    };
+    if (box.right - box.left < 1 || box.bottom - box.top < 1) return full;
+    return box;
+  }
+
+  private neighbourBoxes(anchor: MapObject): GuideBox[] {
+    const boxes: GuideBox[] = [];
+    for (const layer of this.doc.layers) {
+      if (!isObjectLayer(layer) || !layer.visible) continue;
+      for (const obj of layer.objects) {
+        if (obj === anchor || obj.id === anchor.id) continue;
+        boxes.push(this.artBox(obj));
+      }
+    }
+    return boxes;
   }
 
   /** Every unlocked asset in the selection, or just the selected one. */
@@ -636,6 +834,16 @@ export class ObjectTools {
     obj.hueShift = color.hueShift;
     obj.saturation = color.saturation;
     obj.brightness = color.brightness;
+    delete obj.shadeRamp;
+    this.renderer.requestDraw();
+  }
+
+  /** Match or Drop: the main colour takes this ramp, darkest stop first. */
+  setRamp(obj: MapObject, ramp: [number, number, number][]): void {
+    obj.shadeRamp = ramp;
+    obj.hueShift = 0;
+    obj.saturation = 1;
+    obj.brightness = 1;
     this.renderer.requestDraw();
   }
 
@@ -687,6 +895,7 @@ export class ObjectTools {
       obj.hueShift = 0;
       obj.saturation = 1;
       obj.brightness = 1;
+      delete obj.shadeRamp;
       delete obj.contrast;
       delete obj.clarity;
     });
@@ -722,6 +931,7 @@ export class ObjectTools {
       obj.hueShift = 0;
       obj.saturation = 1;
       obj.brightness = 1;
+      delete obj.shadeRamp;
       delete obj.contrast;
       delete obj.clarity;
     });
@@ -811,7 +1021,7 @@ export class ObjectTools {
         group = newGroups.get(groupId) ?? uid('group');
         newGroups.set(groupId, group);
       }
-      const at = snapToGrid(w, h, obj.x + dx, obj.y, tile);
+      const at = obj.freeform ? onWholePixels(w, h, obj.x + Math.max(4, Math.round(w / 3)), obj.y) : snapToGrid(w, h, obj.x + dx, obj.y, tile);
       const copy: MapObject = {
         ...rest,
         ...(group ? { groupId: group } : {}),

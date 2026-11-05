@@ -14,7 +14,7 @@ import {
   type TileLayer,
   type Tileset,
 } from '../core/doc';
-import { snapshot, Stroke, type DocSnapshot } from '../core/history';
+import { restoreDoc, snapshot, Stroke, type DocSnapshot } from '../core/history';
 import { dropTilesets } from '../core/path-merge';
 import { packOf } from '../ui/packs';
 import {
@@ -29,8 +29,10 @@ import {
 } from '../core/stamp';
 import type { Store } from '../core/store';
 import { EMPTY, type PackedTile } from '../core/tiles';
+import { sameTerrain, shapedTile, terrainOf } from '../core/autotile';
 import type { Renderer } from '../render/renderer';
 import { normalizeRect, type Cell, type Rect } from './geometry';
+import { resizePlan, type MapHandle, type ResizePlan } from './map-resize';
 
 /**
  * All map mutations funnel through here so every edit is recorded for undo and
@@ -40,6 +42,15 @@ export class Editor {
   private stroke: Stroke | null = null;
   /** Document state captured when an image drag starts, for a single undo step. */
   private imageBefore: DocSnapshot | null = null;
+  /** Tile buffers from before a map-edge drag, so the drag can be scrubbed. */
+  private mapResize: {
+    before: DocSnapshot;
+    w: number;
+    h: number;
+    originCol: number;
+    originRow: number;
+    tiles: { id: string; data: Int32Array }[];
+  } | null = null;
 
   constructor(
     private readonly store: Store,
@@ -142,6 +153,25 @@ export class Editor {
     layer.data[index] = tile;
     stroke?.record(index, before, tile);
     this.renderer.markCell(layer.id, x, y);
+    // Terrain picks its shape from its neighbours, so a change here can
+    // change this cell and every cell around it.
+    if (!this.reshaping && (terrainOf(this.doc, before) || terrainOf(this.doc, tile))) this.reshapeAround(layer, x, y, stroke);
+  }
+
+  private reshaping = false;
+
+  private reshapeAround(layer: TileLayer, x: number, y: number, stroke: Stroke | null): void {
+    this.reshaping = true;
+    try {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const shaped = shapedTile(this.doc, layer, x + dx, y + dy);
+          if (shaped !== null) this.put(layer, x + dx, y + dy, shaped, stroke);
+        }
+      }
+    } finally {
+      this.reshaping = false;
+    }
   }
 
   // --- Selection ------------------------------------------------------------
@@ -415,7 +445,7 @@ export class Editor {
 
     const target = layer.data[cellIndex(doc, x, y)];
     const singleReplacement = erasing ? EMPTY : stamp.w === 1 && stamp.h === 1 ? stamp.tiles[0] : null;
-    if (singleReplacement !== null && singleReplacement === target) return;
+    if (singleReplacement !== null && sameTerrain(doc, singleReplacement, target)) return;
 
     const seen = new Uint8Array(doc.width * doc.height);
     const stack: number[] = [cellIndex(doc, x, y)];
@@ -437,7 +467,8 @@ export class Editor {
         if (!inBounds(doc, nx, ny)) return;
         const ni = cellIndex(doc, nx, ny);
         if (seen[ni]) return;
-        if (layer.data[ni] !== target) return;
+        // Terrain cells of one material show different shapes but are one area.
+        if (!sameTerrain(doc, layer.data[ni], target)) return;
         seen[ni] = 1;
         stack.push(ni);
       };
@@ -675,8 +706,110 @@ export class Editor {
     });
   }
 
+  /** Remembers the map so an edge drag can grow or shrink it as one undo step. */
+  beginMapResize(): void {
+    if (this.doc.sizeLocked) return;
+    const doc = this.doc;
+    this.mapResize = {
+      before: snapshot(doc),
+      w: doc.width,
+      h: doc.height,
+      originCol: doc.originCol ?? 0,
+      originRow: doc.originRow ?? 0,
+      tiles: doc.layers.flatMap((layer) => (isTileLayer(layer) ? [{ id: layer.id, data: layer.data.slice() }] : [])),
+    };
+  }
+
+  /** Applies a live size. Existing squares stay on their world columns and rows. */
+  previewMapResize(handle: MapHandle, world: { x: number; y: number }): void {
+    const base = this.mapResize;
+    if (!base) return;
+    const doc = this.doc;
+    const plan = resizePlan(
+      { w: base.w, h: base.h, originCol: base.originCol, originRow: base.originRow },
+      handle,
+      world,
+      doc.tileSize,
+      this.store.settings.mapSnap,
+      this.store.settings.mapEven,
+    );
+    this.applyMapPlan(base, plan);
+    this.store.mapSizeText = `${plan.w} × ${plan.h}`;
+    this.store.emit('ui');
+    this.renderer.invalidateAll();
+    this.renderer.requestDraw();
+  }
+
+  private applyMapPlan(
+    base: NonNullable<Editor['mapResize']>,
+    plan: ResizePlan,
+  ): void {
+    const doc = this.doc;
+    doc.width = plan.w;
+    doc.height = plan.h;
+    const originCol = base.originCol - plan.shiftX;
+    const originRow = base.originRow - plan.shiftY;
+    if (originCol) doc.originCol = originCol;
+    else delete doc.originCol;
+    if (originRow) doc.originRow = originRow;
+    else delete doc.originRow;
+    for (const layer of doc.layers) {
+      if (!isTileLayer(layer)) continue;
+      const saved = base.tiles.find((item) => item.id === layer.id);
+      if (!saved) continue;
+      layer.data = resizedLayerData(
+        { ...layer, data: saved.data },
+        base.w,
+        base.h,
+        plan.w,
+        plan.h,
+        plan.shiftX,
+        plan.shiftY,
+      );
+    }
+  }
+
+  /** Records the drag if the map actually changed. */
+  endMapResize(): void {
+    const base = this.mapResize;
+    this.mapResize = null;
+    this.store.mapSizeText = null;
+    if (!base) return;
+    const doc = this.doc;
+    const same =
+      doc.width === base.w &&
+      doc.height === base.h &&
+      (doc.originCol ?? 0) === base.originCol &&
+      (doc.originRow ?? 0) === base.originRow;
+    if (same) {
+      restoreDoc(doc, base.before);
+      this.renderer.invalidateAll();
+      this.renderer.requestDraw();
+      return;
+    }
+    this.store.history.commitSnapshot('Resize map', base.before);
+    this.store.restructured();
+    this.renderer.invalidateAll();
+    this.renderer.requestDraw();
+  }
+
+  /** Drops a drag that the system cancelled, putting the map back. */
+  cancelMapResize(): void {
+    const base = this.mapResize;
+    this.mapResize = null;
+    this.store.mapSizeText = null;
+    if (!base) return;
+    restoreDoc(this.doc, base.before);
+    this.renderer.invalidateAll();
+    this.renderer.requestDraw();
+  }
+
   resizeMap(width: number, height: number): void {
     const doc = this.doc;
+    if (doc.sizeLocked) {
+      this.store.toast('The map size is locked');
+      return;
+    }
     if (width === doc.width && height === doc.height) return;
     this.structural('Resize map', () => {
       for (const layer of doc.layers) {
