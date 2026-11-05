@@ -58,6 +58,17 @@ describe('placing', () => {
     expect(tools.selected()?.obj.scale).toBe(0.5);
   });
 
+  it('drops a prop smaller than one square at its real size, between the grid lines', () => {
+    store.doc.tileSize = 32;
+    store.doc.tilesets = [fakeTileset('room', 32)];
+    tools.place('room', { x: 0, y: 0, w: 18, h: 14 }, 50, 40);
+    const obj = tools.selected()?.obj;
+    expect(obj?.freeform).toBe(true);
+    expect(objectSize(obj!)).toEqual({ w: 18, h: 14 });
+    expect(obj!.x).toBe(50);
+    expect(obj!.y).toBe(40);
+  });
+
   it('can be undone', () => {
     tools.place('a', { x: 0, y: 0, w: 16, h: 16 }, 50, 60);
     store.history.undo();
@@ -96,9 +107,9 @@ describe('resizing', () => {
     const [obj] = withObjects(fakeObject());
     tools.scaleTo(obj, 1000);
     expect(obj.scale).toBe(MAX_SCALE);
-    // Never smaller than half the art: below that pixel art loses rows.
+    // Below one square the size steps in whole pixels, not in whole squares.
     tools.scaleTo(obj, 0);
-    expect(obj.scale).toBe(0.5);
+    expect(objectSize(obj).h).toBe(4);
     expect(obj.scale).toBeGreaterThanOrEqual(MIN_SCALE);
   });
 

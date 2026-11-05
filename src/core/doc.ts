@@ -161,6 +161,11 @@ export interface MapObject {
   door?: { x: number; y: number };
   /** When set, the asset stays where it was dropped until it is unlocked. */
   locked?: boolean;
+  /**
+   * Placed on any pixel, not centred in map squares. Small props start this
+   * way so a pot can sit on a counter between the grid lines.
+   */
+  freeform?: boolean;
   /** Assets that share an id move and select together. */
   groupId?: string;
 }
@@ -238,8 +243,8 @@ export function createObjectLayer(name = 'Objects'): ObjectLayer {
 
 /** On-screen footprint of an object in world pixels, after turning and scaling. */
 export function objectSize(obj: MapObject): { w: number; h: number } {
-  const w = obj.rect.w * obj.scale;
-  const h = obj.rect.h * obj.scale;
+  const w = Math.max(1, Math.round(obj.rect.w * obj.scale));
+  const h = Math.max(1, Math.round(obj.rect.h * obj.scale));
   return obj.rotation % 2 === 1 ? { w: h, h: w } : { w, h };
 }
 

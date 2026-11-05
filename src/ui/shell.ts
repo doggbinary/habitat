@@ -1,12 +1,14 @@
 import { CANVAS_PRESETS, activeReference } from '../character/model';
 import type { PixelTool, Studio } from '../character/studio';
 import type { CharacterView } from '../character/view';
+import { assetIsGround, assetsOf } from '../core/assets';
+import { objectSize } from '../core/doc';
 import { flipStampH, flipStampV, rotateStampCW, type Stamp } from '../core/stamp';
 import type { Shape, Store, ToolId } from '../core/store';
 import { stepZoom, zoomAt } from '../render/camera';
 import type { Renderer } from '../render/renderer';
 import type { Editor } from '../tools/edit';
-import type { ObjectTools } from '../tools/objects';
+import { isSmallProp, type ObjectTools } from '../tools/objects';
 import type { CharacterPanel } from './character-panel';
 import { button, clear, el } from './dom';
 import { icon, type IconName } from './icons';
@@ -475,7 +477,10 @@ export class Shell {
           this.renderer.requestDraw();
         }),
         el('div', { class: 'divider vertical' }),
-        el('span', { class: 'chip-label', text: `${Math.round(found.obj.scale * 100)}%` }),
+        el('span', { class: 'chip-label', text: `${objectSize(found.obj).w}×${objectSize(found.obj).h}` }),
+        guard(this.selectionChip('minus', 'Smaller by one pixel', () => this.objects.stepSize(found.obj, -1), '', '−')),
+        guard(this.selectionChip('plus', 'Bigger by one pixel', () => this.objects.stepSize(found.obj, 1), '', '+')),
+        ...this.placeModeChips(!!found.obj.freeform, (free) => this.objects.setFreeform(found.obj, free)),
         el('div', { class: 'divider vertical' }),
         guard(this.selectionChip('rotate', 'Rotate', () => this.objects.rotate())),
         guard(this.selectionChip('flipH', 'Flip across', () => this.objects.flipAcross())),
@@ -584,6 +589,20 @@ export class Shell {
         this.selectionChip('check', 'Done: put the picked asset away', () => this.putAway(), 'primary-chip', 'Done'),
         el('div', { class: 'divider vertical' }),
       );
+      const sheet = store.doc.tilesets.find((t) => t.id === store.libraryPick?.tilesetId);
+      const rect = sheet ? assetsOf(sheet)[store.libraryPick.index] : undefined;
+      if (sheet && rect && !assetIsGround(sheet, store.libraryPick.index)) {
+        const base = sheet.tileW > 0 ? store.doc.tileSize / sheet.tileW : 1;
+        const mode = store.settings.placeMode;
+        const free = mode === 'free' || (mode !== 'snap' && isSmallProp(rect.w, rect.h, base, store.doc.tileSize));
+        chips.push(
+          ...this.placeModeChips(free, (next) => {
+            store.settings.placeMode = next ? 'free' : 'snap';
+            this.refreshChrome();
+          }),
+          el('div', { class: 'divider vertical' }),
+        );
+      }
     }
 
     if (store.tool === 'eraser') {
@@ -735,6 +754,21 @@ export class Shell {
       this.store.setStamp(next, selection);
       this.renderer.requestDraw();
     }, [icon(name, 17)]);
+  }
+
+  /** Snap lines an object up with the squares. Free lets it sit on any pixel, including on a counter. */
+  private placeModeChips(free: boolean, setFree: (free: boolean) => void): HTMLElement[] {
+    const chip = (label: string, on: boolean, chooseFree: boolean) =>
+      button(`chip${on ? ' active' : ''}`, label, () => {
+        if (on) return;
+        setFree(chooseFree);
+        this.refreshChrome();
+        this.renderer.requestDraw();
+      }, [el('span', { class: 'chip-text', text: label })]);
+    return [
+      chip('Snap', !free, false),
+      chip('Free', free, true),
+    ];
   }
 
   private chipToggle(name: IconName, label: string, active: boolean, onPress: () => void): HTMLElement {

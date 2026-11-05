@@ -1,4 +1,4 @@
-import type { AssetRect, Doc, MapObject } from '../core/doc';
+import { objectSize, type AssetRect, type Doc, type MapObject } from '../core/doc';
 import { recolorToCanvas } from '../io/recolor';
 
 /**
@@ -103,10 +103,12 @@ export function drawObject(
   const art = artFor(doc, obj);
   if (!art) return;
 
-  const w = obj.rect.w * obj.scale * zoom;
-  const h = obj.rect.h * obj.scale * zoom;
+  const footprint = objectSize(obj);
+  const w = footprint.w * zoom;
+  const h = footprint.h * zoom;
 
   ctx.save();
+  ctx.imageSmoothingEnabled = false;
   ctx.translate(originX + obj.x * zoom, originY + obj.y * zoom);
   if (obj.rotation) ctx.rotate((obj.rotation * Math.PI) / 2);
   if (obj.flipX || obj.flipY) ctx.scale(obj.flipX ? -1 : 1, obj.flipY ? -1 : 1);

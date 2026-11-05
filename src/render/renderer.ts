@@ -348,11 +348,11 @@ export class Renderer {
     ctx.save();
     ctx.strokeStyle = 'rgba(0,0,0,0.5)';
     ctx.lineWidth = 4;
-    ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
     ctx.strokeStyle = obj.locked ? '#ffb020' : COLOR_SELECT;
     ctx.lineWidth = 2;
     ctx.setLineDash(obj.locked ? [] : [7, 5]);
-    ctx.strokeRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
     ctx.setLineDash([]);
 
     ctx.restore();

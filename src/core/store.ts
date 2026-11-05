@@ -47,6 +47,11 @@ export interface Settings {
   showTileOutlines: boolean;
   /** Round a dragged reference image onto the tile grid when you let go. */
   snapImageToGrid: boolean;
+  /**
+   * How the next object is placed. Auto snaps furniture to squares and leaves
+   * a prop smaller than one square free, at its real pixel size.
+   */
+  placeMode: 'auto' | 'snap' | 'free';
   /** Pink lines, and a gentle pull, when a moved asset lines up with another. */
   alignGuides: boolean;
   /** Squares across that the brush and eraser paint. A single tile repeats to fill them. */
@@ -81,6 +86,7 @@ export class Store {
     snapToStamp: false,
     showTileOutlines: false,
     snapImageToGrid: false,
+    placeMode: 'auto',
     alignGuides: true,
     brushSize: 1,
   };

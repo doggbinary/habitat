@@ -58,6 +58,37 @@ export function gridScale(rectW: number, rectH: number, requested: number, tile:
 }
 
 /**
+ * Scale that makes both sides a whole number of pixels, as close as possible
+ * to the size asked for. A crock pot can be 18 px wide instead of a full square,
+ * and every pixel stays a whole pixel.
+ */
+export function pixelScale(rectW: number, rectH: number, requested: number): number {
+  const rw = Math.max(1, rectW);
+  const rh = Math.max(1, rectH);
+  const want = Math.max(0, requested);
+  const wantW = Math.max(1, Math.round(rw * want));
+  let best = wantW / rw;
+  let bestMiss = Infinity;
+  for (let dw = Math.max(1, wantW - 4); dw <= wantW + 4; dw++) {
+    const scale = dw / rw;
+    const dh = rh * scale;
+    if (Math.abs(dh - Math.round(dh)) > 1e-4) continue;
+    const miss = Math.abs(dw - rw * want) + Math.abs(Math.round(dh) - rh * want);
+    if (miss < bestMiss) {
+      bestMiss = miss;
+      best = scale;
+    }
+  }
+  const min = 1 / Math.max(rw, rh);
+  return Math.max(min, Math.min(MAX_SCALE, best));
+}
+
+/** True when this artwork, drawn like the sheet's tiles, is smaller than one map square. */
+export function isSmallProp(rectW: number, rectH: number, base: number, tile: number): boolean {
+  return Math.max(rectW, rectH, 1) * Math.max(0, base) < tile - 0.01;
+}
+
+/**
  * Scale that puts the bottom-right corner on the pointer, measured from the
  * top-left corner captured when the drag began.
  *
@@ -495,12 +526,19 @@ export class ObjectTools {
    */
   place(tilesetId: string, rect: AssetRect, wx: number, wy: number): void {
     const sheet = this.doc.tilesets.find((t) => t.id === tilesetId);
-    const base = sheet && sheet.tileW > 0 ? this.doc.tileSize / sheet.tileW : 1;
-    const scale = gridScale(rect.w, rect.h, base, this.doc.tileSize);
+    const tile = this.doc.tileSize;
+    const base = sheet && sheet.tileW > 0 ? tile / sheet.tileW : 1;
+    const small = isSmallProp(rect.w, rect.h, base, tile);
+    const mode = this.store.settings.placeMode;
+    const free = mode === 'free' || (mode !== 'snap' && small);
+    // A small prop keeps the size it was drawn, matching the sheet's tiles.
+    // Padding it up to a whole square is what made pots too big for a counter.
+    const scale = free ? pixelScale(rect.w, rect.h, base) : gridScale(rect.w, rect.h, base, tile);
+    const sized = objectSize({ rect, scale, rotation: 0 } as MapObject);
 
     const before = snapshot(this.doc);
     const layer = this.targetLayer();
-    const at = snapToGrid(rect.w * scale, rect.h * scale, wx, wy, this.doc.tileSize);
+    const at = free ? onWholePixels(sized.w, sized.h, wx, wy) : snapToGrid(sized.w, sized.h, wx, wy, tile);
     this.store.alignLines = null;
     const obj: MapObject = {
       id: uid('obj'),
@@ -515,6 +553,7 @@ export class ObjectTools {
       hueShift: 0,
       saturation: 1,
       brightness: 1,
+      ...(free ? { freeform: true } : {}),
     };
     this.keepOnMap(obj);
     layer.objects.push(obj);
@@ -576,10 +615,37 @@ export class ObjectTools {
   moveTo(obj: MapObject, wx: number, wy: number): void {
     if (obj.locked) return;
     const { w, h } = objectSize(obj);
-    const next = this.aligned(w, h, wx, wy, obj.id);
+    const next = obj.freeform ? onWholePixels(w, h, wx, wy) : this.aligned(w, h, wx, wy, obj.id);
     obj.x = next.x;
     obj.y = next.y;
     this.renderer.requestDraw();
+  }
+
+  /** Snap this object onto squares, or let it sit on any pixel. Also sets how the next one is placed. */
+  setFreeform(obj: MapObject, free: boolean): void {
+    if (obj.locked) return;
+    this.store.settings.placeMode = free ? 'free' : 'snap';
+    if (free) obj.freeform = true;
+    else delete obj.freeform;
+    const { w, h } = objectSize(obj);
+    if (free) {
+      const at = onWholePixels(w, h, obj.x, obj.y);
+      obj.scale = pixelScale(obj.rect.w, obj.rect.h, obj.scale);
+      const sized = objectSize(obj);
+      const pixel = onWholePixels(sized.w, sized.h, at.x, at.y);
+      obj.x = pixel.x;
+      obj.y = pixel.y;
+    } else {
+      const next = gridScale(obj.rect.w, obj.rect.h, obj.scale, this.doc.tileSize);
+      obj.scale = next;
+      const sized = objectSize(obj);
+      const at = snapToGrid(sized.w, sized.h, obj.x, obj.y, this.doc.tileSize);
+      obj.x = at.x;
+      obj.y = at.y;
+    }
+    this.renderer.requestDraw();
+    this.store.emit('ui');
+    this.store.toast(free ? 'Freeform: it sits on any pixel' : 'Snap: it lines up with the squares');
   }
 
   /**
@@ -598,12 +664,16 @@ export class ObjectTools {
    */
   scaleTo(obj: MapObject, scale: number): void {
     if (obj.locked) return;
-    const clamped = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
-    const next = gridScale(obj.rect.w, obj.rect.h, clamped, this.doc.tileSize);
+    const wide = Math.max(obj.rect.w, obj.rect.h, 1);
+    const min = obj.freeform ? 1 / wide : MIN_SCALE;
+    const clamped = Math.max(min, Math.min(MAX_SCALE, scale));
+    const tile = this.doc.tileSize;
+    const usePixels = !!obj.freeform || wide * clamped < tile;
+    const next = usePixels ? pixelScale(obj.rect.w, obj.rect.h, clamped) : gridScale(obj.rect.w, obj.rect.h, clamped, tile);
     if (next === obj.scale) return;
-    const size = objectSize({ ...obj, scale: next });
-    const at = snapToGrid(size.w, size.h, obj.x, obj.y, this.doc.tileSize);
     obj.scale = next;
+    const size = objectSize(obj);
+    const at = obj.freeform ? onWholePixels(size.w, size.h, obj.x, obj.y) : snapToGrid(size.w, size.h, obj.x, obj.y, tile);
     obj.x = at.x;
     obj.y = at.y;
     this.keepOnMap(obj);
@@ -611,11 +681,19 @@ export class ObjectTools {
     this.store.emit('ui');
   }
 
-  /** One map square bigger or smaller, measured on the longer side. */
+  /**
+   * One step bigger or smaller. Freeform, and anything under a square, steps
+   * by a single pixel. Snapped furniture steps by one map square.
+   */
   stepSize(obj: MapObject, squares: number): void {
     const tile = this.doc.tileSize;
     const wide = Math.max(obj.rect.w, obj.rect.h, 1);
-    const now = gridSquares(wide * obj.scale, tile);
+    const pixels = Math.round(wide * obj.scale);
+    if (obj.freeform || pixels < tile) {
+      this.scaleTo(obj, Math.max(1, pixels + squares) / wide);
+      return;
+    }
+    const now = gridSquares(pixels, tile);
     this.scaleTo(obj, (Math.max(1, now + squares) * tile) / wide);
   }
 
@@ -811,7 +889,7 @@ export class ObjectTools {
         group = newGroups.get(groupId) ?? uid('group');
         newGroups.set(groupId, group);
       }
-      const at = snapToGrid(w, h, obj.x + dx, obj.y, tile);
+      const at = obj.freeform ? onWholePixels(w, h, obj.x + Math.max(4, Math.round(w / 3)), obj.y) : snapToGrid(w, h, obj.x + dx, obj.y, tile);
       const copy: MapObject = {
         ...rest,
         ...(group ? { groupId: group } : {}),

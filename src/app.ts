@@ -33,7 +33,7 @@ import { dominantColor, recolorToCanvas } from './io/recolor';
 import { ensureGeneratedSheet, extractTile, persistGeneratedSheet, writeGeneratedTile } from './core/custom-tiles';
 import { isSolid } from './core/seamless';
 import { cropAsset } from './render/object-draw';
-import { gridScale, ObjectTools, snapToGrid } from './tools/objects';
+import { gridScale, isSmallProp, ObjectTools, pixelScale, snapToGrid } from './tools/objects';
 import { openColorPopover } from './ui/color-popover';
 import { hexToHsv, hsvToHex } from './ui/color-wheel';
 import { importSpriteSheet } from './character/import';
@@ -1461,8 +1461,11 @@ export class App {
       this.store.alignLines = null;
     } else {
       const sheet = this.store.doc.tilesets.find((t) => t.id === drag.tilesetId);
-      const base = sheet && sheet.tileW > 0 ? this.store.doc.tileSize / sheet.tileW : 1;
-      const scale = gridScale(drag.rect.w, drag.rect.h, base, this.store.doc.tileSize);
+      const tile = this.store.doc.tileSize;
+      const base = sheet && sheet.tileW > 0 ? tile / sheet.tileW : 1;
+      const mode = this.store.settings.placeMode;
+      const free = mode === 'free' || (mode !== 'snap' && isSmallProp(drag.rect.w, drag.rect.h, base, tile));
+      const scale = free ? pixelScale(drag.rect.w, drag.rect.h, base) : gridScale(drag.rect.w, drag.rect.h, base, tile);
       drag.world = this.objects.aligned(drag.rect.w * scale, drag.rect.h * scale, at.x, at.y);
     }
     this.renderer.requestDraw();

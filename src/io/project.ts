@@ -59,6 +59,7 @@ function readObject(raw: Partial<MapObject>): MapObject {
       ? { door: { x: raw.door.x, y: raw.door.y } }
       : {}),
     ...(raw.locked ? { locked: true } : {}),
+    ...(raw.freeform ? { freeform: true } : {}),
     ...(typeof raw.groupId === 'string' && raw.groupId ? { groupId: raw.groupId } : {}),
   };
 }
