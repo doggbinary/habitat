@@ -147,6 +147,32 @@ export function imageEdgeInset(
   return floorEdgeInset(cached.data, cached.width, x, y, w, h);
 }
 
+/** How many clear pixels sit inside each side of a rectangle before the drawn art. */
+export function opaqueInsets(
+  rgba: Uint8ClampedArray,
+  stride: number,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+): { l: number; t: number; r: number; b: number } {
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (rgba[((y0 + y) * stride + x0 + x) * 4 + 3] <= 24) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return { l: 0, t: 0, r: 0, b: 0 };
+  return { l: minX, t: minY, r: w - 1 - maxX, b: h - 1 - maxY };
+}
+
 /**
  * Copies a rectangle to a new size by point sampling. A 48 px floor shrunk
  * into a 16 px map square stays a block of whole pixels; the browser's own

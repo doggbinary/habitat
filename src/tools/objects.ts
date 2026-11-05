@@ -13,6 +13,7 @@ import {
 import { snapshot, type DocSnapshot } from '../core/history';
 import type { Camera, Store } from '../core/store';
 import type { Renderer } from '../render/renderer';
+import { imagePixels, opaqueInsets } from '../render/floor-edges';
 import { smartGuides, resizeSnap, type GuideBox } from './guides';
 /** Smallest and largest an object may be scaled to. */
 export const MIN_SCALE = 0.1;
@@ -762,11 +763,11 @@ export class ObjectTools {
 
   /** Where a free object of this size should sit, snapped to neighbours when Magnet is on. */
   guideMove(obj: MapObject, x: number, y: number, w: number, h: number, snapOff: boolean): { x: number; y: number } {
-    const box = { left: x - w / 2, top: y - h / 2, right: x + w / 2, bottom: y + h / 2 };
+    const box = this.artBox({ ...obj, x, y });
     const magnet = this.store.settings.snapToNeighbours && !snapOff && this.store.settings.alignGuides;
     const guide = smartGuides(box, this.neighbourBoxes(obj), this.mapWidth(), this.mapHeight(), magnet);
     const at = onWholePixels(w, h, x + guide.dx, y + guide.dy);
-    const settled = { left: at.x - w / 2, top: at.y - h / 2, right: at.x + w / 2, bottom: at.y + h / 2 };
+    const settled = this.artBox({ ...obj, x: at.x, y: at.y });
     const shown = smartGuides(settled, this.neighbourBoxes(obj), this.mapWidth(), this.mapHeight(), false);
     this.store.alignLines = {
       vertical: guide.vertical.length ? guide.vertical : shown.vertical,
@@ -784,7 +785,22 @@ export class ObjectTools {
 
   private artBox(obj: MapObject): GuideBox {
     const { w, h } = objectSize(obj);
-    return { left: obj.x - w / 2, top: obj.y - h / 2, right: obj.x + w / 2, bottom: obj.y + h / 2 };
+    const full = { left: obj.x - w / 2, top: obj.y - h / 2, right: obj.x + w / 2, bottom: obj.y + h / 2 };
+    const sheet = this.doc.tilesets.find((t) => t.id === obj.tilesetId);
+    if (!sheet?.image || obj.rotation % 2 === 1 || obj.rect.w <= 0 || obj.rect.h <= 0) return full;
+    const pixels = imagePixels(sheet.image);
+    if (!pixels) return full;
+    const inset = opaqueInsets(pixels.data, pixels.width, obj.rect.x, obj.rect.y, obj.rect.w, obj.rect.h);
+    const sx = w / obj.rect.w;
+    const sy = h / obj.rect.h;
+    const box = {
+      left: full.left + inset.l * sx,
+      top: full.top + inset.t * sy,
+      right: full.right - inset.r * sx,
+      bottom: full.bottom - inset.b * sy,
+    };
+    if (box.right - box.left < 1 || box.bottom - box.top < 1) return full;
+    return box;
   }
 
   private neighbourBoxes(anchor: MapObject): GuideBox[] {
