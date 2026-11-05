@@ -813,7 +813,7 @@ export class App {
     const upgraded = upgradeTileSize(doc);
 
     this.store.doc = doc;
-    if (upgraded) this.store.toast('Map squares are now 48 px, so the art shows pixel for pixel');
+    if (upgraded) this.store.toast(`Map squares are now ${doc.tileSize} px, so the art shows pixel for pixel`);
     this.store.history.clear();
     this.store.activeTileset = 0;
     this.store.setStamp(EMPTY_STAMP);
@@ -828,9 +828,9 @@ export class App {
   }
 
   /**
-   * A 16 px map with 48 px library floors shrinks every placed square to a
-   * third, which the browser then blurs. Move the map up to 48 px and keep
-   * the view where it was, on a zoom where each art pixel is a whole block.
+   * Puts the map on the square size its packs were drawn at (32 px packs stay
+   * at 32; only real 48 px art moves a map to 48) and keeps the view where it
+   * was, on a zoom where each art pixel is a whole block.
    */
   private alignGridToArt(): boolean {
     const before = this.store.doc.tileSize;
@@ -841,7 +841,7 @@ export class App {
     cam.y *= k;
     cam.zoom = snapZoom(cam.zoom / k);
     this.renderer.invalidateAll();
-    this.store.toast('Map squares are now 48 px, so the art shows pixel for pixel');
+    this.store.toast(`Map squares are now ${this.store.doc.tileSize} px, so the art shows pixel for pixel`);
     return true;
   }
 

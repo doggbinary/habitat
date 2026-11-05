@@ -341,20 +341,20 @@ export const ART_TILE = 48;
 export const STARTER_TILE = 16;
 
 /**
- * Moves a map made with small squares onto the library's own square size.
- * Every painted cell stays where it is; placed assets and pictures are
- * scaled with the squares so the map looks the same, only sharper.
- * Returns false when the map is already at that size or cannot be scaled
- * by a whole number.
+ * Moves a map onto the square size its packs were drawn at.
+ * A 32 px pack (Pixel Fantasy Town) keeps or takes a 32 px grid, even when
+ * 48 px sheets are in the same library. Only a map with no 32 px pack, and
+ * with real 48 px art, moves up to 48. Every painted cell stays where it is;
+ * placed assets and pictures scale with the squares.
+ * Returns false when the map is already on that size.
  */
 export function upgradeTileSize(doc: Doc): boolean {
-  if (doc.tileSize >= ART_TILE || ART_TILE % doc.tileSize !== 0) return false;
-  if (!doc.tilesets.some((sheet) => !sheet.generated && sheet.tileW === ART_TILE)) return false;
-  // The starter pack is drawn at 16 px. Leaving the map there shrinks every
-  // 48 px floor to a third and the browser blurs that shrink. Moving up by a
-  // whole multiple keeps the starter art sharp (each pixel becomes a block)
-  // and shows the library floors pixel for pixel.
-  rescaleGrid(doc, ART_TILE);
+  const art = doc.tilesets.filter((sheet) => !sheet.generated && sheet.tileW > 0);
+  const has32 = art.some((sheet) => sheet.tileW === 32);
+  const has48 = art.some((sheet) => sheet.tileW === ART_TILE);
+  const target = has32 ? 32 : has48 ? ART_TILE : 0;
+  if (target === 0 || doc.tileSize === target) return false;
+  rescaleGrid(doc, target);
   return true;
 }
 

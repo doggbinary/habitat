@@ -149,4 +149,17 @@ describe('upgrading a 16 px map', () => {
     expect(doc.tileSize).toBe(48);
     expect(objects.objects[0]).toMatchObject({ x: 48, y: 96, scale: 3 });
   });
+
+  it('keeps a 32 px pack on a 32 px grid even when 48 px art is loaded too', () => {
+    const doc = createDoc(8, 8, 16);
+    doc.tilesets = [fakeTileset('town', 32), fakeTileset('modern', 48)];
+    expect(upgradeTileSize(doc)).toBe(true);
+    expect(doc.tileSize).toBe(32);
+    expect(upgradeTileSize(doc)).toBe(false);
+
+    const already = createDoc(8, 8, 48);
+    already.tilesets = [fakeTileset('town', 32), fakeTileset('modern', 48)];
+    expect(upgradeTileSize(already)).toBe(true);
+    expect(already.tileSize).toBe(32);
+  });
 });
