@@ -435,7 +435,7 @@ export class App {
     const now = Date.now();
     if (now - this.lastSaveWarning < 60_000) return;
     this.lastSaveWarning = now;
-    this.store.toast('Not saving: this browser is blocking storage. Turn off blocking for this site, or your map is lost on refresh.');
+    this.store.toast('Not saving. Opened from a new link, this map would be missing.');
   }
 
   private observeSize(): void {

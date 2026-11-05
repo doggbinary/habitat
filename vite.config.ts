@@ -145,8 +145,107 @@ function visionProxy(env: Record<string, string | undefined>): Plugin {
   return { name: 'vision-proxy', configureServer: serve, configurePreviewServer: serve };
 }
 
+/**
+ * Maps saved from the browser, on a path that does not change when the
+ * public tunnel address does. IndexedDB is tied to that address, so without
+ * this copy a new link opens an empty editor.
+ */
+function projectMirror(): Plugin {
+  const root = path.resolve(process.env.HABITAT_PROJECTS ?? '/home/ubuntu/.habitat/projects');
+  const MAX_BYTES = 64 * 1024 * 1024;
+  type Server = Parameters<NonNullable<Plugin['configurePreviewServer']>>[0];
+
+  const fileFor = (key: string): string | null => {
+    if (!/^[a-zA-Z0-9_-]{1,120}$/.test(key)) return null;
+    const file = path.resolve(root, `${key}.json`);
+    return file.startsWith(root + path.sep) ? file : null;
+  };
+
+  const readBody = async (req: import('node:http').IncomingMessage): Promise<Buffer> => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+      const buf = chunk as Buffer;
+      size += buf.length;
+      if (size > MAX_BYTES) throw new Error('Project is too large to store');
+      chunks.push(buf);
+    }
+    return Buffer.concat(chunks);
+  };
+
+  const serve = (server: Server) => {
+    server.middlewares.use(async (req, res, next) => {
+      const pathname = (req.url ?? '').split('?')[0];
+      const prefix = '/api/habitat/value/';
+      if (!pathname.startsWith(prefix)) {
+        next();
+        return;
+      }
+      let key = '';
+      try {
+        key = decodeURIComponent(pathname.slice(prefix.length));
+      } catch {
+        res.statusCode = 400;
+        res.end('Bad key');
+        return;
+      }
+      const file = fileFor(key);
+      if (!file) {
+        res.statusCode = 400;
+        res.end('Bad key');
+        return;
+      }
+      try {
+        if (req.method === 'GET') {
+          if (!fs.existsSync(file)) {
+            res.statusCode = 404;
+            res.end();
+            return;
+          }
+          res.setHeader('content-type', 'application/json');
+          res.setHeader('cache-control', 'no-store');
+          fs.createReadStream(file).pipe(res);
+          return;
+        }
+        if (req.method === 'PUT') {
+          const body = JSON.parse((await readBody(req)).toString('utf8')) as { savedAt?: unknown; value?: unknown };
+          if (!body || !('value' in body)) {
+            res.statusCode = 400;
+            res.end('Expected a value');
+            return;
+          }
+          const savedAt = typeof body.savedAt === 'number' && Number.isFinite(body.savedAt) ? body.savedAt : Date.now();
+          fs.mkdirSync(root, { recursive: true });
+          const tmp = `${file}.tmp`;
+          fs.writeFileSync(tmp, JSON.stringify({ savedAt, value: body.value }));
+          fs.renameSync(tmp, file);
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method === 'DELETE') {
+          fs.rmSync(file, { force: true });
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        res.statusCode = 405;
+        res.end();
+      } catch (error) {
+        server.config.logger.warn(`Project store: ${(error as Error).message}`);
+        if (!res.headersSent) {
+          res.statusCode = 500;
+          res.end();
+        }
+      }
+    });
+  };
+
+  return { name: 'project-mirror', configureServer: serve, configurePreviewServer: serve };
+}
+
 export default defineConfig(({ mode }) => ({
-  plugins: [localLibrary(), visionProxy({ ...loadEnv(mode, process.cwd(), ''), ...process.env })],
+  plugins: [localLibrary(), projectMirror(), visionProxy({ ...loadEnv(mode, process.cwd(), ''), ...process.env })],
   base: './',
   server: {
     host: '0.0.0.0',
